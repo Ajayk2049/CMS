@@ -1,0 +1,26 @@
+{
+  "name": "cms-backend",
+  "version": "1.0.0",
+  "description": "CMS and Tabletop Ordering backend server",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js --env-file=config/.env.dev",
+    "prod": "node server.js --env-file=config/.env.prod"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/websocket": "^11.0.1",
+    "@grpc/grpc-js": "^1.10.8",
+    "@grpc/proto-loader": "^0.7.13",
+    "axios": "^1.7.2",
+    "bullmq": "^5.8.2",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.8.5",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.4.1",
+    "uuid": "^14.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.3"
+  }
+}

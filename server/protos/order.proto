@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package order;
+
+service OrderService {
+  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
+  rpc GetOrderStatus (GetOrderStatusRequest) returns (OrderStatusResponse);
+}
+
+message OrderItem {
+  string itemId = 1;
+  string name = 2;
+  int32 quantity = 3;
+  int64 price = 4; // in paise
+}
+
+message CreateOrderRequest {
+  string deviceId = 1;
+  string merchantId = 2;
+  string tableNumber = 3;
+  repeated OrderItem items = 4;
+  int64 totalAmount = 5; // in paise
+}
+
+message CreateOrderResponse {
+  bool success = 1;
+  string message = 2;
+  string orderId = 3;
+  string paymentUrl = 4; // PhonePe payment page URL (if applicable)
+}
+
+message GetOrderStatusRequest {
+  string orderId = 1;
+}
+
+message OrderStatusResponse {
+  string orderId = 1;
+  string paymentStatus = 2; // pending, completed, failed
+  string orderStatus = 3;   // placed, cooking, served, cancelled
+}

@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package menu;
+
+service MenuService {
+  rpc GetMenu (GetMenuRequest) returns (GetMenuResponse);
+}
+
+message GetMenuRequest {
+  string merchantId = 1;
+  string deviceId = 2; // tablet can query via device ID
+}
+
+message MenuItem {
+  string itemId = 1;
+  string name = 2;
+  string description = 3;
+  int64 price = 4; // in paise
+  string category = 5;
+  bool isAvailable = 6;
+  string imageUrl = 7;
+}
+
+message GetMenuResponse {
+  bool success = 1;
+  string message = 2;
+  repeated MenuItem items = 3;
+}
