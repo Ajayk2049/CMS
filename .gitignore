@@ -23,8 +23,6 @@ out/
 **/*.env.local
 **/*.env
 !.env.example
-!.env.dev
-!.env.prod
 
 # Logs and databases
 npm-debug.log*
@@ -67,3 +65,11 @@ sms_api.md
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Scratch and test files
+server/test_phonepe.js
+
+# Uploaded media assets (ignore files, keep folder structure via .gitkeep)
+server/uploads/*
+!server/uploads/.gitkeep
+

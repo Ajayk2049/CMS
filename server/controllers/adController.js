@@ -4,6 +4,7 @@ const AdBooking = require('../models/AdBooking');
 const PhonePeTransaction = require('../models/PhonePeTransaction');
 const Order = require('../models/Order');
 const phonePeService = require('../services/phonePeService');
+const config = require('../config/config');
 const { v4: uuidv4 } = require('uuid');
 
 class AdController {
@@ -292,6 +293,54 @@ class AdController {
     } catch (error) {
       console.error('getMyBookings Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to fetch bookings' });
+    }
+  }
+
+  /**
+   * Upload video raw binary payload and save to local disk
+   */
+  async uploadVideo(req, res) {
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Check if body is buffer
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(400).send({ success: false, message: 'Invalid file payload. Expected raw binary buffer.' });
+    }
+
+    try {
+      const filenameHeader = req.headers['x-filename'] || 'video.mp4';
+      const ext = path.extname(filenameHeader).toLowerCase() || '.mp4';
+      
+      // Enforce file extension to only support mp4, webm
+      if (!['.mp4', '.webm'].includes(ext)) {
+        return res.status(400).send({ success: false, message: 'Unsupported file type. Only MP4 and WEBM are allowed.' });
+      }
+
+      const uniqueFilename = `vid_${uuidv4().replace(/-/g, '').slice(0, 16)}${ext}`;
+      const uploadsDir = path.join(__dirname, '..', 'uploads');
+      
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+
+      const filePath = path.join(uploadsDir, uniqueFilename);
+      fs.writeFileSync(filePath, req.body);
+
+      // Return local server URL (the port can be dynamic from config or fallback to 8080)
+      const fileUrl = `http://localhost:${config.port || 8080}/uploads/${uniqueFilename}`;
+
+      return res.status(200).send({
+        success: true,
+        message: 'Video uploaded successfully',
+        data: {
+          filename: uniqueFilename,
+          url: fileUrl
+        }
+      });
+    } catch (error) {
+      console.error('uploadVideo Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to upload video due to server error' });
     }
   }
 }

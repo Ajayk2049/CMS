@@ -36,12 +36,16 @@ function hashPassword(password) {
 // ----------------------------------------------------
 // Fastify Setup (REST & WebSocket)
 // ----------------------------------------------------
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({ 
+  logger: true,
+  bodyLimit: 104857600 // 100MB body limit for video uploads
+});
 
 async function startFastify() {
   await fastify.register(cors, {
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Filename', 'x-filename', 'Accept', 'Origin']
   });
 
   await fastify.register(websocket);
@@ -87,6 +91,28 @@ async function startFastify() {
         }
       }
     });
+  });
+
+  // Register raw buffer parser for videos
+  fastify.addContentTypeParser(['application/octet-stream', 'video/mp4', 'video/webm'], { parseAs: 'buffer' }, (req, body, done) => {
+    done(null, body);
+  });
+
+  // Serve uploaded videos statically
+  fastify.get('/uploads/:filename', (req, res) => {
+    const fs = require('fs');
+    const path = require('path');
+    const filePath = path.join(__dirname, 'uploads', req.params.filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send({ error: 'File not found' });
+    }
+    const ext = path.extname(req.params.filename).toLowerCase();
+    let contentType = 'application/octet-stream';
+    if (ext === '.mp4') contentType = 'video/mp4';
+    else if (ext === '.webm') contentType = 'video/webm';
+    
+    res.header('Content-Type', contentType);
+    return res.send(fs.createReadStream(filePath));
   });
 
   // REST API Routes

@@ -29,7 +29,9 @@ import {
   HelpCircle,
   RefreshCw,
   Eye,
+  EyeOff,
   AlertTriangle,
+  Building,
   UserCheck,
   Settings
 } from 'lucide-react';
@@ -84,6 +86,7 @@ export default function AdminPortal() {
   // Login form
   const [loginPhone, setLoginPhone] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
 
@@ -100,6 +103,7 @@ export default function AdminPortal() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [selectedReport, setSelectedReport] = useState(null);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
+  const [selectedHostApp, setSelectedHostApp] = useState(null);
 
   // Deploy device form
   const [deviceForm, setDeviceForm] = useState({
@@ -130,6 +134,7 @@ export default function AdminPortal() {
   const [deviceSubTab, setDeviceSubTab] = useState('tablet');
   const [userSubTab, setUserSubTab] = useState('merchant');
   const [rateSubTab, setRateSubTab] = useState('tablet');
+  const [hostFilter, setHostFilter] = useState('all');
 
   // Hydration handling
   useEffect(() => {
@@ -142,6 +147,11 @@ export default function AdminPortal() {
       document.documentElement.classList.remove('dark');
     }
 
+    const savedTab = localStorage.getItem('adminActiveTab');
+    if (savedTab) {
+      setActiveTab(savedTab);
+    }
+
     const storedToken = localStorage.getItem('adminToken');
     const role = localStorage.getItem('adminRole');
     if (storedToken && role === 'admin') {
@@ -150,6 +160,13 @@ export default function AdminPortal() {
       loadDashboardData(storedToken);
     }
   }, []);
+
+  // Persist Active Tab
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminActiveTab', activeTab);
+    }
+  }, [activeTab, mounted]);
 
   const toggleTheme = () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
@@ -202,6 +219,7 @@ export default function AdminPortal() {
   const handleLogout = () => {
     localStorage.removeItem('adminToken');
     localStorage.removeItem('adminRole');
+    localStorage.removeItem('adminActiveTab');
     setToken('');
     setIsAuthenticated(false);
     showNotification('success', 'Logged out successfully');
@@ -306,6 +324,7 @@ export default function AdminPortal() {
       );
       showNotification('success', `Host application ${action}ed successfully`);
       loadDashboardData(token);
+      setSelectedHostApp(null);
     } catch (err) {
       showNotification('error', err.response?.data?.message || 'Action failed');
     }
@@ -519,14 +538,23 @@ export default function AdminPortal() {
 
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Password</label>
-              <input
-                type="password"
-                required
-                placeholder="admin"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  placeholder="admin"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  className="w-full bg-background border border-input rounded-xl pl-4 pr-10 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer focus:outline-none"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
 
             <button
@@ -547,6 +575,7 @@ export default function AdminPortal() {
     { id: 'stats', label: 'Dashboard', icon: <TrendingUp className="w-4 h-4" /> },
     { id: 'devices', label: 'Devices', icon: <Smartphone className="w-4 h-4" /> },
     { id: 'users', label: 'Users', icon: <Users className="w-4 h-4" /> },
+    { id: 'hosts', label: 'Host Requests', icon: <Building className="w-4 h-4" /> },
     { id: 'campaigns', label: 'Pending Ads', icon: <FileCheck className="w-4 h-4" /> },
     { id: 'rates', label: 'Ad Rates', icon: <Percent className="w-4 h-4" /> },
     { id: 'reports', label: 'Reports', icon: <ClipboardList className="w-4 h-4" /> }
@@ -1249,6 +1278,219 @@ export default function AdminPortal() {
                         </div>
                       )}
                     </motion.div>
+                  )}
+
+                </div>
+              </motion.div>
+            )}
+
+            {/* 3.5. HOST VENUE APPLICATIONS MODERATION */}
+            {activeTab === 'hosts' && (
+              <motion.div
+                key="hosts-tab"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                className="space-y-6"
+              >
+                <div className="flex justify-between items-center mb-4 flex-wrap gap-4">
+                  <div>
+                    <h1 className="font-outfit text-2xl font-black text-foreground">Host Venue Requests</h1>
+                    <p className="text-muted-foreground text-xs font-semibold">Review, approve, or reject host applications for smart screens & tablet deployments.</p>
+                  </div>
+                  <div className="flex space-x-2 bg-muted/30 p-1 rounded-xl border border-border/60">
+                    {['all', 'pending', 'approved', 'rejected'].map((filter) => (
+                      <button
+                        key={filter}
+                        onClick={() => {
+                          setHostFilter(filter);
+                          setSelectedHostApp(null);
+                        }}
+                        className={`text-[10px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${
+                          hostFilter === filter
+                            ? 'bg-primary text-primary-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        {filter}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid lg:grid-cols-12 gap-8 items-start">
+                  
+                  {/* Left Column: Applications List */}
+                  <div className={`${selectedHostApp ? 'lg:col-span-6' : 'lg:col-span-12'} space-y-4`}>
+                    <div className="glassmorphism rounded-3xl bg-card/30 overflow-hidden shadow-xl border border-border/60">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="border-b border-border/80 text-muted-foreground font-bold uppercase tracking-wider bg-card/10">
+                              <th className="p-4 pl-6">Venue Outlet</th>
+                              <th className="p-4">Location</th>
+                              <th className="p-4">Contact Person</th>
+                              <th className="p-4">Device Qty</th>
+                              <th className="p-4">Status</th>
+                              <th className="p-4 text-right pr-6">Date</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border/40">
+                            {hosts.filter(h => hostFilter === 'all' || h.status === hostFilter).length === 0 ? (
+                              <tr>
+                                <td colSpan="6" className="p-12 text-center text-muted-foreground font-medium italic">
+                                  No host applications found.
+                                </td>
+                              </tr>
+                            ) : (
+                              hosts.filter(h => hostFilter === 'all' || h.status === hostFilter).map((app) => (
+                                <tr
+                                  key={app._id}
+                                  onClick={() => setSelectedHostApp(app)}
+                                  className={`hover:bg-muted/10 cursor-pointer transition-all ${
+                                    selectedHostApp?._id === app._id ? 'bg-primary/5' : ''
+                                  }`}
+                                >
+                                  <td className="p-4 pl-6 font-bold text-foreground">
+                                    <div className="flex items-center space-x-2">
+                                      <Building className="w-3.5 h-3.5 text-primary shrink-0" />
+                                      <span>{app.outletName}</span>
+                                    </div>
+                                  </td>
+                                  <td className="p-4 text-muted-foreground font-semibold">
+                                    {app.city}, {app.state}
+                                  </td>
+                                  <td className="p-4 font-semibold text-foreground">
+                                    <div>{app.contactPerson}</div>
+                                    <div className="text-[10px] text-muted-foreground">{app.phone}</div>
+                                  </td>
+                                  <td className="p-4 font-semibold">
+                                    <span className="capitalize">{app.deviceType}</span> (Qty: {app.quantity})
+                                  </td>
+                                  <td className="p-4">
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded capitalize ${
+                                      app.status === 'approved' 
+                                        ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' 
+                                        : app.status === 'rejected'
+                                        ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                                        : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'
+                                    }`}>
+                                      {app.status}
+                                    </span>
+                                  </td>
+                                  <td className="p-4 text-right pr-6 text-muted-foreground font-medium">
+                                    {new Date(app.createdAt).toLocaleDateString()}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right Column: Detailed review pane */}
+                  {selectedHostApp && (
+                    <div className="lg:col-span-6 animate-slide-in">
+                      <div className="glassmorphism p-6 rounded-3xl bg-card/30 border-border space-y-6 relative border border-border/60">
+                        <button
+                          onClick={() => setSelectedHostApp(null)}
+                          className="absolute right-4 top-4 p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+
+                        <div>
+                          <span className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20">
+                            Host Application Details
+                          </span>
+                          <h3 className="font-outfit text-lg font-bold text-slate-200 mt-3">{selectedHostApp.outletName}</h3>
+                          <p className="text-xs text-muted-foreground font-medium mt-1">Submitted on {new Date(selectedHostApp.createdAt).toLocaleString()}</p>
+                        </div>
+
+                        <div className="space-y-4 text-xs font-semibold">
+                          
+                          {/* Outlet description */}
+                          <div className="space-y-1 bg-background/30 p-4 rounded-2xl border border-border/40">
+                            <span className="text-[10px] font-black text-muted-foreground uppercase">Description</span>
+                            <p className="text-foreground leading-relaxed font-semibold">{selectedHostApp.outletDescription}</p>
+                          </div>
+
+                          {/* Address details */}
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-black text-muted-foreground uppercase">Outlet Address</span>
+                              <p className="text-foreground font-medium">
+                                {selectedHostApp.doorNo}, {selectedHostApp.street}<br/>
+                                {selectedHostApp.city}, {selectedHostApp.state} - {selectedHostApp.zipCode}
+                              </p>
+                            </div>
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-black text-muted-foreground uppercase">Device Configuration</span>
+                              <p className="text-foreground capitalize font-bold">
+                                {selectedHostApp.deviceType} Display<br/>
+                                <span className="text-primary font-black text-sm">Quantity: {selectedHostApp.quantity}</span>
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Contact details */}
+                          <div className="space-y-2 border-t border-border/40 pt-4">
+                            <span className="text-[10px] font-black text-muted-foreground uppercase">Contact Information</span>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <span className="text-[9px] text-muted-foreground">Person</span>
+                                <p className="text-foreground">{selectedHostApp.contactPerson}</p>
+                              </div>
+                              <div>
+                                <span className="text-[9px] text-muted-foreground">Phone</span>
+                                <p className="text-foreground">{selectedHostApp.phone}</p>
+                              </div>
+                              <div className="col-span-2">
+                                <span className="text-[9px] text-muted-foreground">Email</span>
+                                <p className="text-foreground">{selectedHostApp.email}</p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Request status */}
+                          <div className="border-t border-border/40 pt-4 flex items-center justify-between">
+                            <span className="text-[10px] font-black text-muted-foreground uppercase">Current Request Status</span>
+                            <span className={`text-[10px] font-bold px-3 py-1 rounded-full capitalize ${
+                              selectedHostApp.status === 'approved' 
+                                ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' 
+                                : selectedHostApp.status === 'rejected'
+                                ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                                : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'
+                            }`}>
+                              {selectedHostApp.status}
+                            </span>
+                          </div>
+
+                          {/* Actions */}
+                          {selectedHostApp.status === 'pending' && (
+                            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border/40">
+                              <button
+                                onClick={() => handleReviewHost(selectedHostApp._id, 'approve')}
+                                className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center space-x-1.5"
+                              >
+                                <Check className="w-4 h-4" />
+                                <span>Approve Request</span>
+                              </button>
+                              <button
+                                onClick={() => handleReviewHost(selectedHostApp._id, 'reject')}
+                                className="w-full bg-destructive hover:bg-destructive/90 text-white font-bold py-3 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center space-x-1.5"
+                              >
+                                <X className="w-4 h-4" />
+                                <span>Reject Request</span>
+                              </button>
+                            </div>
+                          )}
+
+                        </div>
+                      </div>
+                    </div>
                   )}
 
                 </div>

@@ -134,7 +134,7 @@ export default function LandingPage() {
               className="flex items-center space-x-2"
             >
               <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
-                <UtensilsCrossed className="w-3.5 h-3.5 text-white" />
+                <Tv className="w-3.5 h-3.5 text-white" />
               </div>
               <span className="font-outfit text-lg font-bold tracking-tight text-foreground leading-none">
                 Digi<span className="text-blue-500">Ads</span>
@@ -555,8 +555,8 @@ export default function LandingPage() {
       <footer className="border-t border-border bg-card py-12 px-6">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-sm text-muted-foreground">
           <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center">
-              <UtensilsCrossed className="w-4 h-4 text-white" />
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20">
+              <Tv className="w-4 h-4 text-white" />
             </div>
             <span className="font-outfit font-bold text-foreground">DigiAds</span>
           </div>

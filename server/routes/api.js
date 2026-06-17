@@ -7,6 +7,7 @@ const { authenticate, authorize } = require('../utils/authMiddleware');
 function registerRoutes(fastify, options, done) {
   // Public Auth Routes
   fastify.post('/auth/send-otp', authController.sendOtp);
+  fastify.post('/auth/verify-otp', authController.verifyOtp);
   fastify.post('/auth/register', authController.register);
   fastify.post('/auth/login', authController.login);
 
@@ -36,6 +37,7 @@ function registerRoutes(fastify, options, done) {
     advertiserRoutes.get('/ads/book', adController.bookAd); // initiates payment url
     advertiserRoutes.post('/ads/book', adController.bookAd); // supports post fallback
     advertiserRoutes.get('/ads/bookings', adController.getMyBookings);
+    advertiserRoutes.post('/ads/upload', adController.uploadVideo);
     next();
   });
 
