@@ -41,6 +41,9 @@ implementation_plan.md
 graph.json
 GRAPH_REPORT.md
 graphify-out/
+PhonePe_Payments_Guide.md
+project_blueprint.md
+sms_api.md
 
 # Flutter / Dart caches and generated files
 .dart_tool/
