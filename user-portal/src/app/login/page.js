@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useRouter } from 'next/navigation';
-import { Mail, Phone, KeyRound, Tv, Sun, Moon, ShieldAlert, Check, Eye, EyeOff } from 'lucide-react';
+import { Mail, Phone, KeyRound, Tv, Sun, Moon, ShieldAlert, Check, Eye, EyeOff, Megaphone } from 'lucide-react';
 import { config } from '@/config';
 
 const API_BASE = config.apiUrl;
@@ -17,6 +17,9 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showRoleSelection, setShowRoleSelection] = useState(false);
+  const [availableRoles, setAvailableRoles] = useState([]);
+  const [tempLoginPayload, setTempLoginPayload] = useState(null);
 
   // Handle Theme
   useEffect(() => {
@@ -54,32 +57,49 @@ export default function LoginPage() {
     }
   };
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  const handleLogin = async (e, selectedRole = null) => {
+    if (e) e.preventDefault();
     setError('');
     setLoading(true);
 
     try {
-      let loginPayload = { password };
-      
-      // Determine if identifier is email or phone
-      if (identifier.includes('@')) {
-        loginPayload.identifier = identifier.trim().toLowerCase();
-      } else {
-        // Enforce 10-digit check for phone number
-        if (identifier.length !== 10) {
-          setError('Mobile number must be exactly 10 digits');
-          setLoading(false);
-          return;
+      let loginPayload = tempLoginPayload;
+      if (!loginPayload) {
+        loginPayload = { password };
+
+        // Determine if identifier is email or phone
+        if (identifier.includes('@')) {
+          loginPayload.identifier = identifier.trim().toLowerCase();
+        } else {
+          // Enforce 10-digit check for phone number
+          if (identifier.length !== 10) {
+            setError('Mobile number must be exactly 10 digits');
+            setLoading(false);
+            return;
+          }
+          loginPayload.identifier = `+91${identifier}`;
         }
-        loginPayload.identifier = `+91${identifier}`;
+      }
+
+      if (selectedRole) {
+        loginPayload.selectedRole = selectedRole;
       }
 
       const response = await axios.post(`${API_BASE}/auth/login`, loginPayload);
 
+      // Check if role selection is required
+      if (response.data.data && response.data.data.requiresRoleSelection) {
+        setAvailableRoles(response.data.data.roles);
+        setTempLoginPayload(loginPayload);
+        setShowRoleSelection(true);
+        setLoading(false);
+        return;
+      }
+
       // Save credentials locally
       localStorage.setItem('token', response.data.data.token);
       localStorage.setItem('role', response.data.data.user.role);
+      localStorage.setItem('roles', JSON.stringify(response.data.data.user.roles));
       localStorage.setItem('phone', response.data.data.user.phone);
       localStorage.setItem('uid', response.data.data.user.uid);
 
@@ -94,6 +114,9 @@ export default function LoginPage() {
     } catch (err) {
       console.error(err);
       setError(err.response?.data?.message || 'Invalid email/mobile number or password.');
+      // Reset role selection state on error
+      setShowRoleSelection(false);
+      setTempLoginPayload(null);
     } finally {
       setLoading(false);
     }
@@ -117,7 +140,7 @@ export default function LoginPage() {
 
       {/* Main Grid Wrapper */}
       <div className="w-full max-w-5xl grid md:grid-cols-12 gap-8 items-center relative z-10 animate-fade-in">
-        
+
         {/* Left Column - Transparent Info Panel ("Free Layout") */}
         <div className="md:col-span-5 space-y-6 text-foreground p-4">
           <div>
@@ -159,7 +182,7 @@ export default function LoginPage() {
         {/* Right Column - Centered Bordered Form Card */}
         <div className="md:col-span-7 flex justify-center">
           <div className="w-full max-w-md glassmorphism p-6 rounded-[32px] relative z-10 shadow-2xl bg-card/30 backdrop-blur-md border-border">
-            
+
             {/* Logo and Brand - Compact Side-by-Side Layout */}
             <div className="flex items-center justify-center space-x-3 mb-6">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0">
@@ -183,59 +206,121 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* Input Form */}
-            <form onSubmit={handleLogin} className="space-y-4">
-              
-              {/* Email or Mobile Input */}
-              <div>
-                <div className="relative">
-                  {identifier.includes('@') ? (
-                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  ) : (
-                    <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            {showRoleSelection ? (
+              <div className="space-y-4 animate-fade-in">
+                <h3 className="font-outfit text-sm font-bold text-center text-foreground uppercase tracking-wider mb-2">
+                  Select Dashboard Profile
+                </h3>
+                <p className="text-[10px] text-muted-foreground text-center font-semibold mb-4 leading-relaxed">
+                  Your account holds multiple credentials. Choose how you want to continue:
+                </p>
+
+                <div className="space-y-3">
+                  {availableRoles.includes('merchant') && (
+                    <button
+                      type="button"
+                      onClick={() => handleLogin(null, 'merchant')}
+                      disabled={loading}
+                      className="w-full flex items-center p-4 bg-background border border-border hover:border-primary hover:bg-muted/30 rounded-2xl transition-all cursor-pointer text-left"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shrink-0 mr-4">
+                        <Tv className="w-5 h-5 text-white" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-bold text-xs text-foreground">Host / Merchant</h4>
+                        <p className="text-[9px] text-muted-foreground mt-0.5 truncate font-semibold">
+                          Manage tabletop kiosks, menus & live orders.
+                        </p>
+                      </div>
+                    </button>
                   )}
-                  <input
-                    type="text"
-                    required
-                    placeholder="Email or Mobile Number"
-                    value={identifier}
-                    onChange={(e) => handleIdentifierChange(e.target.value)}
-                    className="w-full bg-background border border-input rounded-xl pl-11 pr-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                  />
-                </div>
-              </div>
 
-              {/* Password Input */}
-              <div>
-                <div className="relative">
-                  <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    placeholder="Account Password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full bg-background border border-input rounded-xl pl-11 pr-10 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer focus:outline-none"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
+                  {availableRoles.includes('advertiser') && (
+                    <button
+                      type="button"
+                      onClick={() => handleLogin(null, 'advertiser')}
+                      disabled={loading}
+                      className="w-full flex items-center p-4 bg-background border border-border hover:border-primary hover:bg-muted/30 rounded-2xl transition-all cursor-pointer text-left"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-md shrink-0 mr-4">
+                        <Megaphone className="w-5 h-5 text-white" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="font-bold text-xs text-foreground">Advertiser Profile</h4>
+                        <p className="text-[9px] text-muted-foreground mt-0.5 truncate font-semibold">
+                          Book ad campaigns, upload media & track ROI.
+                        </p>
+                      </div>
+                    </button>
+                  )}
                 </div>
-              </div>
 
-              {/* Submit button */}
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground font-bold py-3.5 rounded-xl transition-all shadow-lg glow-hover cursor-pointer mt-4 flex items-center justify-center space-x-2"
-              >
-                <span>{loading ? 'Logging In...' : 'Log In to Account'}</span>
-              </button>
-            </form>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRoleSelection(false);
+                    setTempLoginPayload(null);
+                  }}
+                  className="w-full text-center text-xs text-muted-foreground hover:text-foreground mt-4 font-bold cursor-pointer"
+                >
+                  Back to Sign In
+                </button>
+              </div>
+            ) : (
+              /* Input Form */
+              <form onSubmit={(e) => handleLogin(e)} className="space-y-4">
+
+                {/* Email or Mobile Input */}
+                <div>
+                  <div className="relative">
+                    {identifier.includes('@') ? (
+                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    ) : (
+                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    )}
+                    <input
+                      type="text"
+                      required
+                      placeholder="Email or Mobile Number"
+                      value={identifier}
+                      onChange={(e) => handleIdentifierChange(e.target.value)}
+                      className="w-full bg-background border border-input rounded-xl pl-11 pr-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Password Input */}
+                <div>
+                  <div className="relative">
+                    <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      placeholder="Account Password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-background border border-input rounded-xl pl-11 pr-10 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer focus:outline-none"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Submit button */}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground disabled:cursor-not-allowed text-primary-foreground font-bold py-3.5 rounded-xl transition-all shadow-lg glow-hover cursor-pointer mt-4 flex items-center justify-center space-x-2"
+                >
+                  <span>{loading ? 'Logging In...' : 'Log In to Account'}</span>
+                </button>
+              </form>
+            )}
 
             <div className="text-center text-xs text-muted-foreground mt-6 font-semibold">
               Don&apos;t have an account?{' '}

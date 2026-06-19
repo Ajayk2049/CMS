@@ -3,21 +3,23 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useRouter } from 'next/navigation';
-import { 
-  Plus, 
-  Layers, 
-  MapPin, 
-  Video, 
-  CreditCard, 
-  LogOut, 
-  DollarSign, 
-  CheckCircle, 
+import {
+  Plus,
+  Layers,
+  MapPin,
+  Video,
+  CreditCard,
+  LogOut,
+  DollarSign,
+  CheckCircle,
   HelpCircle,
   Megaphone,
   Tv,
   Sun,
   Moon,
-  Upload
+  Upload,
+  Building,
+  RefreshCw
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -29,10 +31,13 @@ export default function AdvertiserDashboard() {
   const [theme, setTheme] = useState('dark');
   const [token, setToken] = useState('');
   const [phone, setPhone] = useState('');
+  const [roles, setRoles] = useState([]);
   const [activeTab, setActiveTab] = useState('bookings');
-  
+
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [roleActionLoading, setRoleActionLoading] = useState(false);
+  const [showBecomeHostModal, setShowBecomeHostModal] = useState(false);
 
   // Dropdown options loaded from server
   const [states, setStates] = useState([]);
@@ -85,6 +90,7 @@ export default function AdvertiserDashboard() {
     const storedToken = localStorage.getItem('token');
     const role = localStorage.getItem('role');
     const storedPhone = localStorage.getItem('phone');
+    const storedRoles = JSON.parse(localStorage.getItem('roles') || '[]');
 
     if (!storedToken || role !== 'advertiser') {
       localStorage.clear();
@@ -99,6 +105,7 @@ export default function AdvertiserDashboard() {
 
     setToken(storedToken);
     setPhone(storedPhone);
+    setRoles(storedRoles);
 
     fetchBookings(storedToken);
     fetchStates(storedToken);
@@ -238,9 +245,9 @@ export default function AdvertiserDashboard() {
     const qty = parseInt(quantity, 10) || 0;
 
     const matchRate = rates.find(
-      r => r.deviceType === deviceType && 
-           r.durationDays === duration && 
-           r.frequency === frequency
+      r => r.deviceType === deviceType &&
+        r.durationDays === duration &&
+        r.frequency === frequency
     );
 
     if (matchRate) {
@@ -258,6 +265,11 @@ export default function AdvertiserDashboard() {
 
     if (!selectedOutlet) {
       setError('Please select a target venue and display type');
+      return;
+    }
+
+    if (!mediaUrl || !mediaUrl.trim()) {
+      setError('Please upload a video file or provide a video URL before proceeding.');
       return;
     }
 
@@ -291,7 +303,7 @@ export default function AdvertiserDashboard() {
       );
 
       setInfo('Ad booking initiated successfully! Redirecting you to payment...');
-      
+
       // Simulate/Open Checkout Redirect
       if (response.data.data.paymentUrl) {
         window.location.href = response.data.data.paymentUrl;
@@ -306,9 +318,66 @@ export default function AdvertiserDashboard() {
     router.push('/login');
   };
 
+  const handleSwitchRole = async (targetRole) => {
+    setError('');
+    setInfo('');
+    setRoleActionLoading(true);
+    try {
+      const res = await axios.post(`${API_BASE}/auth/switch-role`, { role: targetRole }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      localStorage.setItem('token', res.data.data.token);
+      localStorage.setItem('role', res.data.data.user.role);
+      localStorage.setItem('roles', JSON.stringify(res.data.data.user.roles));
+      router.push(targetRole === 'merchant' ? '/merchant' : '/advertiser');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to switch role.');
+    } finally {
+      setRoleActionLoading(false);
+    }
+  };
+
+  const handleBecomeHost = async () => {
+    setError('');
+    setInfo('');
+    setRoleActionLoading(true);
+    setShowBecomeHostModal(false);
+    try {
+      const res = await axios.post(`${API_BASE}/auth/add-role`, { role: 'merchant' }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      localStorage.setItem('token', res.data.data.token);
+      localStorage.setItem('role', res.data.data.user.role);
+      localStorage.setItem('roles', JSON.stringify(res.data.data.user.roles));
+      router.push('/merchant');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to register as host.');
+    } finally {
+      setRoleActionLoading(false);
+    }
+  };
+
+  const handleVerifyPayment = async (bookingId) => {
+    setError('');
+    setInfo('');
+    try {
+      const res = await axios.post(`${API_BASE}/ads/verify-payment/${bookingId}`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        setInfo(res.data.message);
+        fetchBookings(token); // reload campaigns
+      } else {
+        setError(res.data.message);
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to verify payment status.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground font-sans flex flex-col transition-all duration-300">
-      
+
       {/* Top Header Navbar - Universal styled shadcn preset */}
       <header className="border-b border-border bg-card px-6 md:px-12 py-4 flex items-center justify-between shadow-sm sticky top-0 z-30">
         <div className="flex items-center space-x-3">
@@ -321,22 +390,20 @@ export default function AdvertiserDashboard() {
         <nav className="flex space-x-1.5 md:space-x-2">
           <button
             onClick={() => setActiveTab('bookings')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === 'bookings'
+            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'bookings'
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-            }`}
+              }`}
           >
             <Layers className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">My Campaigns</span>
           </button>
           <button
             onClick={() => setActiveTab('new-booking')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === 'new-booking'
+            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'new-booking'
                 ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-            }`}
+              }`}
           >
             <Plus className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Book Ad Spot</span>
@@ -348,7 +415,28 @@ export default function AdvertiserDashboard() {
             <p className="text-[10px] text-muted-foreground font-semibold leading-none">Logged in as</p>
             <p className="text-xs font-bold text-foreground mt-1">{phone}</p>
           </div>
-          
+
+          {/* Role Actions */}
+          {roles.includes('merchant') ? (
+            <button
+              onClick={() => handleSwitchRole('merchant')}
+              disabled={roleActionLoading}
+              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border border-blue-500/30 hover:border-blue-500 text-blue-400 hover:text-blue-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${roleActionLoading ? 'animate-spin' : ''}`} />
+              <span className="hidden md:inline">Switch to Host</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowBecomeHostModal(true)}
+              disabled={roleActionLoading}
+              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-emerald-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
+            >
+              <Building className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Become Host</span>
+            </button>
+          )}
+
           <button
             onClick={toggleTheme}
             className="p-2 bg-card hover:bg-muted border border-border rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer flex items-center justify-center shadow-sm"
@@ -356,7 +444,7 @@ export default function AdvertiserDashboard() {
           >
             {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-500" />}
           </button>
-          
+
           <button
             onClick={handleLogout}
             className="flex items-center space-x-1.5 px-3 py-2 bg-card hover:bg-muted border border-border text-muted-foreground hover:text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm"
@@ -422,6 +510,13 @@ export default function AdvertiserDashboard() {
                           </a>
                         </div>
                       </div>
+                      
+                      {booking.approvalStatus === 'rejected' && booking.denialReason && (
+                        <div className="mt-3 p-3 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-[10px] font-semibold space-y-1">
+                          <p className="uppercase font-bold text-[8px] tracking-wider">Reason for Denial</p>
+                          <p className="text-foreground leading-relaxed font-semibold">{booking.denialReason}</p>
+                        </div>
+                      )}
                     </div>
 
                     <div className="border-t border-border pt-3 flex items-center justify-between">
@@ -430,22 +525,29 @@ export default function AdvertiserDashboard() {
                         <p className="text-sm font-extrabold text-foreground">₹{booking.amount / 100}</p>
                       </div>
                       <div className="flex flex-col items-end space-y-1">
-                        <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded ${
-                          booking.paymentStatus === 'completed'
+                        <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded ${booking.paymentStatus === 'completed'
                             ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                             : 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20'
-                        }`}>
+                          }`}>
                           {booking.paymentStatus === 'completed' ? 'Paid' : 'Unpaid'}
                         </span>
-                        <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded ${
-                          booking.approvalStatus === 'approved'
+                        <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded ${booking.approvalStatus === 'approved'
                             ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                             : booking.approvalStatus === 'rejected'
-                            ? 'bg-destructive/10 text-destructive border border-destructive/20'
-                            : 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20'
-                        }`}>
+                              ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                              : 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20'
+                          }`}>
                           {booking.approvalStatus === 'approved' ? 'Approved' : booking.approvalStatus === 'rejected' ? 'Rejected' : 'Reviewing'}
                         </span>
+                        {booking.paymentStatus !== 'completed' && (
+                          <button
+                            onClick={() => handleVerifyPayment(booking.bookingId)}
+                            className="mt-1 flex items-center space-x-1 px-2 py-1 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border border-blue-500/30 hover:border-blue-500 text-blue-400 hover:text-blue-300 font-bold rounded-lg transition-all text-[8px] cursor-pointer shadow-sm"
+                          >
+                            <RefreshCw className="w-2.5 h-2.5" />
+                            <span>Verify Status</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -511,12 +613,12 @@ export default function AdvertiserDashboard() {
                         onChange={(e) => {
                           const name = e.target.value;
                           setSelectedOutletName(name);
-                          
+
                           // Find matching outlets
                           const matches = outlets.filter(o => o.outletName === name);
                           const devices = matches.map(o => o.deviceType);
                           setAvailableDeviceTypes(devices);
-                          
+
                           // Reset device type and selectedOutlet
                           setSelectedDeviceType('');
                           setSelectedOutlet(null);
@@ -538,7 +640,7 @@ export default function AdvertiserDashboard() {
                         onChange={(e) => {
                           const devType = e.target.value;
                           setSelectedDeviceType(devType);
-                          
+
                           // Find specific outlet matching name and device type
                           const matched = outlets.find(o => o.outletName === selectedOutletName && o.deviceType === devType);
                           setSelectedOutlet(matched || null);
@@ -567,7 +669,7 @@ export default function AdvertiserDashboard() {
                   <form onSubmit={handleInitiateBooking} className="space-y-6">
                     <div>
                       <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Media File Asset</label>
-                      
+
                       <div className="space-y-4">
                         {/* File Upload Box */}
                         <div className="flex items-center space-x-3">
@@ -670,7 +772,7 @@ export default function AdvertiserDashboard() {
               {/* Checkout Summary Card */}
               <div className="glassmorphism p-8 rounded-[32px] bg-card/20 border-border h-fit space-y-6">
                 <h3 className="font-outfit text-lg font-bold text-foreground border-b border-border pb-3">Checkout Summary</h3>
-                
+
                 {selectedOutlet ? (
                   <div className="space-y-4 text-xs animate-fade-in">
                     <div>
@@ -710,6 +812,46 @@ export default function AdvertiserDashboard() {
           </div>
         )}
       </main>
+
+      {/* Become Host Modal */}
+      {showBecomeHostModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="w-full max-w-md bg-card border border-border p-6 rounded-[32px] shadow-2xl relative space-y-6">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20 shrink-0">
+                <Building className="w-5 h-5 text-white" />
+              </div>
+              <div className="text-left">
+                <h3 className="font-outfit text-md font-bold tracking-tight">Become a Host</h3>
+                <p className="text-[10px] text-muted-foreground font-semibold mt-0.5">Apply for tabletop devices/screens at your outlet</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground font-medium leading-relaxed">
+              By activating the Host profile, you can apply to host tablet ordering kiosks and wall display screens at your physical venue, manage your digital restaurant menu catalogs, and monitor live customer orders.
+              <br /><br />
+              This will use your same phone number and credentials, allowing you to seamlessly switch between your Advertiser and Host dashboards.
+            </p>
+
+            <div className="flex space-x-3 pt-2">
+              <button
+                onClick={handleBecomeHost}
+                disabled={roleActionLoading}
+                className="flex-1 bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all text-xs cursor-pointer shadow-lg glow-hover flex items-center justify-center space-x-2"
+              >
+                <span>{roleActionLoading ? 'Activating...' : 'Activate Host Profile'}</span>
+              </button>
+              <button
+                onClick={() => setShowBecomeHostModal(false)}
+                disabled={roleActionLoading}
+                className="px-5 border border-border hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

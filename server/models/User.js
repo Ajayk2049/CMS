@@ -23,6 +23,11 @@ const UserSchema = new mongoose.Schema({
     enum: ['merchant', 'advertiser', 'admin'],
     required: true
   },
+  roles: {
+    type: [String],
+    enum: ['merchant', 'advertiser', 'admin'],
+    default: ['merchant']
+  },
   isDemo: {
     type: Boolean,
     default: false

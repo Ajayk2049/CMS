@@ -68,6 +68,20 @@ const AdBookingSchema = new mongoose.Schema({
     unique: true,
     index: true
   },
+  orderId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  paymentId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  denialReason: {
+    type: String,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

@@ -42,6 +42,7 @@ graphify-out/
 PhonePe_Payments_Guide.md
 project_blueprint.md
 sms_api.md
+user.md
 
 # Flutter / Dart caches and generated files
 .dart_tool/

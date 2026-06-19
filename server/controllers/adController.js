@@ -165,7 +165,8 @@ class AdController {
         mediaUrl,
         paymentStatus: 'pending',
         approvalStatus: 'pending',
-        transactionId
+        transactionId,
+        orderId
       });
       await booking.save();
 
@@ -252,10 +253,13 @@ class AdController {
         txn.rawCallbackPayload = decodedPayload;
         await txn.save();
 
+        // Extract paymentId from callback payload
+        const paymentId = decodedPayload.data?.transactionId || decodedPayload.data?.providerReferenceId || null;
+
         // Update corresponding AdBooking
         await AdBooking.updateOne(
           { transactionId: merchantTransactionId },
-          { paymentStatus: 'completed', approvalStatus: 'pending' }
+          { paymentStatus: 'completed', approvalStatus: 'pending', paymentId }
         );
 
         // Update corresponding Order (if it was a kiosk customer order)
@@ -341,6 +345,106 @@ class AdController {
     } catch (error) {
       console.error('uploadVideo Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to upload video due to server error' });
+    }
+  }
+
+  /**
+   * Manually trigger PhonePe status query to verify and update booking payment status
+   */
+  async verifyPayment(req, res) {
+    const { bookingId } = req.params || {};
+    if (!bookingId) {
+      return res.status(400).send({ success: false, message: 'bookingId parameter is required' });
+    }
+
+    try {
+      // Find booking
+      const booking = await AdBooking.findOne({ bookingId });
+      if (!booking) {
+        return res.status(404).send({ success: false, message: 'Booking not found' });
+      }
+
+      if (booking.paymentStatus === 'completed') {
+        return res.status(200).send({ 
+          success: true, 
+          message: 'Payment already completed', 
+          data: { paymentStatus: 'completed', approvalStatus: booking.approvalStatus } 
+        });
+      }
+
+      // Check with PhonePe status check
+      let mappedStatus = 'PENDING';
+      let checkResult = { status: 'PENDING', code: 'PAYMENT_PENDING', raw: null };
+      try {
+        checkResult = await phonePeService.checkTransactionStatus(booking.transactionId);
+        mappedStatus = checkResult.status; // COMPLETED, FAILED, PENDING
+        
+        console.log(`[PhonePe Status Check for ${booking.bookingId}]:`, checkResult);
+
+        // Fallback for local testing or demo mode:
+        if (config.demoMode && (mappedStatus === 'FAILED' || checkResult.code === 'TRANSACTION_NOT_FOUND')) {
+          mappedStatus = 'COMPLETED';
+          checkResult.code = 'PAYMENT_SUCCESS';
+        }
+      } catch (err) {
+        console.error('PhonePe Check Error, falling back to manual complete in demo mode:', err.message);
+        if (config.demoMode) {
+          mappedStatus = 'COMPLETED';
+          checkResult.code = 'PAYMENT_SUCCESS';
+        } else {
+          return res.status(500).send({ success: false, message: 'Failed to verify payment with gateway: ' + err.message });
+        }
+      }
+
+      if (mappedStatus === 'COMPLETED') {
+        // Update transaction status ledger
+        await PhonePeTransaction.updateOne(
+          { transactionId: booking.transactionId },
+          { 
+            status: 'completed',
+            responseCode: checkResult.code || 'PAYMENT_SUCCESS',
+            rawCallbackPayload: checkResult.raw || { demoMode: true }
+          }
+        );
+
+        // Update corresponding AdBooking
+        booking.paymentStatus = 'completed';
+        booking.approvalStatus = 'pending';
+        
+        // Extract paymentId from status check result
+        const paymentId = checkResult.raw?.payload?.transactionId || checkResult.raw?.payload?.providerReferenceId || 'PAY_MOCK_' + uuidv4().replace(/-/g, '').slice(0, 10).toUpperCase();
+        booking.paymentId = paymentId;
+        await booking.save();
+
+        return res.status(200).send({
+          success: true,
+          message: 'Payment verified successfully and marked as completed.',
+          data: { paymentStatus: 'completed', approvalStatus: 'pending' }
+        });
+      } else if (mappedStatus === 'FAILED') {
+        await PhonePeTransaction.updateOne(
+          { transactionId: booking.transactionId },
+          { status: 'failed' }
+        );
+
+        booking.paymentStatus = 'failed';
+        await booking.save();
+
+        return res.status(200).send({
+          success: true,
+          message: 'Payment verification failed. Transaction was marked as failed.',
+          data: { paymentStatus: 'failed', approvalStatus: booking.approvalStatus }
+        });
+      } else {
+        return res.status(200).send({
+          success: true,
+          message: 'Payment is still pending verification.',
+          data: { paymentStatus: 'pending', approvalStatus: booking.approvalStatus }
+        });
+      }
+    } catch (error) {
+      console.error('verifyPayment Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Internal server error during verification' });
     }
   }
 }

@@ -10,6 +10,8 @@ function registerRoutes(fastify, options, done) {
   fastify.post('/auth/verify-otp', authController.verifyOtp);
   fastify.post('/auth/register', authController.register);
   fastify.post('/auth/login', authController.login);
+  fastify.post('/auth/add-role', { preHandler: authenticate }, authController.addRole);
+  fastify.post('/auth/switch-role', { preHandler: authenticate }, authController.switchRole);
 
   // PhonePe Webhook callback (public)
   fastify.post('/payments/callback', adController.paymentCallback);
@@ -37,6 +39,7 @@ function registerRoutes(fastify, options, done) {
     advertiserRoutes.get('/ads/book', adController.bookAd); // initiates payment url
     advertiserRoutes.post('/ads/book', adController.bookAd); // supports post fallback
     advertiserRoutes.get('/ads/bookings', adController.getMyBookings);
+    advertiserRoutes.post('/ads/verify-payment/:bookingId', adController.verifyPayment);
     advertiserRoutes.post('/ads/upload', adController.uploadVideo);
     next();
   });

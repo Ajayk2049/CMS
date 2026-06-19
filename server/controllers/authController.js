@@ -21,9 +21,11 @@ function verifyPassword(password, storedPassword) {
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
 }
 
-function generateToken(user) {
+function generateToken(user, activeRole = null) {
+  const roleToUse = activeRole || user.role;
+  const rolesToUse = user.roles && user.roles.length > 0 ? user.roles : [user.role];
   return jwt.sign(
-    { uid: user._id, phone: user.phone, role: user.role, isDemo: user.isDemo },
+    { uid: user._id, phone: user.phone, role: roleToUse, roles: rolesToUse, isDemo: user.isDemo },
     config.jwtSecret,
     { expiresIn: '30d' }
   );
@@ -168,6 +170,7 @@ class AuthController {
         email: email ? email.trim().toLowerCase() : undefined,
         password: hashedPassword,
         role: role,
+        roles: [role],
         isDemo: isDemoAccount
       });
 
@@ -181,7 +184,8 @@ class AuthController {
           user: {
             uid: newUser._id,
             phone: newUser.phone,
-            role: newUser.role
+            role: newUser.role,
+            roles: newUser.roles
           },
           token
         }
@@ -250,7 +254,7 @@ class AuthController {
    * Authenticate using phone and password
    */
   async login(req, res) {
-    const { phone, identifier, password } = req.body || {};
+    const { phone, identifier, password, selectedRole } = req.body || {};
     const inputId = identifier || phone;
 
     if (!inputId || !password) {
@@ -279,7 +283,42 @@ class AuthController {
         return res.status(400).send({ success: false, message: 'Invalid email/phone or password' });
       }
 
-      const token = generateToken(user);
+      // Resolve roles for backwards compatibility
+      let userRoles = user.roles || [];
+      if (userRoles.length === 0) {
+        userRoles = [user.role];
+      }
+
+      // If user has multiple roles and has not selected one yet
+      if (userRoles.length > 1 && !selectedRole) {
+        return res.status(200).send({
+          success: true,
+          message: 'Role selection required',
+          data: {
+            requiresRoleSelection: true,
+            roles: userRoles,
+            uid: user._id,
+            phone: user.phone
+          }
+        });
+      }
+
+      // If a role was selected, verify they actually possess it
+      let activeRole = user.role;
+      if (selectedRole) {
+        if (!userRoles.includes(selectedRole)) {
+          return res.status(400).send({ success: false, message: 'Requested role is not assigned to this user' });
+        }
+        activeRole = selectedRole;
+        // Persist the active role in database
+        user.role = selectedRole;
+        await user.save();
+      } else {
+        // Default to the first role if none selected (should be the case for single-role users)
+        activeRole = userRoles[0];
+      }
+
+      const token = generateToken(user, activeRole);
       return res.status(200).send({
         success: true,
         message: 'Logged in successfully',
@@ -287,7 +326,8 @@ class AuthController {
           user: {
             uid: user._id,
             phone: user.phone,
-            role: user.role
+            role: activeRole,
+            roles: userRoles
           },
           token
         }
@@ -295,6 +335,104 @@ class AuthController {
     } catch (error) {
       console.error('login Error:', error.message);
       return res.status(500).send({ success: false, message: 'Authentication failed due to server error' });
+    }
+  }
+
+  /**
+   * Add a new role to an authenticated user
+   */
+  async addRole(req, res) {
+    const { role } = req.body || {};
+    if (!['merchant', 'advertiser'].includes(role)) {
+      return res.status(400).send({ success: false, message: 'Invalid role. Must be merchant or advertiser' });
+    }
+
+    try {
+      const user = await User.findById(req.user.uid);
+      if (!user) {
+        return res.status(404).send({ success: false, message: 'User not found' });
+      }
+
+      let userRoles = user.roles || [];
+      if (userRoles.length === 0) {
+        userRoles = [user.role];
+      }
+
+      if (userRoles.includes(role)) {
+        return res.status(400).send({ success: false, message: 'Role already added to this account' });
+      }
+
+      userRoles.push(role);
+      user.roles = userRoles;
+      user.role = role; // set active role to the newly added role
+      await user.save();
+
+      const token = generateToken(user, role);
+
+      return res.status(200).send({
+        success: true,
+        message: `Role ${role} added successfully`,
+        data: {
+          user: {
+            uid: user._id,
+            phone: user.phone,
+            role: user.role,
+            roles: user.roles
+          },
+          token
+        }
+      });
+    } catch (error) {
+      console.error('addRole Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to add role due to server error' });
+    }
+  }
+
+  /**
+   * Switch the currently active role for an authenticated user
+   */
+  async switchRole(req, res) {
+    const { role } = req.body || {};
+    if (!['merchant', 'advertiser', 'admin'].includes(role)) {
+      return res.status(400).send({ success: false, message: 'Invalid role' });
+    }
+
+    try {
+      const user = await User.findById(req.user.uid);
+      if (!user) {
+        return res.status(404).send({ success: false, message: 'User not found' });
+      }
+
+      let userRoles = user.roles || [];
+      if (userRoles.length === 0) {
+        userRoles = [user.role];
+      }
+
+      if (!userRoles.includes(role)) {
+        return res.status(403).send({ success: false, message: 'Access denied: Role not assigned to this account' });
+      }
+
+      user.role = role;
+      await user.save();
+
+      const token = generateToken(user, role);
+
+      return res.status(200).send({
+        success: true,
+        message: `Switched active role to ${role}`,
+        data: {
+          user: {
+            uid: user._id,
+            phone: user.phone,
+            role: user.role,
+            roles: user.roles
+          },
+          token
+        }
+      });
+    } catch (error) {
+      console.error('switchRole Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to switch role due to server error' });
     }
   }
 }

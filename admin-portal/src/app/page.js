@@ -3,8 +3,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import videojs from 'video.js';
-import 'video.js/dist/video-js.css';
 import { 
   ShieldCheck, 
   Users, 
@@ -33,45 +31,14 @@ import {
   AlertTriangle,
   Building,
   UserCheck,
-  Settings
+  Settings,
+  Video
 } from 'lucide-react';
 import { config } from '@/config';
 
 const API_BASE = config.apiUrl;
 
-// Safe client-side VideoJS Player wrapper
-const VideoPlayer = ({ src }) => {
-  const videoRef = useRef(null);
-  const playerRef = useRef(null);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    
-    if (videoRef.current) {
-      playerRef.current = videojs(videoRef.current, {
-        controls: true,
-        autoplay: false,
-        preload: 'auto',
-        fluid: true,
-        aspectRatio: '16:9',
-        sources: [{ src: src || '', type: 'video/mp4' }]
-      });
-    }
-
-    return () => {
-      if (playerRef.current) {
-        playerRef.current.dispose();
-        playerRef.current = null;
-      }
-    };
-  }, [src]);
-
-  return (
-    <div data-vjs-player className="w-full rounded-2xl overflow-hidden shadow-2xl border border-border bg-slate-950">
-      <video ref={videoRef} className="video-js vjs-big-play-centered w-full" />
-    </div>
-  );
-};
 
 export default function AdminPortal() {
   const [mounted, setMounted] = useState(false);
@@ -104,6 +71,15 @@ export default function AdminPortal() {
   const [selectedReport, setSelectedReport] = useState(null);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
   const [selectedHostApp, setSelectedHostApp] = useState(null);
+
+  // Campaign Tab Modal & Filter States
+  const [showVideoModal, setShowVideoModal] = useState(false);
+  const [activeVideoUrl, setActiveVideoUrl] = useState('');
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showDenyModal, setShowDenyModal] = useState(false);
+  const [denyReasonText, setDenyReasonText] = useState('');
+  const [campaignSearchQuery, setCampaignSearchQuery] = useState('');
+  const [watchedVideos, setWatchedVideos] = useState(new Set()); // Track which booking videos admin has watched
 
   // Deploy device form
   const [deviceForm, setDeviceForm] = useState({
@@ -330,14 +306,18 @@ export default function AdminPortal() {
     }
   };
 
-  const handleReviewCampaign = async (bookingId, action) => {
+  const handleReviewCampaign = async (bookingId, action, denialReason = null) => {
     try {
+      const payload = { bookingId, action };
+      if (action === 'reject' && denialReason) {
+        payload.denialReason = denialReason;
+      }
       await axios.post(
         `${API_BASE}/admin/bookings/review`,
-        { bookingId, action },
+        payload,
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      showNotification('success', `Campaign ${action}ed successfully`);
+      showNotification('success', `Campaign ${action === 'approve' ? 'approved' : 'denied'} successfully`);
       fetchCampaigns(token);
       fetchStats(token);
     } catch (err) {
@@ -569,6 +549,22 @@ export default function AdminPortal() {
       </div>
     );
   }
+
+  // Filtered campaigns for Pending Ads tab search
+  const filteredCampaigns = campaigns.filter(c => {
+    if (c.paymentStatus !== 'completed' || c.approvalStatus !== 'pending') {
+      return false;
+    }
+    const query = campaignSearchQuery.trim().toLowerCase();
+    if (!query) return true;
+    return (
+      c.bookingId.toLowerCase().includes(query) ||
+      (c.outletId?.outletName || '').toLowerCase().includes(query) ||
+      (c.advertiserId?.phone || '').includes(query) ||
+      c.city.toLowerCase().includes(query) ||
+      c.state.toLowerCase().includes(query)
+    );
+  });
 
   // NAVIGATION BAR ITEMS
   const navItems = [
@@ -1151,22 +1147,22 @@ export default function AdminPortal() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border/60">
-                          {users.filter(u => u.role === userSubTab).length === 0 ? (
+                          {users.filter(u => u.roles ? u.roles.includes(userSubTab) : u.role === userSubTab).length === 0 ? (
                             <tr>
                               <td colSpan="6" className="p-8 text-center text-muted-foreground font-medium">
                                 No registered {userSubTab} accounts yet.
                               </td>
                             </tr>
                           ) : (
-                            users.filter(u => u.role === userSubTab).map((user) => (
+                            users.filter(u => u.roles ? u.roles.includes(userSubTab) : u.role === userSubTab).map((user) => (
                               <tr key={user._id} className={`hover:bg-card/20 transition-all ${selectedUser?._id === user._id ? 'bg-primary/5' : ''}`}>
                                 <td className="p-4 pl-6 font-bold tracking-tight text-foreground">{user._id}</td>
                                 <td className="p-4 font-semibold text-slate-300">{user.phone}</td>
                                 <td className="p-4 font-bold text-slate-300">
-                                  {userSubTab === 'merchant' ? user.stats?.applicationsCount || 0 : user.stats?.bookingsCount || 0}
+                                  {userSubTab === 'merchant' ? user.stats?.merchant?.applicationsCount || 0 : user.stats?.advertiser?.bookingsCount || 0}
                                 </td>
                                 {userSubTab === 'merchant' && (
-                                  <td className="p-4 font-bold text-slate-300">{user.stats?.devicesCount || 0}</td>
+                                  <td className="p-4 font-bold text-slate-300">{user.stats?.merchant?.devicesCount || 0}</td>
                                 )}
                                 <td className="p-4 text-muted-foreground">
                                   {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : '-'}
@@ -1202,15 +1198,15 @@ export default function AdminPortal() {
                       </button>
 
                       <div>
-                        <span className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20">
-                          {selectedUser.role} Account Details
+                        <span className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20 animate-fade-in">
+                          {userSubTab} Account Details
                         </span>
                         <h4 className="font-outfit text-sm font-bold mt-3 text-slate-300">ID: {selectedUser._id}</h4>
                         <p className="text-xs text-muted-foreground mt-1 font-semibold">Phone: {selectedUser.phone}</p>
                       </div>
 
                       {/* Drilldown content for host */}
-                      {selectedUser.role === 'merchant' ? (
+                      {userSubTab === 'merchant' ? (
                         <div className="space-y-4">
                           <h5 className="text-xs font-bold border-b border-border/50 pb-2 text-foreground">Venues & Devices</h5>
                           
@@ -1506,81 +1502,88 @@ export default function AdminPortal() {
                 exit={{ opacity: 0, y: -15 }}
                 className="space-y-6"
               >
-                {campaigns.filter(c => c.paymentStatus === 'completed' && c.approvalStatus === 'pending').length === 0 ? (
-                  <div className="text-center py-20 border border-border rounded-[32px] text-xs text-muted-foreground glassmorphism bg-card/20">
+                {filteredCampaigns.length === 0 ? (
+                  <div className="text-center py-20 border border-border rounded-[32px] text-xs text-muted-foreground glassmorphism bg-card/20 animate-fade-in">
                     <UserCheck className="w-8 h-8 text-muted-foreground/40 mx-auto mb-4" />
                     <p className="font-semibold">All booked and paid ad campaigns are resolved.</p>
                     <p className="text-[10px] mt-1">Wait for advertisers to place new campaigns.</p>
                   </div>
                 ) : (
-                  <div className="grid lg:grid-cols-12 gap-8 items-start">
-                    
-                    {/* Left Column: Ads List */}
-                    <div className="lg:col-span-4 space-y-4">
-                      <h4 className="font-outfit text-sm font-bold mb-4">Pending Approvals Queue</h4>
-                      <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-                        {campaigns.filter(c => c.paymentStatus === 'completed' && c.approvalStatus === 'pending').map((booking) => (
-                          <div
-                            key={booking.bookingId}
-                            onClick={() => setSelectedCampaign(booking)}
-                            className={`p-4 rounded-2xl border text-xs font-semibold cursor-pointer transition-all ${
-                              selectedCampaign?.bookingId === booking.bookingId 
-                                ? 'bg-primary/5 border-primary shadow-lg' 
-                                : 'glassmorphism bg-card/30 border-border hover:border-foreground/20'
-                            }`}
-                          >
-                            <div className="flex justify-between items-start">
-                              <p className="font-bold text-foreground">Campaign {booking.bookingId}</p>
-                              <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/20">Paid</span>
-                            </div>
-                            <p className="text-[10px] text-slate-300 mt-2 font-medium">Target: {booking.outletId?.outletName || 'Outlet'}</p>
-                            <p className="text-[10px] text-muted-foreground mt-0.5">{booking.city}, {booking.state}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Right Column: Player & Metadata Moderation */}
-                    {selectedCampaign && (
-                      <div className="lg:col-span-8 space-y-6">
-                        {/* Video.JS component */}
-                        <VideoPlayer src={selectedCampaign.mediaUrl} />
-
-                        {/* Metadata Details Sheet */}
-                        <div className="glassmorphism p-6 rounded-3xl bg-card/30 border-border/80 grid sm:grid-cols-2 gap-6 relative shadow-xl">
-                          <div className="space-y-4 text-xs font-semibold text-muted-foreground">
-                            <p><span className="font-bold text-foreground block uppercase text-[10px] mb-1">Campaign ID</span> {selectedCampaign.bookingId}</p>
-                            <p><span className="font-bold text-foreground block uppercase text-[10px] mb-1">Advertiser Mobile</span> {selectedCampaign.advertiserId?.phone || 'Account deleted'}</p>
-                            <p><span className="font-bold text-foreground block uppercase text-[10px] mb-1">Target Venue Outlet</span> {selectedCampaign.outletId?.outletName || 'Standalone'} ({selectedCampaign.city}, {selectedCampaign.state})</p>
-                          </div>
-
-                          <div className="space-y-4 text-xs font-semibold text-muted-foreground">
-                            <p><span className="font-bold text-foreground block uppercase text-[10px] mb-1">Target Screen Specs</span> {selectedCampaign.deviceType} Display (Qty: {selectedCampaign.quantity})</p>
-                            <p><span className="font-bold text-foreground block uppercase text-[10px] mb-1">Schedule Cycle</span> {selectedCampaign.adDurationDays} Days / {selectedCampaign.frequency}</p>
-                            <p><span className="font-bold text-foreground block uppercase text-[10px] mb-1">Total Payout</span> <span className="text-foreground text-sm font-black">₹{selectedCampaign.amount / 100}</span></p>
-                          </div>
-                        </div>
-
-                        {/* Approvals action controls */}
-                        <div className="flex space-x-4">
-                          <button
-                            onClick={() => handleReviewCampaign(selectedCampaign.bookingId, 'approve')}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-8 py-4 rounded-2xl flex items-center justify-center space-x-2 cursor-pointer shadow-lg glow-hover grow"
-                          >
-                            <Check className="w-5 h-5" />
-                            <span>Approve & Broadcast to Devices</span>
-                          </button>
-                          <button
-                            onClick={() => handleReviewCampaign(selectedCampaign.bookingId, 'reject')}
-                            className="border border-destructive/30 hover:bg-destructive/10 text-destructive font-bold px-8 py-4 rounded-2xl flex items-center justify-center space-x-2 cursor-pointer shadow-md transition-all grow"
-                          >
-                            <X className="w-5 h-5" />
-                            <span>Reject Campaign</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
+                  <div className="mx-1 mt-2 overflow-x-auto animate-fade-in">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-border/80 text-muted-foreground font-bold uppercase tracking-wider bg-card/10">
+                            <th className="p-4 pl-6">Advertiser Name</th>
+                            <th className="p-4">Ad ID</th>
+                            <th className="p-4 text-center">Attachment</th>
+                            <th className="p-4 text-center">Details</th>
+                            <th className="p-4 text-center">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border/40">
+                          {filteredCampaigns.map((booking) => (
+                            <tr key={booking.bookingId} className="hover:bg-card/20 transition-all">
+                              <td className="p-4 pl-6 font-bold text-foreground">
+                                <div>{booking.advertiserId?.phone || 'Advertiser'}</div>
+                                <div className="text-[10px] text-muted-foreground font-medium">{booking.city}, {booking.state}</div>
+                              </td>
+                              <td className="p-4 font-mono font-bold text-primary">{booking.bookingId}</td>
+                              <td className="p-4 text-center">
+                                <button
+                                  onClick={() => {
+                                    setSelectedCampaign(booking);
+                                    setActiveVideoUrl(booking.mediaUrl);
+                                    setShowVideoModal(true);
+                                  }}
+                                  className="p-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 rounded-xl transition-all cursor-pointer border border-blue-500/20 inline-flex items-center justify-center shadow-sm"
+                                  title="Play video attachment"
+                                >
+                                  <Video className="w-4 h-4" />
+                                </button>
+                              </td>
+                              <td className="p-4 text-center">
+                                <button
+                                  onClick={() => {
+                                    setSelectedCampaign(booking);
+                                    setShowDetailsModal(true);
+                                  }}
+                                  className="px-3 py-1.5 bg-muted hover:bg-muted-foreground/20 text-foreground border border-border font-bold rounded-lg transition-all cursor-pointer"
+                                >
+                                  Details
+                                </button>
+                              </td>
+                              <td className="p-4">
+                                <div className="flex items-center justify-center space-x-2">
+                                  <button
+                                    onClick={() => handleReviewCampaign(booking.bookingId, 'approve')}
+                                    disabled={!watchedVideos.has(booking.bookingId)}
+                                    title={!watchedVideos.has(booking.bookingId) ? 'You must watch the video before approving' : 'Approve this campaign'}
+                                    className={`px-3 py-1.5 border font-bold rounded-lg transition-all flex items-center space-x-1 ${
+                                      watchedVideos.has(booking.bookingId)
+                                        ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border-emerald-500/20 hover:border-emerald-500 cursor-pointer'
+                                        : 'bg-muted/50 text-muted-foreground border-border cursor-not-allowed opacity-50'
+                                    }`}
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>{watchedVideos.has(booking.bookingId) ? 'Approve' : 'Watch First'}</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedCampaign(booking);
+                                      setDenyReasonText('');
+                                      setShowDenyModal(true);
+                                    }}
+                                    className="px-3 py-1.5 bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/20 hover:border-destructive font-bold rounded-lg transition-all cursor-pointer flex items-center space-x-1"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                    <span>Deny</span>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                   </div>
                 )}
               </motion.div>
@@ -1974,6 +1977,183 @@ export default function AdminPortal() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* -------------------- ADMIN DIALOG MODAL OVERLAYS (RENDERED AT ROOT TO PREVENT TRANSFORM WHITE BAR ISSUES) -------------------- */}
+
+      {/* Video Player Modal */}
+      {showVideoModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-card border border-border w-full max-w-3xl rounded-[32px] overflow-hidden shadow-2xl p-6 relative">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-outfit text-base font-bold text-foreground">Video Creative Preview</h3>
+              <button 
+                onClick={() => {
+                  setShowVideoModal(false);
+                  setActiveVideoUrl('');
+                }}
+                className="p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="aspect-video w-full rounded-2xl overflow-hidden bg-slate-950">
+              {activeVideoUrl ? (
+                <video
+                  key={activeVideoUrl}
+                  src={activeVideoUrl}
+                  controls
+                  className="w-full h-full object-contain bg-black"
+                  onPlay={() => {
+                    if (selectedCampaign) {
+                      setWatchedVideos(prev => new Set(prev).add(selectedCampaign.bookingId));
+                    }
+                  }}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full text-muted-foreground font-semibold text-xs">
+                  No video URL provided
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Campaign Details Modal */}
+      {showDetailsModal && selectedCampaign && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-card border border-border w-full max-w-xl rounded-[32px] shadow-2xl p-6 relative max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-6 border-b border-border/50 pb-4">
+              <div>
+                <span className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20">
+                  Campaign Metadata
+                </span>
+                <h3 className="font-outfit text-lg font-bold text-foreground mt-2">Details for {selectedCampaign.bookingId}</h3>
+              </div>
+              <button 
+                onClick={() => {
+                  setShowDetailsModal(false);
+                  setSelectedCampaign(null);
+                }}
+                className="p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-6 text-xs font-semibold text-muted-foreground mb-6">
+              <div>
+                <p className="font-bold text-foreground block uppercase text-[10px] mb-1">Campaign ID</p>
+                <p className="font-mono text-primary font-bold text-sm">{selectedCampaign.bookingId}</p>
+              </div>
+              <div>
+                <p className="font-bold text-foreground block uppercase text-[10px] mb-1">Advertiser Mobile</p>
+                <p className="text-foreground">{selectedCampaign.advertiserId?.phone || 'Account deleted'}</p>
+              </div>
+              <div>
+                <p className="font-bold text-foreground block uppercase text-[10px] mb-1">Target Venue Outlet</p>
+                <p className="text-foreground">
+                  {selectedCampaign.outletId?.outletName || 'Standalone'}
+                </p>
+                <p className="text-[10px] font-medium mt-0.5">{selectedCampaign.city}, {selectedCampaign.state}</p>
+              </div>
+              <div>
+                <p className="font-bold text-foreground block uppercase text-[10px] mb-1">Target Screen Specs</p>
+                <p className="text-foreground capitalize">{selectedCampaign.deviceType} Display (Qty: {selectedCampaign.quantity})</p>
+              </div>
+              <div>
+                <p className="font-bold text-foreground block uppercase text-[10px] mb-1">Schedule Cycle</p>
+                <p className="text-foreground">{selectedCampaign.adDurationDays} Days / {selectedCampaign.frequency}</p>
+              </div>
+              <div>
+                <p className="font-bold text-foreground block uppercase text-[10px] mb-1">Total Payout</p>
+                <p className="text-foreground text-sm font-black">₹{selectedCampaign.amount / 100}</p>
+              </div>
+            </div>
+            
+            <div className="flex justify-end pt-4 border-t border-border/50">
+              <button
+                onClick={() => {
+                  setShowDetailsModal(false);
+                  setSelectedCampaign(null);
+                }}
+                className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground font-bold rounded-xl transition-all cursor-pointer border border-border text-xs"
+              >
+                Close Details
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Denial Reason Prompt Dialog */}
+      {showDenyModal && selectedCampaign && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-card border border-border w-full max-w-md rounded-[32px] shadow-2xl p-6 relative">
+            <div className="flex justify-between items-center mb-4 border-b border-border/50 pb-4">
+              <h3 className="font-outfit text-base font-bold text-foreground flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-destructive" />
+                <span>Deny Ad Campaign</span>
+              </h3>
+              <button 
+                onClick={() => {
+                  setShowDenyModal(false);
+                  setSelectedCampaign(null);
+                  setDenyReasonText('');
+                }}
+                className="p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              if (!denyReasonText.trim()) {
+                showNotification('error', 'Please provide a reason for denial');
+                return;
+              }
+              await handleReviewCampaign(selectedCampaign.bookingId, 'reject', denyReasonText);
+              setShowDenyModal(false);
+              setSelectedCampaign(null);
+              setDenyReasonText('');
+            }} className="space-y-4">
+              <p className="text-xs text-muted-foreground font-semibold">
+                Please specify the reason for denying campaign <span className="font-mono font-bold text-primary">{selectedCampaign.bookingId}</span>. This message will be shown to the advertiser.
+              </p>
+              
+              <textarea
+                required
+                rows="4"
+                placeholder="e.g. Inappropriate content, poor resolution, wrong schedule specifications..."
+                value={denyReasonText}
+                onChange={(e) => setDenyReasonText(e.target.value)}
+                className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+              />
+              
+              <div className="flex justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDenyModal(false);
+                    setSelectedCampaign(null);
+                    setDenyReasonText('');
+                  }}
+                  className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground font-bold rounded-xl transition-all cursor-pointer border border-border text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-destructive hover:bg-destructive/90 text-white font-bold rounded-xl transition-all cursor-pointer text-xs"
+                >
+                  Confirm Rejection
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );

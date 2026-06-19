@@ -115,10 +115,14 @@ class AdminController {
    * Review ad campaign (Approve / Reject)
    */
   async reviewAdBooking(req, res) {
-    const { bookingId, action } = req.body || {};
+    const { bookingId, action, denialReason } = req.body || {};
 
     if (!bookingId || !action || !['approve', 'reject'].includes(action)) {
       return res.status(400).send({ success: false, message: 'bookingId and action (approve/reject) are required' });
+    }
+
+    if (action === 'reject' && (!denialReason || !denialReason.trim())) {
+      return res.status(400).send({ success: false, message: 'Reason for denial is required when rejecting a campaign' });
     }
 
     try {
@@ -135,7 +139,14 @@ class AdminController {
         return res.status(400).send({ success: false, message: `Booking has already been reviewed (${booking.approvalStatus})` });
       }
 
-      booking.approvalStatus = action === 'approve' ? 'approved' : 'rejected';
+      if (action === 'approve') {
+        booking.approvalStatus = 'approved';
+        booking.denialReason = null;
+      } else {
+        booking.approvalStatus = 'rejected';
+        booking.denialReason = denialReason.trim();
+      }
+      
       await booking.save();
 
       return res.status(200).send({
@@ -186,8 +197,18 @@ class AdminController {
    */
   async getStats(req, res) {
     try {
-      const merchantsCount = await User.countDocuments({ role: 'merchant' });
-      const advertisersCount = await User.countDocuments({ role: 'advertiser' });
+      const merchantsCount = await User.countDocuments({
+        $or: [
+          { roles: 'merchant' },
+          { roles: { $exists: false }, role: 'merchant' }
+        ]
+      });
+      const advertisersCount = await User.countDocuments({
+        $or: [
+          { roles: 'advertiser' },
+          { roles: { $exists: false }, role: 'advertiser' }
+        ]
+      });
       const totalHostsCount = await HostApplication.countDocuments({ status: 'approved' });
       const totalDevicesCount = await Device.countDocuments({});
       const activeDevicesCount = await Device.countDocuments({ status: 'online' });
@@ -296,22 +317,29 @@ class AdminController {
       // Get supplementary count information
       const enrichedUsers = await Promise.all(users.map(async (u) => {
         let stats = {};
-        if (u.role === 'merchant') {
+        let userRoles = u.roles || [];
+        if (userRoles.length === 0) {
+          userRoles = [u.role];
+        }
+
+        if (userRoles.includes('merchant')) {
           const apps = await HostApplication.find({ userId: u._id });
           const appIds = apps.map(a => a._id);
           const devicesCount = await Device.countDocuments({ hostApplicationId: { $in: appIds } });
-          stats = {
+          stats.merchant = {
             applicationsCount: apps.length,
             devicesCount: devicesCount
           };
-        } else if (u.role === 'advertiser') {
+        }
+        if (userRoles.includes('advertiser')) {
           const bookingsCount = await AdBooking.countDocuments({ advertiserId: u._id });
-          stats = {
+          stats.advertiser = {
             bookingsCount: bookingsCount
           };
         }
         return {
           ...u.toObject(),
+          roles: userRoles,
           stats
         };
       }));
