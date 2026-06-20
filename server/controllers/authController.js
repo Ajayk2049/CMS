@@ -6,6 +6,7 @@ const validator = require('../utils/validation');
 const smsService = require('../services/smsService');
 const User = require('../models/User');
 const OTP = require('../models/OTP');
+const SMSRequestLog = require('../models/SMSRequestLog');
 
 // Native secure password hashing functions
 function hashPassword(password) {
@@ -37,6 +38,7 @@ class AuthController {
    */
   async sendOtp(req, res) {
     const { phone } = req.body || {};
+    const ip = req.ip || 'unknown';
 
     const validation = validator.validatePhone(phone);
     if (!validation.isValid) {
@@ -45,6 +47,55 @@ class AuthController {
 
     const formattedPhone = validation.formatted;
     const isDemoAccount = config.demoMode;
+
+    try {
+      // 1. Throttling: must wait at least 60 seconds
+      const lastLog = await SMSRequestLog.findOne({
+        $or: [{ phone: formattedPhone }, { ip: ip }]
+      }).sort({ requestedAt: -1 });
+
+      if (lastLog) {
+        const timeSince = (Date.now() - lastLog.requestedAt.getTime()) / 1000;
+        if (timeSince < 60) {
+          const waitTime = Math.ceil(60 - timeSince);
+          return res.status(429).send({
+            success: false,
+            message: `Please wait ${waitTime} seconds before requesting another OTP.`
+          });
+        }
+      }
+
+      // 2. Phone-based rate limiting: max 5 requests per hour
+      const phoneCount = await SMSRequestLog.countDocuments({
+        phone: formattedPhone,
+        requestedAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) }
+      });
+      if (phoneCount >= 5) {
+        return res.status(429).send({
+          success: false,
+          message: 'Too many OTP requests for this mobile number. Please try again after an hour.'
+        });
+      }
+
+      // 3. IP-based rate limiting: max 10 requests per hour
+      const ipCount = await SMSRequestLog.countDocuments({
+        ip: ip,
+        requestedAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) }
+      });
+      if (ipCount >= 10) {
+        return res.status(429).send({
+          success: false,
+          message: 'Too many OTP requests from this IP. Please try again after an hour.'
+        });
+      }
+
+      // Log this request
+      const logEntry = new SMSRequestLog({ phone: formattedPhone, ip: ip });
+      await logEntry.save();
+    } catch (err) {
+      console.error('OTP rate limiting check failed:', err.message);
+      // Fallback: don't block server if DB checks fail, but log it
+    }
 
     // Generate 6 digit OTP and session UUID
     const otp = isDemoAccount ? config.demoOtp : Math.floor(100000 + Math.random() * 900000).toString();
@@ -90,10 +141,10 @@ class AuthController {
    * Complete Registration with OTP & Password
    */
   async register(req, res) {
-    const { phone, email, otp, password, role } = req.body || {};
+    const { phone, email, name, otp, password, role } = req.body || {};
 
-    if (!phone || !otp || !password || !role) {
-      return res.status(400).send({ success: false, message: 'Phone, OTP, password, and role are required' });
+    if (!phone || !name || !otp || !password || !role) {
+      return res.status(400).send({ success: false, message: 'Phone, Name, OTP, password, and role are required' });
     }
 
     if (!['merchant', 'advertiser'].includes(role)) {
@@ -168,6 +219,7 @@ class AuthController {
       const newUser = new User({
         phone: formattedPhone,
         email: email ? email.trim().toLowerCase() : undefined,
+        name: name.trim(),
         password: hashedPassword,
         role: role,
         roles: [role],
@@ -184,6 +236,7 @@ class AuthController {
           user: {
             uid: newUser._id,
             phone: newUser.phone,
+            name: newUser.name,
             role: newUser.role,
             roles: newUser.roles
           },
@@ -326,6 +379,7 @@ class AuthController {
           user: {
             uid: user._id,
             phone: user.phone,
+            name: user.name,
             role: activeRole,
             roles: userRoles
           },
@@ -433,6 +487,86 @@ class AuthController {
     } catch (error) {
       console.error('switchRole Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to switch role due to server error' });
+    }
+  }
+
+  /**
+   * Reset User Password via OTP
+   */
+  async resetPassword(req, res) {
+    const { phone, otp, password } = req.body || {};
+
+    if (!phone || !otp || !password) {
+      return res.status(400).send({ success: false, message: 'Phone, OTP, and password are required' });
+    }
+
+    // Enforce password strength: 8-12 characters, mix of alphabets and numbers
+    if (password.length < 8 || password.length > 12 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+      return res.status(400).send({ success: false, message: 'Password must be 8-12 characters and contain both letters and numbers' });
+    }
+
+    const validation = validator.validatePhone(phone);
+    if (!validation.isValid) {
+      return res.status(400).send({ success: false, message: validation.error });
+    }
+
+    const formattedPhone = validation.formatted;
+    const isDemoAccount = config.demoMode;
+
+    try {
+      // Find the user first
+      const user = await User.findOne({ phone: formattedPhone });
+      if (!user) {
+        return res.status(404).send({ success: false, message: 'No registered account found with this phone number' });
+      }
+
+      // Verify OTP
+      if (isDemoAccount) {
+        if (otp !== config.demoOtp) {
+          return res.status(400).send({ success: false, message: 'Invalid OTP' });
+        }
+      } else {
+        const otpRecord = await OTP.findOne({ phone: formattedPhone });
+        if (!otpRecord) {
+          return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
+        }
+
+        if (otpRecord.expiresAt < new Date()) {
+          await OTP.deleteOne({ phone: formattedPhone });
+          return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
+        }
+
+        // Timing safe comparison
+        const bufRecordOtp = Buffer.from(otpRecord.otp);
+        const bufClientOtp = Buffer.from(otp);
+        const otpMatch = bufRecordOtp.length === bufClientOtp.length && 
+                           crypto.timingSafeEqual(bufRecordOtp, bufClientOtp);
+
+        if (!otpMatch) {
+          otpRecord.attempts += 1;
+          if (otpRecord.attempts >= 3) {
+            await OTP.deleteOne({ phone: formattedPhone });
+            return res.status(400).send({ success: false, message: 'Invalid OTP. Max attempts reached, please request a new OTP' });
+          }
+          await otpRecord.save();
+          return res.status(400).send({ success: false, message: 'Invalid OTP' });
+        }
+
+        // Cleanup verified OTP
+        await OTP.deleteOne({ phone: formattedPhone });
+      }
+
+      // Update password
+      user.password = hashPassword(password);
+      await user.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'Password reset successfully. You can now login with your new password.'
+      });
+    } catch (error) {
+      console.error('resetPassword Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Password reset failed due to server error' });
     }
   }
 }

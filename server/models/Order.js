@@ -33,6 +33,12 @@ const OrderSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  hostApplicationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'HostApplication',
+    required: true,
+    index: true
+  },
   deviceId: {
     type: String,
     required: true,

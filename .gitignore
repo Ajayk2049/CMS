@@ -69,6 +69,7 @@ desktop.ini
 
 # Scratch and test files
 server/test_phonepe.js
+server/SeedAdmin.js
 
 # Uploaded media assets (ignore files, keep folder structure via .gitkeep)
 server/uploads/*

@@ -17,13 +17,204 @@ class TabletopOrderingApp extends StatelessWidget {
         primarySwatch: Colors.blue,
         useMaterial3: true,
       ),
-      home: const KioskScreen(),
+      home: const MainDeviceRouter(),
+    );
+  }
+}
+
+class MainDeviceRouter extends StatefulWidget {
+  const MainDeviceRouter({super.key});
+
+  @override
+  State<MainDeviceRouter> createState() => _MainDeviceRouterState();
+}
+
+class _MainDeviceRouterState extends State<MainDeviceRouter> {
+  bool _isActivated = false;
+  String _deviceId = '';
+  String _bypassPassword = '';
+
+  void _activate(String deviceId, String password) {
+    setState(() {
+      _deviceId = deviceId;
+      _bypassPassword = password;
+      _isActivated = true;
+    });
+  }
+
+  void _deactivate() {
+    setState(() {
+      _isActivated = false;
+      _deviceId = '';
+      _bypassPassword = '';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isActivated) {
+      return DeviceSetupScreen(onActivate: _activate);
+    }
+    return KioskScreen(
+      deviceId: _deviceId,
+      bypassPassword: _bypassPassword,
+      onReset: _deactivate,
+    );
+  }
+}
+
+class DeviceSetupScreen extends StatefulWidget {
+  final Function(String, String) onActivate;
+  const DeviceSetupScreen({super.key, required this.onActivate});
+
+  @override
+  State<DeviceSetupScreen> createState() => _DeviceSetupScreenState();
+}
+
+class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
+  final _deviceIdController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  String _error = '';
+
+  void _submit() {
+    setState(() => _error = '');
+    final deviceId = _deviceIdController.text.trim();
+    final password = _passwordController.text.trim();
+    final confirmPassword = _confirmPasswordController.text.trim();
+
+    if (deviceId.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
+      setState(() => _error = 'All fields are required');
+      return;
+    }
+
+    if (password.length < 4 || password.length > 12) {
+      setState(() => _error = 'Bypass password must be 4-12 characters');
+      return;
+    }
+
+    if (password != confirmPassword) {
+      setState(() => _error = 'Passwords do not match');
+      return;
+    }
+
+    widget.onActivate(deviceId, password);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF0F172A), Color(0xFF1E1B4B)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            child: Container(
+              width: 420,
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Icon(Icons.settings_suggest, size: 64, color: Colors.blueAccent),
+                  const SizedBox(height: 16),
+                  const Text(
+                    "Kiosk Tablet Setup",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    "One-time authorization setup for tabletop display device.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Colors.slate400),
+                  ),
+                  const SizedBox(height: 24),
+                  if (_error.isNotEmpty) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.redAccent.withOpacity(0.2)),
+                      ),
+                      child: Text(
+                        _error,
+                        style: const TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  TextField(
+                    controller: _deviceIdController,
+                    decoration: InputDecoration(
+                      labelText: "Device ID (e.g. DEV_TAB_XXXX)",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.tablet_mac),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _passwordController,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      labelText: "Set Bypass Password",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.lock_outline),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _confirmPasswordController,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      labelText: "Confirm Bypass Password",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.lock),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: _submit,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: Colors.blueAccent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text("Authorize & Bind Device", style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
 
 class KioskScreen extends StatefulWidget {
-  const KioskScreen({super.key});
+  final String deviceId;
+  final String bypassPassword;
+  final VoidCallback onReset;
+
+  const KioskScreen({
+    super.key,
+    required this.deviceId,
+    required this.bypassPassword,
+    required this.onReset,
+  });
 
   @override
   State<KioskScreen> createState() => _KioskScreenState();
@@ -39,6 +230,45 @@ class _KioskScreenState extends State<KioskScreen> {
     {"id": "item4", "name": "Iced Hazelnut Latte", "price": 179, "desc": "Fresh espresso, cold foam"}
   ];
 
+  void _promptUnlock() {
+    final passwordController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Enter Exit Password"),
+        content: TextField(
+          controller: passwordController,
+          obscureText: true,
+          decoration: const InputDecoration(
+            hintText: "Enter password to exit kiosk",
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (passwordController.text == widget.bypassPassword) {
+                Navigator.pop(context); // close dialog
+                widget.onReset(); // deactivate device/go back to setup
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Kiosk mode unlocked successfully")),
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Incorrect password")),
+                );
+              }
+            },
+            child: const Text("Unlock"),
+          )
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isIdle) {
@@ -52,7 +282,6 @@ class _KioskScreenState extends State<KioskScreen> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // Mock Ad Video/Image
               Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
@@ -61,22 +290,27 @@ class _KioskScreenState extends State<KioskScreen> {
                     end: Alignment.bottomRight,
                   ),
                 ),
-                child: const Center(
+                child: Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.play_circle_fill, size: 80, color: Colors.blueAccent),
-                      SizedBox(height: 20),
+                      const Icon(Icons.play_circle_fill, size: 80, color: Colors.blueAccent),
+                      const SizedBox(height: 20),
                       Text(
+                        "DEVICE IN SESSION: ${widget.deviceId}",
+                        style: const TextStyle(fontSize: 12, color: Colors.slate400, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
                         "SPONSORED ADVERTISEMENT",
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 2, color: Colors.blue),
                       ),
-                      SizedBox(height: 10),
-                      Text(
+                      const SizedBox(height: 10),
+                      const Text(
                         "FitLife Gym Indiranagar - 30% Off",
                         style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                       ),
-                      Text(
+                      const Text(
                         "Scan screen overlay QR to claim voucher",
                         style: TextStyle(fontSize: 14, color: Colors.slate400),
                       ),
@@ -98,6 +332,16 @@ class _KioskScreenState extends State<KioskScreen> {
                     letterSpacing: 1.5,
                   ),
                 ),
+              ),
+              // Hidden Admin Unlock Button (Top Right)
+              Positioned(
+                top: 40,
+                right: 20,
+                child: IconButton(
+                  icon: const Icon(Icons.lock_open, color: Colors.white10),
+                  onPressed: _promptUnlock,
+                  tooltip: "Exit Kiosk",
+                ),
               )
             ],
           ),
@@ -107,8 +351,13 @@ class _KioskScreenState extends State<KioskScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Table 05 — Food Menu"),
+        title: Text("${widget.deviceId} — Food Menu"),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.lock_open),
+            onPressed: _promptUnlock,
+            tooltip: "Exit Kiosk Mode",
+          ),
           IconButton(
             icon: const Icon(Icons.slideshow),
             onPressed: () {
@@ -123,7 +372,6 @@ class _KioskScreenState extends State<KioskScreen> {
       ),
       body: Row(
         children: [
-          // Menu Grid
           Expanded(
             flex: 2,
             child: GridView.builder(
@@ -178,8 +426,6 @@ class _KioskScreenState extends State<KioskScreen> {
               },
             ),
           ),
-
-          // Order Checkout panel
           Container(
             width: 320,
             border: const Border(left: BorderSide(color: Colors.white10)),

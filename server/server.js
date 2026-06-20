@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const Fastify = require('fastify');
 const cors = require('@fastify/cors');
 const websocket = require('@fastify/websocket');
+const rateLimit = require('@fastify/rate-limit');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const grpc = require('@grpc/grpc-js');
@@ -50,41 +51,56 @@ async function startFastify() {
 
   await fastify.register(websocket);
 
+  // Global IP rate limiting (150 requests per minute per IP)
+  await fastify.register(rateLimit, {
+    max: 150,
+    timeWindow: '1 minute',
+    exclusionRules: (req) => {
+      // Exclude websockets and static uploads from rate limiting to prevent playback/sync cuts
+      return req.url.startsWith('/ws') || req.url.startsWith('/uploads');
+    },
+    errorResponseBuilder: (request, context) => ({
+      success: false,
+      message: 'Too many requests, please try again later.'
+    })
+  });
+
   // WebSocket route for Merchant Live Orders
   fastify.register(async function (fastifyInstance) {
     fastifyInstance.get('/ws/orders', { websocket: true }, (connection, req) => {
       const token = req.query.token;
+      const socket = connection.socket || connection;
       if (!token) {
-        connection.socket.send(JSON.stringify({ error: 'Authentication token is required' }));
-        connection.socket.close();
+        socket.send(JSON.stringify({ error: 'Authentication token is required' }));
+        socket.close();
         return;
       }
 
       try {
         const decoded = jwt.verify(token, config.jwtSecret);
         if (decoded.role !== 'merchant') {
-          connection.socket.send(JSON.stringify({ error: 'Access denied: Merchant role required' }));
-          connection.socket.close();
+          socket.send(JSON.stringify({ error: 'Access denied: Merchant role required' }));
+          socket.close();
           return;
         }
 
         const merchantId = decoded.uid;
-        merchantSockets.set(merchantId, connection.socket);
+        merchantSockets.set(merchantId, socket);
         console.log(`[WS] Merchant connected: ${merchantId}`);
 
-        connection.socket.send(JSON.stringify({ event: 'connected', message: 'Connected to live order feed' }));
+        socket.send(JSON.stringify({ event: 'connected', message: 'Connected to live order feed' }));
 
-        connection.socket.on('close', () => {
+        socket.on('close', () => {
           merchantSockets.delete(merchantId);
           console.log(`[WS] Merchant disconnected: ${merchantId}`);
         });
 
       } catch (err) {
         console.error('[WS] Error in connection handler:', err);
-        if (connection && connection.socket) {
+        if (socket) {
           try {
-            connection.socket.send(JSON.stringify({ error: 'Invalid authentication token' }));
-            connection.socket.close();
+            socket.send(JSON.stringify({ error: 'Invalid authentication token' }));
+            socket.close();
           } catch (wsErr) {
             console.error('[WS] Failed to send error or close socket:', wsErr);
           }
@@ -122,18 +138,6 @@ async function startFastify() {
   await mongoose.connect(config.mongoUri);
   console.log('[Database] Connected to MongoDB');
 
-  // Seed default admin if none exists
-  const adminExists = await User.findOne({ role: 'admin' });
-  if (!adminExists) {
-    const adminUser = new User({
-      phone: '9999999999',
-      password: hashPassword('admin'),
-      role: 'admin',
-      isDemo: true
-    });
-    await adminUser.save();
-    console.log('[Seeding] Default Admin user created (Phone: 9999999999, Password: admin)');
-  }
 
   // Seed some default pricing plans if none exist
   const ratesCount = await AdsRates.countDocuments({});
@@ -224,27 +228,43 @@ const orderProto = grpc.loadPackageDefinition(orderDef).order;
 const deviceProto = grpc.loadPackageDefinition(deviceDef).device;
 const menuProto = grpc.loadPackageDefinition(menuDef).menu;
 
+// Helper to verify gRPC metadata JWT token for devices
+function verifyGrpcToken(call) {
+  const metadata = call.metadata;
+  if (!metadata) {
+    throw { code: grpc.status.UNAUTHENTICATED, message: 'No metadata provided' };
+  }
+  const authHeaders = metadata.get('authorization');
+  if (!authHeaders || authHeaders.length === 0) {
+    throw { code: grpc.status.UNAUTHENTICATED, message: 'Authorization token is missing' };
+  }
+  const authHeader = authHeaders[0];
+  if (!authHeader.startsWith('Bearer ')) {
+    throw { code: grpc.status.UNAUTHENTICATED, message: 'Invalid authorization header format' };
+  }
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, config.jwtSecret);
+    return decoded; // { deviceId, deviceType, hostApplicationId }
+  } catch (err) {
+    throw { code: grpc.status.UNAUTHENTICATED, message: 'Invalid or expired device token' };
+  }
+}
+
 // Implement Device gRPC Service
 const deviceServiceHandlers = {
   RegisterDevice: async (call, callback) => {
-    const { deviceId, deviceType, hostApplicationId } = call.request;
     try {
-      let device = await Device.findOne({ deviceId });
+      const claims = verifyGrpcToken(call);
+      const { deviceId } = claims;
+      
+      const device = await Device.findOne({ deviceId });
       if (!device) {
-        // Create if it doesn't exist (if host application matches and is approved)
-        device = new Device({
-          deviceId,
-          deviceType,
-          hostApplicationId,
-          status: 'online',
-          lastHeartbeat: new Date()
-        });
-        await device.save();
-      } else {
-        device.status = 'online';
-        device.lastHeartbeat = new Date();
-        await device.save();
+        return callback({ code: grpc.status.NOT_FOUND, message: `Device ${deviceId} not found` });
       }
+      device.status = 'online';
+      device.lastHeartbeat = new Date();
+      await device.save();
 
       callback(null, {
         success: true,
@@ -252,13 +272,16 @@ const deviceServiceHandlers = {
         status: 'online'
       });
     } catch (err) {
-      callback({ code: grpc.status.INTERNAL, message: err.message });
+      const code = err.code || grpc.status.INTERNAL;
+      callback({ code, message: err.message });
     }
   },
 
   SendHeartbeat: async (call, callback) => {
-    const { deviceId } = call.request;
     try {
+      const claims = verifyGrpcToken(call);
+      const { deviceId } = claims;
+      
       const device = await Device.findOne({ deviceId });
       if (!device) {
         return callback({ code: grpc.status.NOT_FOUND, message: `Device ${deviceId} not found` });
@@ -274,23 +297,25 @@ const deviceServiceHandlers = {
         command: 'normal'
       });
     } catch (err) {
-      callback({ code: grpc.status.INTERNAL, message: err.message });
+      const code = err.code || grpc.status.INTERNAL;
+      callback({ code, message: err.message });
     }
   },
 
   TrackAdImpression: async (call, callback) => {
-    const { deviceId, bookingId, durationSeconds, interactiveClicks } = call.request;
+    const { bookingId, durationSeconds, interactiveClicks } = call.request;
     try {
+      const claims = verifyGrpcToken(call);
+      const { deviceId } = claims;
       console.log(`[gRPC telemetry] Device ${deviceId} tracked impression for Booking ${bookingId}: ${durationSeconds}s, Clicks: ${interactiveClicks}`);
       
-      // Keep track of impression activity in AdBooking if desired
-      // We can also print/log metrics locally.
       callback(null, {
         success: true,
         message: 'Telemetry logged successfully'
       });
     } catch (err) {
-      callback({ code: grpc.status.INTERNAL, message: err.message });
+      const code = err.code || grpc.status.INTERNAL;
+      callback({ code, message: err.message });
     }
   }
 };
@@ -298,23 +323,11 @@ const deviceServiceHandlers = {
 // Implement Menu gRPC Service
 const menuServiceHandlers = {
   GetMenu: async (call, callback) => {
-    const { merchantId, deviceId } = call.request;
     try {
-      let idToQuery = merchantId;
+      const claims = verifyGrpcToken(call);
+      const { hostApplicationId } = claims;
 
-      if (!idToQuery && deviceId) {
-        // Look up merchant ID from device registration mapping
-        const device = await Device.findOne({ deviceId }).populate('hostApplicationId');
-        if (device && device.hostApplicationId) {
-          idToQuery = device.hostApplicationId.userId;
-        }
-      }
-
-      if (!idToQuery) {
-        return callback({ code: grpc.status.INVALID_ARGUMENT, message: 'Could not resolve merchant identity' });
-      }
-
-      const menu = await Menu.findOne({ merchantId: idToQuery });
+      const menu = await Menu.findOne({ hostApplicationId });
       const items = menu ? menu.items.map(item => ({
         itemId: item.itemId,
         name: item.name,
@@ -331,7 +344,8 @@ const menuServiceHandlers = {
         items
       });
     } catch (err) {
-      callback({ code: grpc.status.INTERNAL, message: err.message });
+      const code = err.code || grpc.status.INTERNAL;
+      callback({ code, message: err.message });
     }
   }
 };
@@ -339,8 +353,17 @@ const menuServiceHandlers = {
 // Implement Order gRPC Service
 const orderServiceHandlers = {
   CreateOrder: async (call, callback) => {
-    const { deviceId, merchantId, tableNumber, items, totalAmount } = call.request;
+    const { tableNumber, items, totalAmount } = call.request;
     try {
+      const claims = verifyGrpcToken(call);
+      const { deviceId, hostApplicationId } = claims;
+
+      const device = await Device.findOne({ deviceId }).populate('hostApplicationId');
+      if (!device || !device.hostApplicationId) {
+        return callback({ code: grpc.status.FAILED_PRECONDITION, message: 'Device is not linked to an application' });
+      }
+      const merchantId = device.hostApplicationId.userId;
+
       const orderId = `ORD_K_${uuidv4().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
       const transactionId = `TXN_ORD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
 
@@ -348,6 +371,7 @@ const orderServiceHandlers = {
       const order = new Order({
         orderId,
         merchantId,
+        hostApplicationId,
         deviceId,
         tableNumber,
         items: items.map(item => ({
@@ -380,7 +404,7 @@ const orderServiceHandlers = {
         wsClient.send(JSON.stringify({
           event: 'new_order',
           data: order
-        }));
+         }));
       }
 
       // Initiate payment link via PhonePe
@@ -401,13 +425,16 @@ const orderServiceHandlers = {
       });
     } catch (err) {
       console.error('gRPC CreateOrder Error:', err.message);
-      callback({ code: grpc.status.INTERNAL, message: err.message });
+      const code = err.code || grpc.status.INTERNAL;
+      callback({ code, message: err.message });
     }
   },
 
   GetOrderStatus: async (call, callback) => {
     const { orderId } = call.request;
     try {
+      verifyGrpcToken(call);
+      
       const order = await Order.findOne({ orderId });
       if (!order) {
         return callback({ code: grpc.status.NOT_FOUND, message: `Order ${orderId} not found` });
@@ -419,7 +446,8 @@ const orderServiceHandlers = {
         orderStatus: order.orderStatus
       });
     } catch (err) {
-      callback({ code: grpc.status.INTERNAL, message: err.message });
+      const code = err.code || grpc.status.INTERNAL;
+      callback({ code, message: err.message });
     }
   }
 };

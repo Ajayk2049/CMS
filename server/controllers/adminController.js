@@ -5,7 +5,17 @@ const Device = require('../models/Device');
 const User = require('../models/User');
 const PhonePeTransaction = require('../models/PhonePeTransaction');
 const Report = require('../models/Report');
+const Menu = require('../models/Menu');
+const crypto = require('crypto');
+const validator = require('../utils/validation');
 const { v4: uuidv4 } = require('uuid');
+
+function verifyPassword(password, storedPassword) {
+  if (!storedPassword || !storedPassword.includes(':')) return false;
+  const [salt, originalHash] = storedPassword.split(':');
+  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+}
 
 class AdminController {
   /**
@@ -20,7 +30,7 @@ class AdminController {
 
     try {
       const apps = await HostApplication.find(query)
-        .populate('userId', 'phone')
+        .populate('userId', 'phone name')
         .sort({ createdAt: -1 });
       return res.status(200).send({ success: true, data: apps });
     } catch (error) {
@@ -101,7 +111,7 @@ class AdminController {
 
     try {
       const bookings = await AdBooking.find(query)
-        .populate('advertiserId', 'phone')
+        .populate('advertiserId', 'phone name')
         .populate('outletId', 'outletName city state')
         .sort({ createdAt: -1 });
       return res.status(200).send({ success: true, data: bookings });
@@ -357,7 +367,7 @@ class AdminController {
   async getReports(req, res) {
     try {
       const reports = await Report.find({})
-        .populate('reporterId', 'phone role')
+        .populate('reporterId', 'phone name role')
         .sort({ createdAt: -1 });
       return res.status(200).send({ success: true, data: reports });
     } catch (error) {
@@ -397,6 +407,134 @@ class AdminController {
     } catch (error) {
       console.error('updateReport Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to update report' });
+    }
+  }
+
+  /**
+   * Update user details (Name, Phone, Email, Roles)
+   */
+  async updateUser(req, res) {
+    const { userId } = req.params;
+    const { name, phone, email, roles } = req.body || {};
+
+    if (!name || !phone || !roles || !Array.isArray(roles) || roles.length === 0) {
+      return res.status(400).send({ success: false, message: 'Name, phone, and roles are required' });
+    }
+
+    const validRoles = ['merchant', 'advertiser'];
+    for (const r of roles) {
+      if (!validRoles.includes(r)) {
+        return res.status(400).send({ success: false, message: `Invalid role: ${r}` });
+      }
+    }
+
+    const validation = validator.validatePhone(phone);
+    if (!validation.isValid) {
+      return res.status(400).send({ success: false, message: validation.error });
+    }
+    const formattedPhone = validation.formatted;
+
+    try {
+      const userToEdit = await User.findById(userId);
+      if (!userToEdit) {
+        return res.status(404).send({ success: false, message: 'User not found' });
+      }
+
+      if (userToEdit.role === 'admin') {
+        return res.status(400).send({ success: false, message: 'Cannot edit administrator accounts' });
+      }
+
+      const phoneConflict = await User.findOne({ phone: formattedPhone, _id: { $ne: userId } });
+      if (phoneConflict) {
+        return res.status(400).send({ success: false, message: 'Another user is already registered with this phone number' });
+      }
+
+      if (email) {
+        const emailConflict = await User.findOne({ email: email.trim().toLowerCase(), _id: { $ne: userId } });
+        if (emailConflict) {
+          return res.status(400).send({ success: false, message: 'Another user is already registered with this email address' });
+        }
+      }
+
+      userToEdit.name = name.trim();
+      userToEdit.phone = formattedPhone;
+      userToEdit.email = email ? email.trim().toLowerCase() : undefined;
+      userToEdit.roles = roles;
+
+      if (!roles.includes(userToEdit.role)) {
+        userToEdit.role = roles[0];
+      }
+
+      await userToEdit.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'User updated successfully',
+        data: {
+          _id: userToEdit._id,
+          name: userToEdit.name,
+          phone: userToEdit.phone,
+          email: userToEdit.email,
+          role: userToEdit.role,
+          roles: userToEdit.roles
+        }
+      });
+    } catch (error) {
+      console.error('updateUser Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to update user' });
+    }
+  }
+
+  /**
+   * Delete user and all associated data, requiring admin password verification
+   */
+  async deleteUser(req, res) {
+    const { userId } = req.params;
+    const { adminPassword } = req.body || {};
+
+    if (!adminPassword) {
+      return res.status(400).send({ success: false, message: 'Administrator password is required' });
+    }
+
+    try {
+      const admin = await User.findById(req.user.uid);
+      if (!admin || admin.role !== 'admin') {
+        return res.status(403).send({ success: false, message: 'Unauthorized access' });
+      }
+
+      const isPasswordValid = verifyPassword(adminPassword, admin.password);
+      if (!isPasswordValid) {
+        return res.status(400).send({ success: false, message: 'Invalid password. Action rejected.' });
+      }
+
+      const userToDelete = await User.findById(userId);
+      if (!userToDelete) {
+        return res.status(404).send({ success: false, message: 'User not found' });
+      }
+
+      if (userToDelete.role === 'admin') {
+        return res.status(400).send({ success: false, message: 'Cannot delete administrator accounts' });
+      }
+
+      await User.deleteOne({ _id: userId });
+
+      // Cascade deletes for referential integrity
+      const hostApps = await HostApplication.find({ userId });
+      const hostAppIds = hostApps.map(app => app._id);
+
+      await HostApplication.deleteMany({ userId });
+      await Menu.deleteMany({ hostApplicationId: { $in: hostAppIds } });
+      await Device.deleteMany({ hostApplicationId: { $in: hostAppIds } });
+      await AdBooking.deleteMany({ advertiserId: userId });
+      await Report.deleteMany({ reporterId: userId });
+
+      return res.status(200).send({
+        success: true,
+        message: 'User and all related assets deleted successfully'
+      });
+    } catch (error) {
+      console.error('deleteUser Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to delete user' });
     }
   }
 }

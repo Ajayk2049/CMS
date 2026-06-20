@@ -136,7 +136,7 @@ export default function LandingPage() {
               <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
                 <Tv className="w-3.5 h-3.5 text-white" />
               </div>
-              <span className="font-outfit text-lg font-bold tracking-tight text-foreground leading-none">
+              <span className="font-outfit text-lg font-bold tracking-tight text-foreground leading-none brandLogo">
                 Digi<span className="text-blue-500">Ads</span>
               </span>
             </motion.div>
@@ -558,7 +558,7 @@ export default function LandingPage() {
             <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20">
               <Tv className="w-4 h-4 text-white" />
             </div>
-            <span className="font-outfit font-bold text-foreground">DigiAds</span>
+            <span className="font-outfit font-bold text-foreground brandLogo">DigiAds</span>
           </div>
 
           <p className="text-center md:text-left">

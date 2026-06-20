@@ -1,4 +1,5 @@
 const authController = require('../controllers/authController');
+const deviceAuthController = require('../controllers/deviceAuthController');
 const hostController = require('../controllers/hostController');
 const adController = require('../controllers/adController');
 const adminController = require('../controllers/adminController');
@@ -10,6 +11,8 @@ function registerRoutes(fastify, options, done) {
   fastify.post('/auth/verify-otp', authController.verifyOtp);
   fastify.post('/auth/register', authController.register);
   fastify.post('/auth/login', authController.login);
+  fastify.post('/auth/reset-password', authController.resetPassword);
+  fastify.post('/auth/device/activate', deviceAuthController.activateDevice);
   fastify.post('/auth/add-role', { preHandler: authenticate }, authController.addRole);
   fastify.post('/auth/switch-role', { preHandler: authenticate }, authController.switchRole);
 
@@ -25,6 +28,7 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.get('/host/applications', hostController.getMyApplications);
     merchantRoutes.get('/host/menu', hostController.getMenu);
     merchantRoutes.post('/host/menu', hostController.updateMenu);
+    merchantRoutes.get('/host/devices', hostController.getMyDevices);
     next();
   });
 
@@ -65,6 +69,8 @@ function registerRoutes(fastify, options, done) {
     adminRoutes.get('/admin/devices', adminController.getDevices);
     adminRoutes.post('/admin/devices', adminController.createDevice);
     adminRoutes.get('/admin/users', adminController.getUsers);
+    adminRoutes.put('/admin/users/:userId', adminController.updateUser);
+    adminRoutes.delete('/admin/users/:userId', adminController.deleteUser);
     adminRoutes.get('/admin/reports', adminController.getReports);
     adminRoutes.patch('/admin/reports/:reportId', adminController.updateReport);
     next();

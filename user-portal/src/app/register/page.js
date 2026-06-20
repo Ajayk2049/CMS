@@ -18,7 +18,8 @@ import {
   ArrowRight,
   ShieldAlert,
   Eye,
-  EyeOff
+  EyeOff,
+  Building
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -31,6 +32,7 @@ function RegisterForm() {
 
   const [theme, setTheme] = useState('dark');
   const countryCode = '+91';
+  const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('merchant');
@@ -46,6 +48,8 @@ function RegisterForm() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [sessionId, setSessionId] = useState('');
+  const [otpCooldown, setOtpCooldown] = useState(0);
+  const [passwordInvalid, setPasswordInvalid] = useState(false);
 
   // Lock role from URL parameter
   useEffect(() => {
@@ -53,6 +57,14 @@ function RegisterForm() {
       setRole(roleParam);
     }
   }, [roleParam]);
+
+  // Handle OTP cooldown timer
+  useEffect(() => {
+    if (otpCooldown > 0) {
+      const timer = setTimeout(() => setOtpCooldown(otpCooldown - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [otpCooldown]);
 
   // Handle Theme
   useEffect(() => {
@@ -123,6 +135,10 @@ function RegisterForm() {
 
   const handleSendOtp = async (e) => {
     e.preventDefault();
+    if (!name.trim()) {
+      showNotification('error', 'Name (Outlet/Company/venture) is required');
+      return;
+    }
     if (!email) {
       showNotification('error', 'Email is required');
       return;
@@ -137,6 +153,7 @@ function RegisterForm() {
       const response = await axios.post(`${API_BASE}/auth/send-otp`, { phone: fullPhone });
 
       setOtpSent(true);
+      setOtpCooldown(60); // Start 60s cooldown timer
       setInfo('OTP has been sent to your mobile number!');
       if (response.data.data.sessionId) {
         setSessionId(response.data.data.sessionId);
@@ -153,6 +170,12 @@ function RegisterForm() {
   const handleCompleteRegistration = async (e) => {
     e.preventDefault();
     setError('');
+    setPasswordInvalid(false);
+
+    if (!name.trim()) {
+      setError('Name (Outlet/Company/venture) is required');
+      return;
+    }
 
     if (!otpSent) {
       setError('Please send and verify OTP first');
@@ -160,12 +183,8 @@ function RegisterForm() {
     }
 
     // Password Complexity Validation
-    if (password.length < 8 || password.length > 12) {
-      setError('Password must be 8-12 characters long');
-      return;
-    }
-    if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-      setError('Password must contain a mix of alphabets and numbers');
+    if (password.length < 8 || password.length > 12 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+      setPasswordInvalid(true);
       return;
     }
 
@@ -175,6 +194,8 @@ function RegisterForm() {
       const fullPhone = `${countryCode}${phone}`;
       const response = await axios.post(`${API_BASE}/auth/register`, {
         phone: fullPhone,
+        email,
+        name,
         otp,
         password,
         role
@@ -184,6 +205,7 @@ function RegisterForm() {
       localStorage.setItem('token', response.data.data.token);
       localStorage.setItem('role', response.data.data.user.role);
       localStorage.setItem('phone', response.data.data.user.phone);
+      localStorage.setItem('name', response.data.data.user.name || '');
       localStorage.setItem('uid', response.data.data.user.uid);
 
       if (response.data.data.user.role === 'merchant') {
@@ -306,7 +328,7 @@ function RegisterForm() {
                 <Tv className="w-5 h-5 text-white" />
               </div>
               <div className="text-left">
-                <h2 className="font-outfit text-lg font-bold tracking-tight">
+                <h2 className="font-outfit text-lg font-bold tracking-tight brandLogo">
                   Digi<span className="text-primary">Ads</span> {isMerchant ? 'Host Portal' : 'Advertiser Portal'}
                 </h2>
                 <p className="text-[10px] text-muted-foreground mt-0.5 font-semibold">
@@ -340,8 +362,8 @@ function RegisterForm() {
                       type="button"
                       onClick={() => setRole('merchant')}
                       className={`flex items-center justify-center space-x-2 py-3 rounded-xl border transition-all cursor-pointer ${role === 'merchant'
-                          ? 'border-primary bg-primary/10 text-primary font-bold'
-                          : 'border-border bg-muted/30 text-muted-foreground hover:text-foreground'
+                        ? 'border-primary bg-primary/10 text-primary font-bold'
+                        : 'border-border bg-muted/30 text-muted-foreground hover:text-foreground'
                         }`}
                     >
                       <UtensilsCrossed className="w-4 h-4" />
@@ -351,8 +373,8 @@ function RegisterForm() {
                       type="button"
                       onClick={() => setRole('advertiser')}
                       className={`flex items-center justify-center space-x-2 py-3 rounded-xl border transition-all cursor-pointer ${role === 'advertiser'
-                          ? 'border-primary bg-primary/10 text-primary font-bold'
-                          : 'border-border bg-muted/30 text-muted-foreground hover:text-foreground'
+                        ? 'border-primary bg-primary/10 text-primary font-bold'
+                        : 'border-border bg-muted/30 text-muted-foreground hover:text-foreground'
                         }`}
                     >
                       <Tablet className="w-4 h-4" />
@@ -361,6 +383,21 @@ function RegisterForm() {
                   </div>
                 </div>
               )}
+
+              {/* Name (Outlet/Company/venture) */}
+              <div>
+                <div className="relative">
+                  <Building className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="Outlet/Company/Venture Name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="w-full bg-background border border-input rounded-xl pl-11 pr-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                </div>
+              </div>
 
               {/* Email Address */}
               <div>
@@ -399,10 +436,10 @@ function RegisterForm() {
                   <button
                     onClick={handleSendOtp}
                     type="button"
-                    disabled={loading || !phone || !email}
-                    className="bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground text-xs font-bold px-4 py-3 rounded-xl transition-all cursor-pointer flex items-center justify-center shrink-0 shadow-sm"
+                    disabled={loading || !phone || !email || otpCooldown > 0}
+                    className="bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground text-xs font-bold px-4 py-3 rounded-xl transition-all cursor-pointer flex items-center justify-center shrink-0 shadow-sm min-w-[95px]"
                   >
-                    Send OTP
+                    {otpCooldown > 0 ? `Resend in ${otpCooldown}s` : 'Send OTP'}
                   </button>
                 </div>
               </div>
@@ -449,7 +486,7 @@ function RegisterForm() {
                     disabled={!otpSent}
                     placeholder="Set Account Password"
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => { setPassword(e.target.value); setPasswordInvalid(false); }}
                     className="w-full bg-background border border-input disabled:bg-muted/30 disabled:text-muted-foreground disabled:cursor-not-allowed rounded-xl pl-11 pr-10 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
                   />
                   <button
@@ -461,7 +498,9 @@ function RegisterForm() {
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
-                <p className="mt-1.5 text-[9px] text-muted-foreground font-semibold leading-relaxed">
+                <p className={`mt-1.5 text-[9px] font-semibold leading-relaxed transition-colors duration-200 ${
+                  passwordInvalid ? 'text-destructive font-bold' : 'text-muted-foreground'
+                }`}>
                   * Password must be 8-12 characters containing letters and numbers.
                 </p>
               </div>

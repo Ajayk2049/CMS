@@ -39,6 +39,12 @@ const MenuSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
+    index: true
+  },
+  hostApplicationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'HostApplication',
+    required: true,
     unique: true,
     index: true
   },

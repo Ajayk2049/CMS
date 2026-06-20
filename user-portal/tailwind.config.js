@@ -56,8 +56,10 @@ module.exports = {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        outfit: ['var(--font-heading)', 'sans-serif'],
-        sans: ['var(--font-sans)', 'sans-serif'],
+        outfit: ['"Monomaniac One"', 'sans-serif'],
+        heading: ['"Monomaniac One"', 'sans-serif'],
+        sans: ['"Google Sans Flex"', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
       }
     },
   },

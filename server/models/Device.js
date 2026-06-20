@@ -23,6 +23,20 @@ const DeviceSchema = new mongoose.Schema({
     default: 'offline',
     index: true
   },
+  hardwareId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  kioskPasswordHash: {
+    type: String,
+    default: null
+  },
+  isActivated: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   lastHeartbeat: {
     type: Date,
     default: Date.now

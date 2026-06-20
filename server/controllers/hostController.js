@@ -1,5 +1,6 @@
 const HostApplication = require('../models/HostApplication');
 const Menu = require('../models/Menu');
+const Device = require('../models/Device');
 
 class HostController {
   /**
@@ -96,11 +97,21 @@ class HostController {
    * Get restaurant menu (Merchant only)
    */
   async getMenu(req, res) {
+    const { hostApplicationId } = req.query || {};
+    if (!hostApplicationId) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId query parameter is required' });
+    }
+
     try {
-      let menu = await Menu.findOne({ merchantId: req.user.uid });
+      const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid });
+      if (!app) {
+        return res.status(403).send({ success: false, message: 'Access denied: Host application does not belong to you' });
+      }
+
+      let menu = await Menu.findOne({ hostApplicationId });
       if (!menu) {
         // Return empty menu format if not initialized yet
-        return res.status(200).send({ success: true, data: { items: [] } });
+        return res.status(200).send({ success: true, data: { items: [], hostApplicationId } });
       }
       return res.status(200).send({ success: true, data: menu });
     } catch (error) {
@@ -113,7 +124,11 @@ class HostController {
    * Create or Update restaurant menu
    */
   async updateMenu(req, res) {
-    const { items } = req.body || {};
+    const { hostApplicationId, items } = req.body || {};
+
+    if (!hostApplicationId) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId is required' });
+    }
 
     if (!Array.isArray(items)) {
       return res.status(400).send({ success: false, message: 'Items must be an array' });
@@ -133,9 +148,14 @@ class HostController {
     }
 
     try {
+      const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid });
+      if (!app) {
+        return res.status(403).send({ success: false, message: 'Access denied: Host application does not belong to you' });
+      }
+
       const menu = await Menu.findOneAndUpdate(
-        { merchantId: req.user.uid },
-        { items, updatedAt: Date.now() },
+        { hostApplicationId },
+        { merchantId: req.user.uid, items, updatedAt: Date.now() },
         { upsert: true, new: true }
       );
 
@@ -147,6 +167,22 @@ class HostController {
     } catch (error) {
       console.error('updateMenu Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to update menu' });
+    }
+  }
+
+  /**
+   * Get devices provisioned for the logged-in merchant's approved applications
+   */
+  async getMyDevices(req, res) {
+    try {
+      const apps = await HostApplication.find({ userId: req.user.uid, status: 'approved' });
+      const appIds = apps.map(app => app._id);
+
+      const devices = await Device.find({ hostApplicationId: { $in: appIds } });
+      return res.status(200).send({ success: true, data: devices });
+    } catch (error) {
+      console.error('getMyDevices Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch devices' });
     }
   }
 }

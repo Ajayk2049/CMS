@@ -1,10 +1,12 @@
+@import url('https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,1..1000&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Monomaniac+One&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --font-sans: 'Inter', sans-serif;
-  --font-heading: 'Outfit', sans-serif;
+  --font-sans: 'Google Sans Flex', sans-serif;
+  --font-heading: 'Monomaniac One', sans-serif;
 
   --background: oklch(1 0 0);
   --foreground: oklch(0.148 0.004 228.8);
@@ -21,8 +23,8 @@
   --accent: oklch(0.5 0.134 242.749);
   --accent-foreground: oklch(0.977 0.013 236.62);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.925 0.005 214.3);
-  --input: oklch(0.925 0.005 214.3);
+  --border: oklch(0.82 0.01 214.3);
+  --input: oklch(0.82 0.01 214.3);
   --ring: oklch(0.723 0.014 214.4);
   --radius: 0.45rem;
 }
@@ -103,4 +105,34 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(156, 163, 175, 0.5);
+}
+
+/* Custom Fonts & Styling Overrides */
+*, ::placeholder, input, button, select, textarea {
+  font-family: 'Google Sans Flex', sans-serif !important;
+}
+
+h1, h2, h3, h4, h5, h6, .font-heading, [class*="font-heading"], [class*="font-outfit"] {
+  font-family: 'Monomaniac One', sans-serif !important;
+  font-weight: 400 !important;
+}
+
+code, pre, .font-mono, [class*="font-mono"] {
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* Force Uppercase on Everything except Brand Logos */
+*, *::placeholder, input, textarea, select {
+  text-transform: uppercase;
+}
+
+.brandLogo, 
+.brandLogo *,
+.brand-logo, 
+.brand-logo *,
+.exclude-uppercase, 
+.exclude-uppercase *,
+[class*="brandLogo"],
+[class*="brand-logo"] {
+  text-transform: none !important;
 }
