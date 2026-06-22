@@ -1,20 +1,21 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
 const config = require('../config/config');
 const validator = require('../utils/validation');
 const smsService = require('../services/smsService');
 const User = require('../models/User');
 const OTP = require('../models/OTP');
 const SMSRequestLog = require('../models/SMSRequestLog');
+const {
+  registerSchema,
+  loginSchema,
+  verifyOtpSchema,
+  sendOtpSchema,
+  resetPasswordSchema,
+  addRoleSchema
+} = require('../utils/zodSchemas');
 
 // Native secure password hashing functions
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-  return `${salt}:${hash}`;
-}
-
 function verifyPassword(password, storedPassword) {
   if (!storedPassword || !storedPassword.includes(':')) return false;
   const [salt, originalHash] = storedPassword.split(':');
@@ -37,7 +38,11 @@ class AuthController {
    * Request an OTP for registration
    */
   async sendOtp(req, res) {
-    const { phone } = req.body || {};
+    const parseResult = sendOtpSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).send({ success: false, message: parseResult.error.errors[0]?.message || 'Invalid request' });
+    }
+    const { phone } = parseResult.data;
     const ip = req.ip || 'unknown';
 
     const validation = validator.validatePhone(phone);
@@ -97,24 +102,21 @@ class AuthController {
       // Fallback: don't block server if DB checks fail, but log it
     }
 
-    // Generate 6 digit OTP and session UUID
+    // Generate 6 digit OTP
     const otp = isDemoAccount ? config.demoOtp : Math.floor(100000 + Math.random() * 900000).toString();
-    const sessionId = uuidv4();
+    const hashedOtp = crypto.createHash('sha256').update(otp).digest('hex');
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
 
     try {
       // Save/update OTP entry in DB
       await OTP.findOneAndUpdate(
         { phone: formattedPhone },
-        { otp, sessionId, expiresAt, attempts: 0 },
+        { otp: hashedOtp, expiresAt, attempts: 0 },
         { upsert: true, new: true }
       );
 
       // Dispatch SMS via provider
       await smsService.sendOTP(formattedPhone, otp);
-
-      // Mask phone in response
-      const maskedPhone = formattedPhone.replace(/(\d{6})(\d{4})/, '******$2');
 
       const responseData = {
         success: true,
@@ -125,15 +127,10 @@ class AuthController {
         }
       };
 
-      // Expose sessionId in local/demo environment only
-      if (config.demoMode) {
-        responseData.data.sessionId = sessionId;
-      }
-
       return res.status(200).send(responseData);
     } catch (error) {
       console.error('sendOtp Error:', error.message);
-      return res.status(500).send({ success: false, message: error.message || 'Error occurred while sending OTP' });
+      return res.status(500).send({ success: false, message: 'Failed to send OTP' });
     }
   }
 
@@ -141,20 +138,11 @@ class AuthController {
    * Complete Registration with OTP & Password
    */
   async register(req, res) {
-    const { phone, email, name, otp, password, role } = req.body || {};
-
-    if (!phone || !name || !otp || !password || !role) {
-      return res.status(400).send({ success: false, message: 'Phone, Name, OTP, password, and role are required' });
+    const parseResult = registerSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).send({ success: false, message: parseResult.error.errors[0]?.message || 'Invalid request' });
     }
-
-    if (!['merchant', 'advertiser'].includes(role)) {
-      return res.status(400).send({ success: false, message: 'Invalid role. Must be merchant or advertiser' });
-    }
-
-    // Enforce password strength: 8-12 characters, mix of alphabets and numbers
-    if (password.length < 8 || password.length > 12 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-      return res.status(400).send({ success: false, message: 'Password must be 8-12 characters and contain both letters and numbers' });
-    }
+    const { phone, email, name, otp, password, role } = parseResult.data;
 
     const validation = validator.validatePhone(phone);
     if (!validation.isValid) {
@@ -166,40 +154,47 @@ class AuthController {
 
     try {
       // Verify OTP
-      if (isDemoAccount) {
-        if (otp !== config.demoOtp) {
-          return res.status(400).send({ success: false, message: 'Invalid OTP' });
-        }
-      } else {
-        const otpRecord = await OTP.findOne({ phone: formattedPhone });
-        if (!otpRecord) {
-          return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
-        }
-
-        if (otpRecord.expiresAt < new Date()) {
-          await OTP.deleteOne({ phone: formattedPhone });
-          return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
-        }
-
-        // Timing safe comparison
-        const bufRecordOtp = Buffer.from(otpRecord.otp);
-        const bufClientOtp = Buffer.from(otp);
-        const otpMatch = bufRecordOtp.length === bufClientOtp.length && 
-                           crypto.timingSafeEqual(bufRecordOtp, bufClientOtp);
-
-        if (!otpMatch) {
-          otpRecord.attempts += 1;
-          if (otpRecord.attempts >= 3) {
-            await OTP.deleteOne({ phone: formattedPhone });
-            return res.status(400).send({ success: false, message: 'Invalid OTP. Max attempts reached, please request a new OTP' });
-          }
-          await otpRecord.save();
-          return res.status(400).send({ success: false, message: 'Invalid OTP' });
-        }
-
-        // Cleanup verified OTP
-        await OTP.deleteOne({ phone: formattedPhone });
+      let otpRecord = await OTP.findOne({ phone: formattedPhone });
+      if (!otpRecord && config.demoMode) {
+        // In demo mode, if there is no OTP record in DB, initialize it to allow config.demoOtp
+        const hashedDemoOtp = crypto.createHash('sha256').update(config.demoOtp).digest('hex');
+        otpRecord = new OTP({
+          phone: formattedPhone,
+          otp: hashedDemoOtp,
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+          attempts: 0
+        });
+        await otpRecord.save();
       }
+
+      if (!otpRecord) {
+        return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
+      }
+
+      if (otpRecord.expiresAt < new Date()) {
+        await OTP.deleteOne({ phone: formattedPhone });
+        return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
+      }
+
+      // Timing safe comparison of SHA-256 hashes
+      const hashedClientOtp = crypto.createHash('sha256').update(otp).digest('hex');
+      const bufRecordOtp = Buffer.from(otpRecord.otp);
+      const bufClientOtp = Buffer.from(hashedClientOtp);
+      const otpMatch = bufRecordOtp.length === bufClientOtp.length && 
+                         crypto.timingSafeEqual(bufRecordOtp, bufClientOtp);
+
+      if (!otpMatch) {
+        otpRecord.attempts += 1;
+        if (otpRecord.attempts >= 3) {
+          await OTP.deleteOne({ phone: formattedPhone });
+          return res.status(400).send({ success: false, message: 'Invalid OTP. Max attempts reached, please request a new OTP' });
+        }
+        await otpRecord.save();
+        return res.status(400).send({ success: false, message: 'Invalid OTP' });
+      }
+
+      // Cleanup verified OTP
+      await OTP.deleteOne({ phone: formattedPhone });
 
       // Check if user already exists
       const existingUser = await User.findOne({ phone: formattedPhone });
@@ -214,13 +209,12 @@ class AuthController {
         }
       }
 
-      // Create new user
-      const hashedPassword = hashPassword(password);
+      // Create new user (password is automatically hashed via Mongoose pre-save hook)
       const newUser = new User({
         phone: formattedPhone,
         email: email ? email.trim().toLowerCase() : undefined,
         name: name.trim(),
-        password: hashedPassword,
+        password: password,
         role: role,
         roles: [role],
         isDemo: isDemoAccount
@@ -253,11 +247,11 @@ class AuthController {
    * Verify OTP without deleting it (for real-time frontend validation)
    */
   async verifyOtp(req, res) {
-    const { phone, otp } = req.body || {};
-
-    if (!phone || !otp) {
-      return res.status(400).send({ success: false, message: 'Phone and OTP are required' });
+    const parseResult = verifyOtpSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).send({ success: false, message: parseResult.error.errors[0]?.message || 'Invalid request' });
     }
+    const { phone, otp } = parseResult.data;
 
     const validation = validator.validatePhone(phone);
     if (!validation.isValid) {
@@ -265,18 +259,21 @@ class AuthController {
     }
 
     const formattedPhone = validation.formatted;
-    const isDemoAccount = config.demoMode;
 
     try {
-      if (isDemoAccount) {
-        if (otp === config.demoOtp) {
-          return res.status(200).send({ success: true, message: 'OTP verified successfully' });
-        } else {
-          return res.status(400).send({ success: false, message: 'Invalid OTP' });
-        }
+      let otpRecord = await OTP.findOne({ phone: formattedPhone });
+      if (!otpRecord && config.demoMode) {
+        // In demo mode, if there is no OTP record in DB, initialize it to allow config.demoOtp
+        const hashedDemoOtp = crypto.createHash('sha256').update(config.demoOtp).digest('hex');
+        otpRecord = new OTP({
+          phone: formattedPhone,
+          otp: hashedDemoOtp,
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+          attempts: 0
+        });
+        await otpRecord.save();
       }
 
-      const otpRecord = await OTP.findOne({ phone: formattedPhone });
       if (!otpRecord) {
         return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
       }
@@ -286,13 +283,20 @@ class AuthController {
         return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
       }
 
-      // Timing safe comparison
+      // Timing safe comparison of SHA-256 hashes
+      const hashedClientOtp = crypto.createHash('sha256').update(otp).digest('hex');
       const bufRecordOtp = Buffer.from(otpRecord.otp);
-      const bufClientOtp = Buffer.from(otp);
+      const bufClientOtp = Buffer.from(hashedClientOtp);
       const otpMatch = bufRecordOtp.length === bufClientOtp.length && 
                          crypto.timingSafeEqual(bufRecordOtp, bufClientOtp);
 
       if (!otpMatch) {
+        otpRecord.attempts += 1;
+        if (otpRecord.attempts >= 3) {
+          await OTP.deleteOne({ phone: formattedPhone });
+          return res.status(400).send({ success: false, message: 'Invalid OTP. Max attempts reached, please request a new OTP' });
+        }
+        await otpRecord.save();
         return res.status(400).send({ success: false, message: 'Invalid OTP' });
       }
 
@@ -307,12 +311,12 @@ class AuthController {
    * Authenticate using phone and password
    */
   async login(req, res) {
-    const { phone, identifier, password, selectedRole } = req.body || {};
-    const inputId = identifier || phone;
-
-    if (!inputId || !password) {
-      return res.status(400).send({ success: false, message: 'Email/phone and password are required' });
+    const parseResult = loginSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).send({ success: false, message: parseResult.error.errors[0]?.message || 'Invalid request' });
     }
+    const { phone, identifier, password, selectedRole } = parseResult.data;
+    const inputId = identifier || phone;
 
     let query = {};
     if (inputId.includes('@')) {
@@ -396,15 +400,22 @@ class AuthController {
    * Add a new role to an authenticated user
    */
   async addRole(req, res) {
-    const { role } = req.body || {};
-    if (!['merchant', 'advertiser'].includes(role)) {
-      return res.status(400).send({ success: false, message: 'Invalid role. Must be merchant or advertiser' });
+    const parseResult = addRoleSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).send({ success: false, message: parseResult.error.errors[0]?.message || 'Invalid request' });
     }
+    const { role, password } = parseResult.data;
 
     try {
       const user = await User.findById(req.user.uid);
       if (!user) {
         return res.status(404).send({ success: false, message: 'User not found' });
+      }
+
+      // S3: Verify current password before adding role
+      const isPasswordValid = verifyPassword(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(400).send({ success: false, message: 'Invalid password' });
       }
 
       let userRoles = user.roles || [];
@@ -494,16 +505,11 @@ class AuthController {
    * Reset User Password via OTP
    */
   async resetPassword(req, res) {
-    const { phone, otp, password } = req.body || {};
-
-    if (!phone || !otp || !password) {
-      return res.status(400).send({ success: false, message: 'Phone, OTP, and password are required' });
+    const parseResult = resetPasswordSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).send({ success: false, message: parseResult.error.errors[0]?.message || 'Invalid request' });
     }
-
-    // Enforce password strength: 8-12 characters, mix of alphabets and numbers
-    if (password.length < 8 || password.length > 12 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-      return res.status(400).send({ success: false, message: 'Password must be 8-12 characters and contain both letters and numbers' });
-    }
+    const { phone, otp, password } = parseResult.data;
 
     const validation = validator.validatePhone(phone);
     if (!validation.isValid) {
@@ -511,7 +517,6 @@ class AuthController {
     }
 
     const formattedPhone = validation.formatted;
-    const isDemoAccount = config.demoMode;
 
     try {
       // Find the user first
@@ -521,43 +526,50 @@ class AuthController {
       }
 
       // Verify OTP
-      if (isDemoAccount) {
-        if (otp !== config.demoOtp) {
-          return res.status(400).send({ success: false, message: 'Invalid OTP' });
-        }
-      } else {
-        const otpRecord = await OTP.findOne({ phone: formattedPhone });
-        if (!otpRecord) {
-          return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
-        }
-
-        if (otpRecord.expiresAt < new Date()) {
-          await OTP.deleteOne({ phone: formattedPhone });
-          return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
-        }
-
-        // Timing safe comparison
-        const bufRecordOtp = Buffer.from(otpRecord.otp);
-        const bufClientOtp = Buffer.from(otp);
-        const otpMatch = bufRecordOtp.length === bufClientOtp.length && 
-                           crypto.timingSafeEqual(bufRecordOtp, bufClientOtp);
-
-        if (!otpMatch) {
-          otpRecord.attempts += 1;
-          if (otpRecord.attempts >= 3) {
-            await OTP.deleteOne({ phone: formattedPhone });
-            return res.status(400).send({ success: false, message: 'Invalid OTP. Max attempts reached, please request a new OTP' });
-          }
-          await otpRecord.save();
-          return res.status(400).send({ success: false, message: 'Invalid OTP' });
-        }
-
-        // Cleanup verified OTP
-        await OTP.deleteOne({ phone: formattedPhone });
+      let otpRecord = await OTP.findOne({ phone: formattedPhone });
+      if (!otpRecord && config.demoMode) {
+        // In demo mode, if there is no OTP record in DB, initialize it to allow config.demoOtp
+        const hashedDemoOtp = crypto.createHash('sha256').update(config.demoOtp).digest('hex');
+        otpRecord = new OTP({
+          phone: formattedPhone,
+          otp: hashedDemoOtp,
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+          attempts: 0
+        });
+        await otpRecord.save();
       }
 
-      // Update password
-      user.password = hashPassword(password);
+      if (!otpRecord) {
+        return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
+      }
+
+      if (otpRecord.expiresAt < new Date()) {
+        await OTP.deleteOne({ phone: formattedPhone });
+        return res.status(400).send({ success: false, message: 'Invalid or expired OTP' });
+      }
+
+      // Timing safe comparison of SHA-256 hashes
+      const hashedClientOtp = crypto.createHash('sha256').update(otp).digest('hex');
+      const bufRecordOtp = Buffer.from(otpRecord.otp);
+      const bufClientOtp = Buffer.from(hashedClientOtp);
+      const otpMatch = bufRecordOtp.length === bufClientOtp.length && 
+                         crypto.timingSafeEqual(bufRecordOtp, bufClientOtp);
+
+      if (!otpMatch) {
+        otpRecord.attempts += 1;
+        if (otpRecord.attempts >= 3) {
+          await OTP.deleteOne({ phone: formattedPhone });
+          return res.status(400).send({ success: false, message: 'Invalid OTP. Max attempts reached, please request a new OTP' });
+        }
+        await otpRecord.save();
+        return res.status(400).send({ success: false, message: 'Invalid OTP' });
+      }
+
+      // Cleanup verified OTP
+      await OTP.deleteOne({ phone: formattedPhone });
+
+      // Update password (automatically hashed via Mongoose pre-save hook)
+      user.password = password;
       await user.save();
 
       return res.status(200).send({

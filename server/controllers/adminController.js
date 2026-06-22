@@ -6,6 +6,7 @@ const User = require('../models/User');
 const PhonePeTransaction = require('../models/PhonePeTransaction');
 const Report = require('../models/Report');
 const Menu = require('../models/Menu');
+const phonePeService = require('../services/phonePeService');
 const crypto = require('crypto');
 const validator = require('../utils/validation');
 const { v4: uuidv4 } = require('uuid');
@@ -535,6 +536,111 @@ class AdminController {
     } catch (error) {
       console.error('deleteUser Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to delete user' });
+    }
+  }
+
+  /**
+   * Reset user password to a new value (admin-initiated)
+   */
+  async adminResetPassword(req, res) {
+    const { userId } = req.params;
+    const { newPassword } = req.body || {};
+
+    if (!newPassword || newPassword.length < 8 || newPassword.length > 12 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+      return res.status(400).send({ success: false, message: 'New password must be 8-12 characters and contain both letters and numbers' });
+    }
+
+    try {
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).send({ success: false, message: 'User not found' });
+      }
+
+      if (user.role === 'admin') {
+        return res.status(400).send({ success: false, message: 'Cannot reset administrator password via this endpoint' });
+      }
+
+      // Password will be automatically hashed by Mongoose pre-save hook
+      user.password = newPassword;
+      await user.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'User password reset successfully'
+      });
+    } catch (error) {
+      console.error('adminResetPassword Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to reset user password' });
+    }
+  }
+
+  /**
+   * Refund a completed ad booking (admin-initiated)
+   */
+  async refundBooking(req, res) {
+    const { bookingId } = req.params;
+
+    try {
+      const booking = await AdBooking.findOne({ bookingId });
+      if (!booking) {
+        return res.status(404).send({ success: false, message: 'Booking not found' });
+      }
+
+      if (booking.paymentStatus !== 'completed') {
+        return res.status(400).send({ success: false, message: 'Cannot refund unpaid bookings' });
+      }
+
+      // Generate unique refund transaction ID
+      const refundTransactionId = `REFUND_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+
+      // Fetch original completed transaction
+      const originalTxn = await PhonePeTransaction.findOne({ 
+        transactionId: booking.transactionId,
+        status: 'completed'
+      });
+
+      const providerReferenceId = booking.paymentId || (originalTxn?.rawCallbackPayload?.data?.transactionId || originalTxn?.rawCallbackPayload?.transactionId);
+      if (!providerReferenceId) {
+        return res.status(400).send({ success: false, message: 'Original completed transaction reference not found. Cannot issue refund.' });
+      }
+
+      // Call PhonePe Service to initiate refund
+      console.log(`[Refund] Initiating PhonePe V2 refund for booking ${bookingId}: original txn ${providerReferenceId}, amount ${booking.amount}`);
+      const refundResult = await phonePeService.initiateRefund({
+        refundTransactionId,
+        originalTransactionId: providerReferenceId,
+        amount: booking.amount,
+        orderId: booking.orderId
+      });
+
+      // Save refund transaction record
+      const refundTxn = new PhonePeTransaction({
+        transactionId: refundTransactionId,
+        orderId: booking.orderId,
+        userId: booking.advertiserId,
+        amount: booking.amount,
+        transactionType: 'refund',
+        originalTransactionId: booking.transactionId,
+        status: refundResult.status === 'SUCCESS' || refundResult.status === 'COMPLETED' ? 'completed' : 'pending',
+        responseCode: refundResult.code
+      });
+      await refundTxn.save();
+
+      // Update booking status
+      booking.paymentStatus = 'refunded';
+      await booking.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'Refund processed successfully',
+        data: {
+          refundTransactionId,
+          paymentStatus: booking.paymentStatus
+        }
+      });
+    } catch (error) {
+      console.error('refundBooking Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to process refund: ' + error.message });
     }
   }
 }

@@ -25,6 +25,65 @@ const deviceActivationSchema = z.object({
   path: ['kioskPassword']
 });
 
+const registerSchema = z.object({
+  phone: z.string({ required_error: 'Phone is required' }).min(1, 'Phone is required'),
+  email: z.string().email('Invalid email format').optional().or(z.literal('')),
+  name: z.string({ required_error: 'Name is required' }).min(1, 'Name cannot be empty'),
+  otp: z.string({ required_error: 'OTP is required' }).length(6, 'OTP must be exactly 6 digits'),
+  password: z.string({ required_error: 'Password is required' })
+    .min(8, 'Password must be 8-12 characters')
+    .max(12, 'Password must be 8-12 characters')
+    .refine((val) => /[A-Za-z]/.test(val) && /\d/.test(val), {
+      message: 'Password must contain both letters and numbers'
+    }),
+  role: z.enum(['merchant', 'advertiser'], {
+    errorMap: () => ({ message: 'Role must be merchant or advertiser' })
+  })
+});
+
+const loginSchema = z.object({
+  phone: z.string().optional(),
+  identifier: z.string().optional(),
+  password: z.string({ required_error: 'Password is required' }).min(1, 'Password is required'),
+  selectedRole: z.enum(['merchant', 'advertiser', 'admin']).optional()
+}).refine((data) => data.phone || data.identifier, {
+  message: 'Identifier (email or phone) is required',
+  path: ['identifier']
+});
+
+const verifyOtpSchema = z.object({
+  phone: z.string({ required_error: 'Phone is required' }).min(1, 'Phone is required'),
+  otp: z.string({ required_error: 'OTP is required' }).length(6, 'OTP must be exactly 6 digits')
+});
+
+const sendOtpSchema = z.object({
+  phone: z.string({ required_error: 'Phone is required' }).min(1, 'Phone is required')
+});
+
+const resetPasswordSchema = z.object({
+  phone: z.string({ required_error: 'Phone is required' }).min(1, 'Phone is required'),
+  otp: z.string({ required_error: 'OTP is required' }).length(6, 'OTP must be exactly 6 digits'),
+  password: z.string({ required_error: 'Password is required' })
+    .min(8, 'Password must be 8-12 characters')
+    .max(12, 'Password must be 8-12 characters')
+    .refine((val) => /[A-Za-z]/.test(val) && /\d/.test(val), {
+      message: 'Password must contain both letters and numbers'
+    })
+});
+
+const addRoleSchema = z.object({
+  role: z.enum(['merchant', 'advertiser'], {
+    errorMap: () => ({ message: 'Role must be merchant or advertiser' })
+  }),
+  password: z.string({ required_error: 'Current password is required' }).min(1, 'Password is required')
+});
+
 module.exports = {
-  deviceActivationSchema
+  deviceActivationSchema,
+  registerSchema,
+  loginSchema,
+  verifyOtpSchema,
+  sendOtpSchema,
+  resetPasswordSchema,
+  addRoleSchema
 };

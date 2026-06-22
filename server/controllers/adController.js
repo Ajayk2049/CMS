@@ -135,10 +135,26 @@ class AdController {
 
       const totalAmount = rate.amount * bookingQty; // amount is in paise
 
-      // Create transaction record
+      // Generate IDs first
       const transactionId = `TXN_AD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
       const orderId = `ORD_AD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+      const bookingId = `B_${uuidv4().replace(/-/g, '').slice(0, 12)}`;
 
+      // Construct redirect URL with verifyBookingId parameter
+      const finalRedirectUrl = redirectUrl.includes('?')
+        ? `${redirectUrl}&verifyBookingId=${bookingId}`
+        : `${redirectUrl}?verifyBookingId=${bookingId}`;
+
+      // 1. Call PhonePe Checkout page first
+      const initiateResult = await phonePeService.initiatePayment({
+        transactionId,
+        userId: req.user.uid,
+        amount: totalAmount,
+        redirectUrl: finalRedirectUrl,
+        phone: req.user.phone
+      });
+
+      // 2. Save PhonePe transaction record
       const phonePeTxn = new PhonePeTransaction({
         transactionId,
         orderId,
@@ -149,8 +165,7 @@ class AdController {
       });
       await phonePeTxn.save();
 
-      // Create Ad Booking record
-      const bookingId = `B_${uuidv4().replace(/-/g, '').slice(0, 12)}`;
+      // 3. Create Ad Booking record
       const booking = new AdBooking({
         bookingId,
         advertiserId: req.user.uid,
@@ -169,15 +184,6 @@ class AdController {
         orderId
       });
       await booking.save();
-
-      // Call PhonePe Checkout page
-      const initiateResult = await phonePeService.initiatePayment({
-        transactionId,
-        userId: req.user.uid,
-        amount: totalAmount,
-        redirectUrl: redirectUrl,
-        phone: req.user.phone
-      });
 
       return res.status(200).send({
         success: true,

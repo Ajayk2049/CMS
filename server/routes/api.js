@@ -6,6 +6,24 @@ const adminController = require('../controllers/adminController');
 const { authenticate, authorize } = require('../utils/authMiddleware');
 
 function registerRoutes(fastify, options, done) {
+  // Health check route
+  fastify.get('/health', async (request, reply) => {
+    const mongoose = require('mongoose');
+    const dbState = mongoose.connection.readyState;
+    const dbStates = {
+      0: 'disconnected',
+      1: 'connected',
+      2: 'connecting',
+      3: 'disconnecting'
+    };
+    return {
+      status: 'ok',
+      uptime: process.uptime(),
+      timestamp: Date.now(),
+      database: dbStates[dbState] || 'unknown'
+    };
+  });
+
   // Public Auth Routes
   fastify.post('/auth/send-otp', authController.sendOtp);
   fastify.post('/auth/verify-otp', authController.verifyOtp);
@@ -44,7 +62,7 @@ function registerRoutes(fastify, options, done) {
     advertiserRoutes.post('/ads/book', adController.bookAd); // supports post fallback
     advertiserRoutes.get('/ads/bookings', adController.getMyBookings);
     advertiserRoutes.post('/ads/verify-payment/:bookingId', adController.verifyPayment);
-    advertiserRoutes.post('/ads/upload', adController.uploadVideo);
+    advertiserRoutes.post('/ads/upload', { bodyLimit: 104857600 }, adController.uploadVideo);
     next();
   });
 
@@ -64,12 +82,14 @@ function registerRoutes(fastify, options, done) {
     adminRoutes.post('/admin/hosts/review', adminController.reviewHostApplication);
     adminRoutes.get('/admin/bookings', adminController.getAdBookings);
     adminRoutes.post('/admin/bookings/review', adminController.reviewAdBooking);
+    adminRoutes.post('/admin/bookings/:bookingId/refund', adminController.refundBooking);
     adminRoutes.post('/admin/rates', adminController.manageAdsRates);
     adminRoutes.get('/admin/stats', adminController.getStats);
     adminRoutes.get('/admin/devices', adminController.getDevices);
     adminRoutes.post('/admin/devices', adminController.createDevice);
     adminRoutes.get('/admin/users', adminController.getUsers);
     adminRoutes.put('/admin/users/:userId', adminController.updateUser);
+    adminRoutes.post('/admin/users/:userId/reset-password', adminController.adminResetPassword);
     adminRoutes.delete('/admin/users/:userId', adminController.deleteUser);
     adminRoutes.get('/admin/reports', adminController.getReports);
     adminRoutes.patch('/admin/reports/:reportId', adminController.updateReport);

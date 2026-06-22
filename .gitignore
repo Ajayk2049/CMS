@@ -43,6 +43,7 @@ PhonePe_Payments_Guide.md
 project_blueprint.md
 sms_api.md
 user.md
+issues.md
 
 # Flutter / Dart caches and generated files
 .dart_tool/
@@ -70,6 +71,7 @@ desktop.ini
 # Scratch and test files
 server/test_phonepe.js
 server/SeedAdmin.js
+server/scratch/**
 
 # Uploaded media assets (ignore files, keep folder structure via .gitkeep)
 server/uploads/*

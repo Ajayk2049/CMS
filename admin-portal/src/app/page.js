@@ -38,7 +38,8 @@ import {
   KeyRound,
   ShieldAlert,
   Edit,
-  Trash2
+  Trash2,
+  Bell
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -134,6 +135,11 @@ export default function AdminPortal() {
   const [showRevenueModal, setShowRevenueModal] = useState(false);
   const [expandedPaymentId, setExpandedPaymentId] = useState(null);
 
+  // Notifications State
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [readNotifications, setReadNotifications] = useState([]);
+  const notificationsRef = useRef(null);
+
   // Hydration handling
   useEffect(() => {
     setMounted(true);
@@ -148,6 +154,43 @@ export default function AdminPortal() {
     const savedTab = localStorage.getItem('adminActiveTab');
     if (savedTab) {
       setActiveTab(savedTab);
+    }
+
+    const savedDeviceSubTab = localStorage.getItem('adminDeviceSubTab');
+    if (savedDeviceSubTab) {
+      setDeviceSubTab(savedDeviceSubTab);
+    }
+
+    const savedUserSubTab = localStorage.getItem('adminUserSubTab');
+    if (savedUserSubTab) {
+      setUserSubTab(savedUserSubTab);
+    }
+
+    const savedRateSubTab = localStorage.getItem('adminRateSubTab');
+    if (savedRateSubTab) {
+      setRateSubTab(savedRateSubTab);
+    }
+
+    const savedHostFilter = localStorage.getItem('adminHostFilter');
+    if (savedHostFilter) {
+      setHostFilter(savedHostFilter);
+    }
+
+    const savedRequestsSubTab = localStorage.getItem('adminRequestsSubTab');
+    if (savedRequestsSubTab) {
+      setRequestsSubTab(savedRequestsSubTab);
+    }
+
+    const savedChartRange = localStorage.getItem('adminChartRange');
+    if (savedChartRange) {
+      setChartRange(parseInt(savedChartRange, 10));
+    }
+
+    try {
+      const savedRead = JSON.parse(localStorage.getItem('adminReadNotifications') || '[]');
+      setReadNotifications(savedRead);
+    } catch (e) {
+      console.error(e);
     }
 
     const storedToken = localStorage.getItem('adminToken');
@@ -165,6 +208,155 @@ export default function AdminPortal() {
       localStorage.setItem('adminActiveTab', activeTab);
     }
   }, [activeTab, mounted]);
+
+  // Persist Sub-tabs & Filters
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminDeviceSubTab', deviceSubTab);
+    }
+  }, [deviceSubTab, mounted]);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminUserSubTab', userSubTab);
+    }
+  }, [userSubTab, mounted]);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminRateSubTab', rateSubTab);
+    }
+  }, [rateSubTab, mounted]);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminHostFilter', hostFilter);
+    }
+  }, [hostFilter, mounted]);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminRequestsSubTab', requestsSubTab);
+    }
+  }, [requestsSubTab, mounted]);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminChartRange', chartRange.toString());
+    }
+  }, [chartRange, mounted]);
+
+  // Click outside notifications dropdown handler
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target)) {
+        setShowNotifications(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Background polling for admin requests (every 15s)
+  useEffect(() => {
+    if (!mounted || !isAuthenticated || !token) return;
+    const interval = setInterval(() => {
+      loadDashboardData(token);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [mounted, isAuthenticated, token]);
+
+  const getNotificationsList = () => {
+    const list = [];
+
+    // 1. Host Applications
+    hosts.filter(h => h.status === 'pending').forEach(app => {
+      list.push({
+        id: `host_${app._id}`,
+        title: 'New Venue Request',
+        description: `Outlet: ${app.outletName} (${app.city})`,
+        type: 'host',
+        target: app,
+        time: new Date(app.createdAt)
+      });
+    });
+
+    // 2. Ad Campaigns
+    campaigns.filter(c => c.paymentStatus === 'completed' && c.approvalStatus === 'pending').forEach(booking => {
+      list.push({
+        id: `campaign_${booking.bookingId}`,
+        title: 'New Ad Campaign',
+        description: `Campaign ${booking.bookingId} - ${booking.outletId?.outletName || 'Outlet'}`,
+        type: 'campaign',
+        target: booking,
+        time: new Date(booking.createdAt)
+      });
+    });
+
+    // 3. Support Tickets (Reports)
+    reports.filter(r => r.status !== 'resolved').forEach(report => {
+      list.push({
+        id: `report_${report.reportId}`,
+        title: 'Support Ticket',
+        description: `${report.title} (${report.reporterRole})`,
+        type: 'report',
+        target: report,
+        time: new Date(report.createdAt)
+      });
+    });
+
+    // Sort by time descending
+    return list.sort((a, b) => b.time - a.time);
+  };
+
+  const handleNotificationClick = (item) => {
+    if (item.type === 'host') {
+      setActiveTab('requests');
+      setRequestsSubTab('hosts');
+      setSelectedHostApp(item.target);
+    } else if (item.type === 'campaign') {
+      setActiveTab('requests');
+      setRequestsSubTab('campaigns');
+      setSelectedCampaign(item.target);
+      setShowDetailsModal(true);
+    } else if (item.type === 'report') {
+      setActiveTab('reports');
+      setSelectedReport(item.target);
+      setReportActionForm({
+        status: item.target.status,
+        actionTaken: item.target.actionTaken || ''
+      });
+    }
+
+    // Add to read list if not already there
+    if (!readNotifications.includes(item.id)) {
+      const updated = [...readNotifications, item.id];
+      setReadNotifications(updated);
+      localStorage.setItem('adminReadNotifications', JSON.stringify(updated));
+    }
+
+    setShowNotifications(false);
+  };
+
+  const markAllNotificationsAsRead = () => {
+    const allIds = getNotificationsList().map(item => item.id);
+    setReadNotifications(allIds);
+    localStorage.setItem('adminReadNotifications', JSON.stringify(allIds));
+  };
+
+  const getTabBadgeCount = (tabId) => {
+    if (tabId === 'requests') {
+      const pendingHosts = hosts.filter(h => h.status === 'pending').length;
+      const pendingCampaigns = campaigns.filter(c => c.paymentStatus === 'completed' && c.approvalStatus === 'pending').length;
+      return pendingHosts + pendingCampaigns;
+    }
+    if (tabId === 'reports') {
+      return reports.filter(r => r.status !== 'resolved').length;
+    }
+    return 0;
+  };
 
   const toggleTheme = () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
@@ -240,8 +432,17 @@ export default function AdminPortal() {
     localStorage.removeItem('adminToken');
     localStorage.removeItem('adminRole');
     localStorage.removeItem('adminActiveTab');
+    localStorage.removeItem('adminDeviceSubTab');
+    localStorage.removeItem('adminUserSubTab');
+    localStorage.removeItem('adminRateSubTab');
+    localStorage.removeItem('adminHostFilter');
+    localStorage.removeItem('adminRequestsSubTab');
+    localStorage.removeItem('adminChartRange');
+    localStorage.removeItem('adminReadNotifications');
     setToken('');
     setIsAuthenticated(false);
+    setReadNotifications([]);
+    setShowNotifications(false);
     showNotification('success', 'Logged out successfully');
   };
 
@@ -844,20 +1045,41 @@ export default function AdminPortal() {
           </div>
 
           <nav className="space-y-1.5">
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${activeTab === item.id
-                  ? 'bg-primary text-primary-foreground shadow-md'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                  } ${sidebarCollapsed ? 'justify-center px-0' : 'px-3.5 space-x-2.5'}`}
-                title={item.label}
-              >
-                <div className="shrink-0">{item.icon}</div>
-                {!sidebarCollapsed && <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }}>{item.label}</motion.span>}
-              </button>
-            ))}
+            {navItems.map((item) => {
+              const badgeCount = getTabBadgeCount(item.id);
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id)}
+                  className={`w-full flex items-center py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer relative ${activeTab === item.id
+                    ? 'bg-primary text-primary-foreground shadow-md'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                    } ${sidebarCollapsed ? 'justify-center px-0' : 'px-3.5 space-x-2.5'}`}
+                  title={item.label}
+                >
+                  <div className="shrink-0 relative">
+                    {item.icon}
+                    {sidebarCollapsed && badgeCount > 0 && (
+                      <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-destructive border border-card shadow-sm animate-pulse" />
+                    )}
+                  </div>
+                  {!sidebarCollapsed && (
+                    <div className="flex-1 flex items-center justify-between min-w-0">
+                      <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="truncate">
+                        {item.label}
+                      </motion.span>
+                      {badgeCount > 0 && (
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black leading-none shrink-0 ${
+                          activeTab === item.id ? 'bg-primary-foreground text-primary' : 'bg-destructive text-destructive-foreground'
+                        }`}>
+                          {badgeCount}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
           </nav>
         </div>
 
@@ -902,18 +1124,120 @@ export default function AdminPortal() {
             </h2>
           </div>
 
-          {/* Global ID Search bar */}
-          <form onSubmit={handleGlobalSearch} className="flex items-center max-w-sm w-full bg-background border border-input rounded-xl px-3 h-10 shadow-sm">
-            <Search className="w-4 h-4 text-muted-foreground mr-2 shrink-0" />
-            <input
-              type="text"
-              placeholder="Search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full text-xs font-semibold bg-transparent focus:outline-none text-foreground placeholder-muted-foreground"
-            />
-            <button type="submit" className="hidden">Search</button>
-          </form>
+          <div className="flex items-center space-x-3.5 max-w-lg w-full justify-end">
+            {/* Notifications Bell Dropdown */}
+            <div className="relative shrink-0" ref={notificationsRef}>
+              <button
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="relative p-2.5 bg-background hover:bg-muted border border-border rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer flex items-center justify-center shadow-sm"
+                aria-label="View notifications"
+              >
+                <Bell className="w-4 h-4" />
+                {(() => {
+                  const notifications = getNotificationsList();
+                  const unreadCount = notifications.filter(item => !readNotifications.includes(item.id)).length;
+                  if (unreadCount > 0) {
+                    return (
+                      <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-destructive text-[10px] font-black text-destructive-foreground flex items-center justify-center border border-card shadow-sm animate-pulse">
+                        {unreadCount}
+                      </span>
+                    );
+                  }
+                  return null;
+                })()}
+              </button>
+
+              <AnimatePresence>
+                {showNotifications && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 mt-2.5 w-80 bg-white dark:bg-neutral-900 border border-border rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col font-sans"
+                  >
+                    {/* Header */}
+                    <div className="p-4 border-b border-border flex items-center justify-between bg-muted/20">
+                      <span className="text-xs font-bold text-foreground">Notifications</span>
+                      {(() => {
+                        const notifications = getNotificationsList();
+                        const unreadCount = notifications.filter(item => !readNotifications.includes(item.id)).length;
+                        if (unreadCount > 0) {
+                          return (
+                            <button
+                              onClick={markAllNotificationsAsRead}
+                              className="text-[10px] font-extrabold text-primary hover:underline cursor-pointer uppercase tracking-wider"
+                            >
+                              Mark all read
+                            </button>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+
+                    {/* Content List */}
+                    <div className="max-h-72 overflow-y-auto divide-y divide-border/60">
+                      {(() => {
+                        const list = getNotificationsList();
+                        if (list.length === 0) {
+                          return (
+                            <div className="p-8 text-center text-xs text-muted-foreground font-medium">
+                              No review requests or tickets.
+                            </div>
+                          );
+                        }
+
+                        return list.map(item => {
+                          const isUnread = !readNotifications.includes(item.id);
+                          return (
+                            <button
+                              key={item.id}
+                              onClick={() => handleNotificationClick(item)}
+                              className={`w-full text-left p-3.5 hover:bg-muted/50 transition-all flex items-start space-x-3 cursor-pointer ${
+                                isUnread ? 'bg-primary/5' : ''
+                              }`}
+                            >
+                              {/* Icon Indicator */}
+                              <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+                                item.type === 'host' ? 'bg-emerald-500' :
+                                item.type === 'campaign' ? 'bg-blue-500' : 'bg-orange-500'
+                              }`} />
+                              
+                              <div className="flex-1 space-y-0.5">
+                                <div className="flex justify-between items-start">
+                                  <span className="text-xs font-bold text-foreground truncate">{item.title}</span>
+                                  <span className="text-[9px] text-muted-foreground font-semibold shrink-0 ml-2">
+                                    {item.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-muted-foreground font-semibold leading-relaxed line-clamp-2">
+                                  {item.description}
+                                </p>
+                              </div>
+                            </button>
+                          );
+                        });
+                      })()}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            {/* Global ID Search bar */}
+            <form onSubmit={handleGlobalSearch} className="flex items-center max-w-sm w-full bg-background border border-input rounded-xl px-3 h-10 shadow-sm">
+              <Search className="w-4 h-4 text-muted-foreground mr-2 shrink-0" />
+              <input
+                type="text"
+                placeholder="Search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full text-xs font-semibold bg-transparent focus:outline-none text-foreground placeholder-muted-foreground"
+              />
+              <button type="submit" className="hidden">Search</button>
+            </form>
+          </div>
         </header>
 
         {/* Main Content Workspace */}
@@ -2231,22 +2555,34 @@ export default function AdminPortal() {
                 </div>
 
                 <nav className="space-y-2">
-                  {navItems.map((item) => (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        setActiveTab(item.id);
-                        setMobileMenuOpen(false);
-                      }}
-                      className={`w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === item.id
-                        ? 'bg-primary text-primary-foreground shadow-md'
-                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                        }`}
-                    >
-                      {item.icon}
-                      <span>{item.label}</span>
-                    </button>
-                  ))}
+                  {navItems.map((item) => {
+                    const badgeCount = getTabBadgeCount(item.id);
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => {
+                          setActiveTab(item.id);
+                          setMobileMenuOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-4 py-3.5 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === item.id
+                          ? 'bg-primary text-primary-foreground shadow-md'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                          }`}
+                      >
+                        <div className="flex items-center space-x-3">
+                          {item.icon}
+                          <span>{item.label}</span>
+                        </div>
+                        {badgeCount > 0 && (
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-black leading-none ${
+                            activeTab === item.id ? 'bg-primary-foreground text-primary' : 'bg-destructive text-destructive-foreground'
+                          }`}>
+                            {badgeCount}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </nav>
               </div>
 

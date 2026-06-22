@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const axios = require('axios');
 const config = require('../config/config');
 
@@ -261,21 +262,39 @@ class PhonePeService {
   }
 
   /**
-   * Verify Webhook payload using V2 Basic Auth credentials
+   * Verify Webhook payload using V2 SHA256 hashed credentials
    * @param {string} authHeader Request Authorization header value
    * @returns {boolean} True if authentic
    */
   verifyWebhook(authHeader) {
-    if (!authHeader || !authHeader.startsWith('Basic ')) {
+    if (!config.phonePe.webhookStrict) {
+      console.log('[PhonePe Webhook] Strict verification disabled. Bypassing check.');
+      return true;
+    }
+
+    if (!authHeader || !authHeader.startsWith('SHA256(') || !authHeader.endsWith(')')) {
+      console.error('[PhonePe Webhook] Invalid Authorization header format. Expected SHA256(...)');
       return false;
     }
+
     try {
-      const credentials = Buffer.from(authHeader.split(' ')[1], 'base64').toString('utf8');
-      const [user, pass] = credentials.split(':');
+      const receivedSignature = authHeader.trim();
+      const username = config.phonePe.webhookUser;
+      const password = config.phonePe.webhookPassword;
       
-      return user === config.phonePe.webhookUser && pass === config.phonePe.webhookPassword;
+      const expectedHash = crypto.createHash('sha256')
+        .update(`${username}:${password}`)
+        .digest('hex');
+      const expectedSignature = `SHA256(${expectedHash})`;
+
+      if (receivedSignature !== expectedSignature) {
+        console.error('[PhonePe Webhook] Signature mismatch. Received:', receivedSignature, 'Expected:', expectedSignature);
+        return false;
+      }
+
+      return true;
     } catch (err) {
-      console.error('Webhook Basic Auth Parse Error:', err.message);
+      console.error('Webhook V2 Authentication Parse Error:', err.message);
       return false;
     }
   }

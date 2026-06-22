@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 
 const UserSchema = new mongoose.Schema({
   phone: {
@@ -40,6 +41,21 @@ const UserSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  }
+});
+
+// Pre-save hook to hash password before saving to MongoDB
+UserSchema.pre('save', function(next) {
+  const user = this;
+  if (!user.isModified('password')) return next();
+
+  try {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.pbkdf2Sync(user.password, salt, 1000, 64, 'sha512').toString('hex');
+    user.password = `${salt}:${hash}`;
+    next();
+  } catch (err) {
+    next(err);
   }
 });
 

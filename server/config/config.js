@@ -34,8 +34,10 @@ const config = {
     hostUrl: process.env.PHONEPE_HOST_URL,
     callbackUrl: process.env.PHONEPE_CALLBACK_URL,
     webhookUser: process.env.PHONEPE_WEBHOOK_USER || 'cms_webhook',
-    webhookPassword: process.env.PHONEPE_WEBHOOK_PASSWORD || 'webhook_secure_pass_123'
-  }
+    webhookPassword: process.env.PHONEPE_WEBHOOK_PASSWORD || 'webhook_secure_pass_123',
+    webhookStrict: process.env.PHONEPE_WEBHOOK_STRICT === 'true'
+  },
+  merchantRedirectUrl: process.env.MERCHANT_REDIRECT_URL || 'http://localhost:3001/merchant/orders'
 };
 
 // Validate critical parameters

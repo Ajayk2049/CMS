@@ -27,26 +27,24 @@ const Report = require('./models/Report');
 // WebSocket client sockets map (merchantId -> ws socket)
 const merchantSockets = new Map();
 
-// Helper to hash passwords for seeding
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-  return `${salt}:${hash}`;
-}
-
 // ----------------------------------------------------
 // Fastify Setup (REST & WebSocket)
 // ----------------------------------------------------
 const fastify = Fastify({ 
   logger: true,
-  bodyLimit: 104857600 // 100MB body limit for video uploads
+  bodyLimit: 1048576 // 1MB default body limit
 });
 
 async function startFastify() {
+  const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+    : '*';
+
   await fastify.register(cors, {
-    origin: '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Filename', 'x-filename', 'Accept', 'Origin']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Filename', 'x-filename', 'Accept', 'Origin'],
+    credentials: true
   });
 
   await fastify.register(websocket);
@@ -159,7 +157,7 @@ async function startFastify() {
     if (!demoMerchant) {
       demoMerchant = new User({
         phone: '+918888888888',
-        password: hashPassword('merchant'),
+        password: 'merchant',
         role: 'merchant',
         isDemo: true
       });
@@ -171,7 +169,7 @@ async function startFastify() {
     if (!demoAdvertiser) {
       demoAdvertiser = new User({
         phone: '+917777777777',
-        password: hashPassword('advertiser'),
+        password: 'advertiser',
         role: 'advertiser',
         isDemo: true
       });
@@ -408,7 +406,7 @@ const orderServiceHandlers = {
       }
 
       // Initiate payment link via PhonePe
-      const redirectUrl = `http://localhost:3001/merchant/orders?orderId=${orderId}`;
+      const redirectUrl = `${config.merchantRedirectUrl}?orderId=${orderId}`;
       const paymentResult = await phonePeService.initiatePayment({
         transactionId,
         userId: merchantId,

@@ -142,6 +142,18 @@ export default function AdvertiserDashboard() {
     fetchBookings(storedToken);
     fetchStates(storedToken);
     fetchRates(storedToken);
+
+    // Auto-verify if returning from payment redirect
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const verifyBookingId = urlParams.get('verifyBookingId');
+      if (verifyBookingId) {
+        handleVerifyPayment(verifyBookingId, storedToken);
+        // Clear query parameters from URL
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, '', newUrl);
+      }
+    }
   }, [router]);
 
   // Persist Active Tab
@@ -389,16 +401,18 @@ export default function AdvertiserDashboard() {
     }
   };
 
-  const handleVerifyPayment = async (bookingId) => {
+  const handleVerifyPayment = async (bookingId, explicitToken = null) => {
     setError('');
     setInfo('');
+    const activeToken = explicitToken || token;
+    if (!activeToken) return;
     try {
       const res = await axios.post(`${API_BASE}/ads/verify-payment/${bookingId}`, {}, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${activeToken}` }
       });
       if (res.data.success) {
         setInfo(res.data.message);
-        fetchBookings(token); // reload campaigns
+        fetchBookings(activeToken); // reload campaigns
       } else {
         setError(res.data.message);
       }

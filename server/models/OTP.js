@@ -10,11 +10,6 @@ const OTPSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  sessionId: {
-    type: String,
-    required: true,
-    unique: true
-  },
   attempts: {
     type: Number,
     default: 0
