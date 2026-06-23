@@ -38,7 +38,7 @@ const fastify = Fastify({
 async function startFastify() {
   const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
-    : '*';
+    : true;
 
   await fastify.register(cors, {
     origin: allowedOrigins,
@@ -107,23 +107,33 @@ async function startFastify() {
     });
   });
 
-  // Register raw buffer parser for videos
-  fastify.addContentTypeParser(['application/octet-stream', 'video/mp4', 'video/webm'], { parseAs: 'buffer' }, (req, body, done) => {
-    done(null, body);
-  });
+  // Register raw buffer parser for videos and images
+  fastify.addContentTypeParser(
+    ['application/octet-stream', 'video/mp4', 'video/webm', 'image/jpeg', 'image/png', 'image/webp'],
+    function (req, payload, done) {
+      const chunks = [];
+      payload.on('data', chunk => chunks.push(chunk));
+      payload.on('end', () => done(null, Buffer.concat(chunks)));
+      payload.on('error', err => done(err));
+    }
+  );
 
-  // Serve uploaded videos statically
-  fastify.get('/uploads/:filename', (req, res) => {
+  // Serve uploaded files statically
+  fastify.get('/uploads/*', (req, res) => {
     const fs = require('fs');
     const path = require('path');
-    const filePath = path.join(__dirname, 'uploads', req.params.filename);
+    const subpath = req.params['*'];
+    const filePath = path.join(__dirname, 'uploads', subpath);
     if (!fs.existsSync(filePath)) {
       return res.status(404).send({ error: 'File not found' });
     }
-    const ext = path.extname(req.params.filename).toLowerCase();
+    const ext = path.extname(subpath).toLowerCase();
     let contentType = 'application/octet-stream';
     if (ext === '.mp4') contentType = 'video/mp4';
     else if (ext === '.webm') contentType = 'video/webm';
+    else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+    else if (ext === '.png') contentType = 'image/png';
+    else if (ext === '.webp') contentType = 'image/webp';
     
     res.header('Content-Type', contentType);
     return res.send(fs.createReadStream(filePath));

@@ -31,6 +31,7 @@ function registerRoutes(fastify, options, done) {
   fastify.post('/auth/login', authController.login);
   fastify.post('/auth/reset-password', authController.resetPassword);
   fastify.post('/auth/device/activate', deviceAuthController.activateDevice);
+  fastify.get('/auth/device/ads', { preHandler: authenticate }, deviceAuthController.getDeviceAds);
   fastify.post('/auth/add-role', { preHandler: authenticate }, authController.addRole);
   fastify.post('/auth/switch-role', { preHandler: authenticate }, authController.switchRole);
 
@@ -46,6 +47,7 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.get('/host/applications', hostController.getMyApplications);
     merchantRoutes.get('/host/menu', hostController.getMenu);
     merchantRoutes.post('/host/menu', hostController.updateMenu);
+    merchantRoutes.post('/host/menu/upload-image', { bodyLimit: 5242880 }, hostController.uploadImage);
     merchantRoutes.get('/host/devices', hostController.getMyDevices);
     next();
   });

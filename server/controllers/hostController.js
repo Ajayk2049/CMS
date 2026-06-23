@@ -171,6 +171,65 @@ class HostController {
   }
 
   /**
+   * Upload menu item image, optimize via sharp and save to disk
+   */
+  async uploadImage(req, res) {
+    const fs = require('fs');
+    const path = require('path');
+    const sharp = require('sharp');
+    const { v4: uuidv4 } = require('uuid');
+    const config = require('../config/config');
+
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(400).send({ success: false, message: 'Invalid file payload. Expected raw binary buffer.' });
+    }
+
+    try {
+      const filenameHeader = req.headers['x-filename'] || 'image.png';
+      const ext = path.extname(filenameHeader).toLowerCase() || '.png';
+
+      // Enforce image extensions
+      if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+        return res.status(400).send({ success: false, message: 'Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.' });
+      }
+
+      const uniqueFilename = `menu_${uuidv4().replace(/-/g, '').slice(0, 16)}.webp`;
+      const uploadsDir = path.join(__dirname, '..', 'uploads', 'menu');
+
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+
+      const filePath = path.join(uploadsDir, uniqueFilename);
+
+      // Optimize and resize image using sharp
+      const optimizedBuffer = await sharp(req.body)
+        .resize(800, 800, {
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .webp({ quality: 80 })
+        .toBuffer();
+
+      fs.writeFileSync(filePath, optimizedBuffer);
+
+      const fileUrl = `http://localhost:${config.port || 8080}/uploads/menu/${uniqueFilename}`;
+
+      return res.status(200).send({
+        success: true,
+        message: 'Image uploaded and optimized successfully',
+        data: {
+          filename: uniqueFilename,
+          url: fileUrl
+        }
+      });
+    } catch (error) {
+      console.error('uploadImage Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to upload and process image: ' + error.message });
+    }
+  }
+
+  /**
    * Get devices provisioned for the logged-in merchant's approved applications
    */
   async getMyDevices(req, res) {

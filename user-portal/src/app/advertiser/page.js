@@ -256,7 +256,7 @@ export default function AdvertiserDashboard() {
     setInfo('');
 
     try {
-      const response = await axios.post(`${API_BASE}/ads/upload`, file, {
+      const response = await axios.post(`${API_BASE}/ads/upload${selectedDeviceType ? '?deviceType=' + selectedDeviceType : ''}`, file, {
         headers: {
           'Content-Type': file.type || 'application/octet-stream',
           'X-Filename': file.name,

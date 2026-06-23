@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const config = require('../config/config');
 const Device = require('../models/Device');
+const AdBooking = require('../models/AdBooking');
 const { deviceActivationSchema } = require('../utils/zodSchemas');
 
 // Helper to hash passwords using pbkdf2 (same as authController.js)
@@ -84,6 +85,41 @@ class DeviceAuthController {
     } catch (error) {
       console.error('activateDevice Error:', error.message);
       return res.status(500).send({ success: false, message: 'Activation failed due to server error' });
+    }
+  }
+
+  /**
+   * Fetch active approved and paid ad campaigns for a device
+   */
+  async getDeviceAds(req, res) {
+    try {
+      const { hostApplicationId, deviceType, deviceId } = req.user;
+
+      if (!hostApplicationId || !deviceType) {
+        return res.status(400).send({ success: false, message: 'Invalid device credentials in token' });
+      }
+
+      const bookings = await AdBooking.find({
+        outletId: hostApplicationId,
+        deviceType: deviceType,
+        paymentStatus: 'completed',
+        approvalStatus: 'approved'
+      });
+
+      const ads = bookings.map(b => ({
+        bookingId: b.bookingId,
+        mediaUrl: b.mediaUrl,
+        durationSeconds: 15,
+        title: `Campaign ${b.bookingId}`
+      }));
+
+      return res.status(200).send({
+        success: true,
+        data: ads
+      });
+    } catch (error) {
+      console.error('getDeviceAds Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Server error fetching device ads' });
     }
   }
 }

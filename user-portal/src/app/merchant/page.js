@@ -17,7 +17,9 @@ import {
   Sun,
   Moon,
   Megaphone,
-  RefreshCw
+  RefreshCw,
+  X,
+  Pencil
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -152,8 +154,34 @@ export default function MerchantDashboard() {
   // Menu tab states
   const [menuItems, setMenuItems] = useState([]);
   const [selectedOutletId, setSelectedOutletId] = useState('');
-  const approvedOutlets = applications.filter(app => app.status === 'approved');
+  const approvedOutlets = applications.filter(app => app.status === 'approved' && app.deviceType === 'tablet');
   const [devices, setDevices] = useState([]);
+
+  // Menu Modal and editing states
+  const [isMenuModalOpen, setIsMenuModalOpen] = useState(false);
+  const [editingItemIndex, setEditingItemIndex] = useState(-1);
+  const [modalForm, setModalForm] = useState({
+    name: '',
+    description: '',
+    price: '',
+    category: 'Starters',
+    isAvailable: true,
+    imageUrl: ''
+  });
+  const [zoomFactor, setZoomFactor] = useState(100);
+  const [imageTab, setImageTab] = useState('upload');
+  const fileInputRef = useRef(null);
+
+  const MENU_CATEGORIES = ['Starters', 'Main Course', 'Dessert', 'Beverages'];
+
+  const getCategoryDotColor = (category) => {
+    const cat = category.toLowerCase();
+    if (cat.includes('starter')) return 'bg-purple-500';
+    if (cat.includes('main')) return 'bg-emerald-500';
+    if (cat.includes('dessert')) return 'bg-yellow-500';
+    if (cat.includes('beverag') || cat.includes('drink')) return 'bg-pink-500';
+    return 'bg-muted-foreground';
+  };
 
   // Orders tab states (WebSocket)
   const [orders, setOrders] = useState([]);
@@ -254,7 +282,7 @@ export default function MerchantDashboard() {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       setApplications(res.data.data);
-      const approvedApps = res.data.data.filter(app => app.status === 'approved');
+      const approvedApps = res.data.data.filter(app => app.status === 'approved' && app.deviceType === 'tablet');
       if (approvedApps.length > 0) {
         setSelectedOutletId((prev) => prev || approvedApps[0]._id);
       }
@@ -500,16 +528,165 @@ export default function MerchantDashboard() {
     }
   };
 
-  const addMenuItem = () => {
-    const newItem = {
-      itemId: `item_${Date.now()}`,
+  const handleImageUpload = async (index, e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+      setError('Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.');
+      return;
+    }
+
+    setError('');
+    setInfo('');
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const arrayBuffer = event.target.result;
+      try {
+        const response = await axios.post(`${API_BASE}/host/menu/upload-image`, arrayBuffer, {
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'X-Filename': file.name,
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.data.success && response.data.data.url) {
+          updateMenuItemField(index, 'imageUrl', response.data.data.url);
+          setInfo('Image uploaded successfully!');
+        } else {
+          setError(response.data.message || 'Upload failed');
+        }
+      } catch (err) {
+        console.error(err);
+        setError(err.response?.data?.message || 'Failed to upload image.');
+      }
+    };
+    reader.onerror = () => {
+      setError('Failed to read file.');
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const openCreateModal = (category = 'Starters') => {
+    setEditingItemIndex(-1);
+    setModalForm({
       name: '',
       description: '',
-      price: 10000,
-      category: 'Main Course',
-      isAvailable: true
+      price: '',
+      category: category,
+      isAvailable: true,
+      imageUrl: ''
+    });
+    setZoomFactor(100);
+    setImageTab('upload');
+    setIsMenuModalOpen(true);
+  };
+
+  const openEditModal = (item, index) => {
+    setEditingItemIndex(index);
+    setModalForm({
+      name: item.name,
+      description: item.description || '',
+      price: item.price ? (item.price / 100).toString() : '',
+      category: item.category || 'Starters',
+      isAvailable: item.isAvailable !== false,
+      imageUrl: item.imageUrl || ''
+    });
+    setZoomFactor(100);
+    setImageTab(item.imageUrl ? 'url' : 'upload');
+    setIsMenuModalOpen(true);
+  };
+
+  const handleSaveModalItem = () => {
+    if (!modalForm.name.trim()) {
+      setError('Item Name is required');
+      return;
+    }
+    const priceVal = parseFloat(modalForm.price);
+    if (isNaN(priceVal) || priceVal < 0) {
+      setError('Please enter a valid price');
+      return;
+    }
+
+    const priceInPaise = Math.round(priceVal * 100);
+
+    if (editingItemIndex === -1) {
+      // Create new
+      const newItem = {
+        itemId: `item_${Date.now()}`,
+        name: modalForm.name,
+        description: modalForm.description,
+        price: priceInPaise,
+        category: modalForm.category,
+        isAvailable: modalForm.isAvailable,
+        imageUrl: modalForm.imageUrl
+      };
+      setMenuItems([...menuItems, newItem]);
+    } else {
+      // Edit existing
+      const updated = [...menuItems];
+      updated[editingItemIndex] = {
+        ...updated[editingItemIndex],
+        name: modalForm.name,
+        description: modalForm.description,
+        price: priceInPaise,
+        category: modalForm.category,
+        isAvailable: modalForm.isAvailable,
+        imageUrl: modalForm.imageUrl
+      };
+      setMenuItems(updated);
+    }
+    setIsMenuModalOpen(false);
+    setError('');
+  };
+
+  const handleModalImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+      setError('Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.');
+      return;
+    }
+
+    setError('');
+    setInfo('');
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const arrayBuffer = event.target.result;
+      try {
+        const response = await axios.post(`${API_BASE}/host/menu/upload-image`, arrayBuffer, {
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+            'X-Filename': file.name,
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.data.success && response.data.data.url) {
+          setModalForm(prev => ({ ...prev, imageUrl: response.data.data.url }));
+          setInfo('Image uploaded successfully!');
+        } else {
+          setError(response.data.message || 'Upload failed');
+        }
+      } catch (err) {
+        console.error(err);
+        setError(err.response?.data?.message || 'Failed to upload image.');
+      }
     };
-    setMenuItems([...menuItems, newItem]);
+    reader.onerror = () => {
+      setError('Failed to read file.');
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const addMenuItem = () => {
+    openCreateModal('Starters');
   };
 
   const removeMenuItem = (index) => {
@@ -936,7 +1113,7 @@ export default function MerchantDashboard() {
           <div className="animate-fade-in">
             <div className="flex justify-between items-center mb-8 flex-wrap gap-4">
               <div>
-                <h1 className="font-outfit text-2xl font-black text-foreground mb-2">Menu Manager</h1>
+                <h1 className="font-outfit text-2xl font-black text-foreground mb-2">Food Items Catalog</h1>
                 <p className="text-muted-foreground text-xs font-semibold">Design the digital ordering catalog displayed on the tabletop tablets.</p>
               </div>
               {approvedOutlets.length > 0 && (
@@ -979,94 +1156,98 @@ export default function MerchantDashboard() {
                   </select>
                 </div>
 
-                {menuItems.length === 0 ? (
-                  <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
-                    <UtensilsCrossed className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                    <p className="text-sm font-bold text-foreground">Your menu is empty</p>
-                    <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">Click &ldquo;Add Item&rdquo; above to start adding dishes to your menu.</p>
-                  </div>
-                ) : (
-                  <div className="p-5 rounded-2xl overflow-x-auto bg-card/10 border border-border/40">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
-                          <th className="pb-4 pr-4">Item Name</th>
-                          <th className="pb-4 pr-4">Description</th>
-                          <th className="pb-4 pr-4">Price (INR)</th>
-                          <th className="pb-4 pr-4">Category</th>
-                          <th className="pb-4 pr-4">Available</th>
-                          <th className="pb-4 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border/40">
-                        {menuItems.map((item, index) => (
-                          <tr key={item.itemId} className="hover:bg-muted/10">
-                            <td className="py-4 pr-4">
-                              <input
-                                type="text"
-                                value={item.name}
-                                required
-                                placeholder="Item Name"
-                                onChange={(e) => updateMenuItemField(index, 'name', e.target.value)}
-                                className="bg-background border border-input rounded-xl px-3 py-2 text-foreground w-40 focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent font-semibold"
-                              />
-                            </td>
-                            <td className="py-4 pr-4">
-                              <input
-                                type="text"
-                                value={item.description}
-                                placeholder="Description"
-                                onChange={(e) => updateMenuItemField(index, 'description', e.target.value)}
-                                className="bg-background border border-input rounded-xl px-3 py-2 text-foreground w-60 focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent font-semibold"
-                              />
-                            </td>
-                            <td className="py-4 pr-4">
-                              <input
-                                type="text"
-                                value={item.price ? (item.price / 100).toString() : ''}
-                                required
-                                placeholder="Price"
-                                onChange={(e) => {
-                                  const cleaned = e.target.value.replace(/[^\d.]/g, '');
-                                  updateMenuItemField(index, 'price', parseFloat(cleaned) * 100 || 0);
-                                }}
-                                className="bg-background border border-input rounded-xl px-3 py-2 text-foreground w-20 focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent font-semibold"
-                              />
-                            </td>
-                            <td className="py-4 pr-4">
-                              <select
-                                value={item.category}
-                                onChange={(e) => updateMenuItemField(index, 'category', e.target.value)}
-                                className="bg-background border border-input rounded-xl px-3 py-2 text-foreground w-32 focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer font-semibold"
+                <div className="space-y-12">
+                  {MENU_CATEGORIES.map((category) => {
+                    const items = menuItems.filter(item => (item.category || '').toLowerCase() === category.toLowerCase());
+                    return (
+                      <div key={category} className="space-y-4">
+                        <div className="flex items-center space-x-2 border-b border-border/20 pb-2">
+                          <span className={`w-2.5 h-2.5 rounded-full ${getCategoryDotColor(category)}`} />
+                          <h3 className="font-outfit text-sm font-bold text-foreground tracking-wider">{category.toUpperCase()}</h3>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                          {/* CREATE NEW Card */}
+                          <div
+                            onClick={() => openCreateModal(category)}
+                            className="border border-dashed border-border/60 hover:border-primary/80 bg-card/5 hover:bg-card/10 rounded-2xl p-6 flex flex-col items-center justify-center text-center cursor-pointer min-h-[280px] transition-all duration-300 group"
+                          >
+                            <div className="w-10 h-10 rounded-full border border-border/40 flex items-center justify-center mb-4 group-hover:border-primary/80 group-hover:bg-primary/5 transition-colors">
+                              <Plus className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                            </div>
+                            <span className="font-outfit text-xs font-bold text-foreground tracking-wide group-hover:text-primary transition-colors">CREATE NEW</span>
+                            <span className="text-[10px] text-muted-foreground mt-2 max-w-[150px] leading-relaxed font-semibold">
+                              Add food item to dynamic {category.toLowerCase()} menu
+                            </span>
+                          </div>
+
+                          {/* Items in this category */}
+                          {items.map((item) => {
+                            const originalIndex = menuItems.findIndex(i => i.itemId === item.itemId);
+                            return (
+                              <div
+                                key={item.itemId}
+                                className="relative flex flex-col justify-between overflow-hidden rounded-2xl border border-border/40 bg-card/10 p-4 transition-all duration-300 hover:-translate-y-1 hover:border-primary/50 group"
                               >
-                                <option value="Starters">Starters</option>
-                                <option value="Main Course">Main Course</option>
-                                <option value="Dessert">Dessert</option>
-                                <option value="Beverages">Beverages</option>
-                              </select>
-                            </td>
-                            <td className="py-4 pr-4">
-                              <input
-                                type="checkbox"
-                                checked={item.isAvailable}
-                                onChange={(e) => updateMenuItemField(index, 'isAvailable', e.target.checked)}
-                                className="w-4 h-4 rounded accent-primary cursor-pointer"
-                              />
-                            </td>
-                            <td className="py-4 text-right">
-                              <button
-                                onClick={() => removeMenuItem(index)}
-                                className="p-2 bg-destructive/10 hover:bg-destructive/20 border border-destructive/20 rounded-lg text-destructive transition-all cursor-pointer"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                                {/* Overlay Edit/Delete Controls */}
+                                <div className="absolute top-6 right-6 z-10 flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openEditModal(item, originalIndex);
+                                    }}
+                                    className="p-1.5 bg-card/95 hover:bg-muted border border-border/40 rounded-lg text-foreground transition-all cursor-pointer shadow-sm"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      removeMenuItem(originalIndex);
+                                    }}
+                                    className="p-1.5 bg-destructive/95 hover:bg-destructive border border-destructive/20 rounded-lg text-white transition-all cursor-pointer shadow-sm"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+
+                                <div
+                                  onClick={() => openEditModal(item, originalIndex)}
+                                  className="cursor-pointer flex-1 flex flex-col"
+                                >
+                                  <div className="relative w-full h-40 overflow-hidden rounded-xl bg-muted/10 mb-4 shrink-0 border border-border/20">
+                                    {item.imageUrl ? (
+                                      <img
+                                        src={item.imageUrl}
+                                        alt={item.name}
+                                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                      />
+                                    ) : (
+                                      <div className="w-full h-full flex flex-col items-center justify-center text-[10px] text-muted-foreground font-bold uppercase p-4 text-center">
+                                        <UtensilsCrossed className="w-8 h-8 mb-2 opacity-40" />
+                                        No Image
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <h4 className="font-outfit text-xs font-black text-foreground uppercase tracking-wider mb-2 line-clamp-1">{item.name}</h4>
+                                  <p className="text-[10px] text-muted-foreground line-clamp-3 mb-4 h-12 leading-relaxed font-semibold">{item.description || 'No description.'}</p>
+                                </div>
+
+                                <button
+                                  onClick={() => openEditModal(item, originalIndex)}
+                                  className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold py-2.5 rounded-xl text-center text-xs tracking-wider transition-colors mt-auto shadow-md"
+                                >
+                                  ₹{(item.price / 100).toFixed(2)}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </>
             ) : (
               <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
@@ -1132,6 +1313,224 @@ export default function MerchantDashboard() {
           </div>
         )}
       </main>
+
+      {/* Food Catalog Item Modal */}
+      {isMenuModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in exclude-uppercase">
+          <div className="w-full max-w-2xl bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative text-foreground">
+            {/* Close button */}
+            <button
+              onClick={() => setIsMenuModalOpen(false)}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <h3 className="font-outfit text-md font-bold uppercase tracking-wider mb-6 text-foreground">
+              {editingItemIndex === -1 ? 'Create Food Catalog Item' : 'Edit Food Catalog Item'}
+            </h3>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Left Column - Form Fields */}
+              <div className="space-y-4">
+                <div>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Name of item"
+                    value={modalForm.name}
+                    onChange={(e) => setModalForm(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                </div>
+
+                <div>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Price (₹)"
+                    value={modalForm.price}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/[^\d.]/g, '');
+                      setModalForm(prev => ({ ...prev, price: cleaned }));
+                    }}
+                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                </div>
+
+                <div>
+                  <textarea
+                    placeholder="Brief description about the dish..."
+                    value={modalForm.description}
+                    onChange={(e) => setModalForm(prev => ({ ...prev, description: e.target.value }))}
+                    className="w-full h-24 bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                </div>
+
+                <div>
+                  <select
+                    value={modalForm.category}
+                    onChange={(e) => setModalForm(prev => ({ ...prev, category: e.target.value }))}
+                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer"
+                  >
+                    {MENU_CATEGORIES.map(cat => (
+                      <option key={cat} value={cat} className="bg-card text-foreground">
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center space-x-2 pt-2">
+                  <input
+                    type="checkbox"
+                    id="modalItemAvailable"
+                    checked={modalForm.isAvailable}
+                    onChange={(e) => setModalForm(prev => ({ ...prev, isAvailable: e.target.checked }))}
+                    className="w-4 h-4 rounded accent-primary cursor-pointer border border-input"
+                  />
+                  <label htmlFor="modalItemAvailable" className="text-xs font-bold text-foreground cursor-pointer uppercase select-none">
+                    Available for Ordering
+                  </label>
+                </div>
+              </div>
+
+              {/* Right Column - Image Upload and Preview */}
+              <div className="flex flex-col justify-between space-y-4">
+                <div className="relative w-full h-44 overflow-hidden rounded-xl border border-border/40 bg-muted/30 dark:bg-black/40 flex items-center justify-center shrink-0">
+                  {modalForm.imageUrl ? (
+                    <div className="w-full h-full overflow-hidden">
+                      <img
+                        src={modalForm.imageUrl}
+                        alt="Preview"
+                        style={{ transform: `scale(${zoomFactor / 100})` }}
+                        className="w-full h-full object-cover transition-transform"
+                      />
+                    </div>
+                  ) : (
+                    <div className="text-center text-muted-foreground text-xs p-4 font-semibold uppercase">
+                      <UtensilsCrossed className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                      <span className="text-foreground/70">No Cover Photo</span>
+                    </div>
+                  )}
+
+                  {/* Pencil and Delete overlay */}
+                  <div className="absolute top-3 right-3 flex space-x-2 bg-black/40 backdrop-blur-sm p-1 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="p-1 hover:text-primary text-white transition-colors"
+                      title="Edit Image"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    {modalForm.imageUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setModalForm(prev => ({ ...prev, imageUrl: '' }))}
+                        className="p-1 hover:text-destructive text-white transition-colors"
+                        title="Delete Image"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Upload Tab Navigation */}
+                <div className="border-b border-border/40">
+                  <div className="flex space-x-4 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setImageTab('upload')}
+                      className={`pb-2 border-b-2 transition-all uppercase ${imageTab === 'upload' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                    >
+                      Upload File
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setImageTab('url')}
+                      className={`pb-2 border-b-2 transition-all uppercase ${imageTab === 'url' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                    >
+                      Direct URL Link
+                    </button>
+                  </div>
+                </div>
+
+                {/* Upload Inputs */}
+                <div className="min-h-[48px] flex items-center">
+                  {imageTab === 'upload' ? (
+                    <div className="w-full">
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        accept="image/*"
+                        onChange={handleModalImageUpload}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full bg-background hover:bg-muted border border-input rounded-xl py-2.5 text-xs font-semibold text-foreground transition-all cursor-pointer text-center uppercase"
+                      >
+                        Choose Cover Image
+                      </button>
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Direct Image URL"
+                      value={modalForm.imageUrl}
+                      onChange={(e) => setModalForm(prev => ({ ...prev, imageUrl: e.target.value }))}
+                      className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                  )}
+                </div>
+
+                {/* Zoom Factor Slider */}
+                {modalForm.imageUrl && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] font-bold text-muted-foreground uppercase">
+                      <span>Zoom Factor</span>
+                      <span className="text-primary">{zoomFactor}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="100"
+                      max="200"
+                      value={zoomFactor}
+                      onChange={(e) => setZoomFactor(parseInt(e.target.value, 10))}
+                      className="w-full h-1 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                  </div>
+                )}
+
+                <div className="text-center text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">
+                  Catalog cover photo
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex justify-end space-x-3 pt-6 border-t border-border/40 mt-6">
+              <button
+                type="button"
+                onClick={() => setIsMenuModalOpen(false)}
+                className="px-5 py-2.5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer uppercase"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveModalItem}
+                className="px-6 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground font-bold rounded-xl transition-all text-xs cursor-pointer uppercase shadow-md"
+              >
+                Save Item
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Become Advertiser Modal */}
       {showBecomeAdvertiserModal && (

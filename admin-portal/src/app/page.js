@@ -1009,12 +1009,12 @@ export default function AdminPortal() {
 
       {/* Side Navigation Bar */}
       <aside
-        className={`bg-card border-r border-border p-4 flex flex-col justify-between hidden md:flex transition-all duration-300 h-screen sticky top-0 shrink-0 select-none ${sidebarCollapsed ? 'w-16' : 'w-56'
+        className={`bg-card border-r border-border py-4 px-0 flex flex-col justify-between hidden md:flex transition-all duration-300 h-screen sticky top-0 shrink-0 select-none ${sidebarCollapsed ? 'w-16' : 'w-56'
           }`}
       >
         <div>
           {/* Logo & Sidebar toggle */}
-          <div className={`flex items-center mb-8 ${sidebarCollapsed ? 'justify-center' : 'space-x-2.5'}`}>
+          <div className={`flex items-center mb-8 ${sidebarCollapsed ? 'justify-center' : 'px-4 space-x-2.5'}`}>
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
               className="relative group w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shrink-0 shadow-md shadow-blue-500/20 cursor-pointer overflow-hidden transition-all duration-300"
@@ -1044,37 +1044,26 @@ export default function AdminPortal() {
             )}
           </div>
 
-          <nav className="space-y-1.5">
+          <nav className="space-y-1">
             {navItems.map((item) => {
-              const badgeCount = getTabBadgeCount(item.id);
               return (
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer relative ${activeTab === item.id
-                    ? 'bg-primary text-primary-foreground shadow-md'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                    } ${sidebarCollapsed ? 'justify-center px-0' : 'px-3.5 space-x-2.5'}`}
+                  className={`w-full flex items-center py-3 text-xs font-bold transition-all duration-200 cursor-pointer relative ${activeTab === item.id
+                    ? 'bg-primary/10 text-primary border-l-4 border-primary'
+                    : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground border-l-4 border-transparent'
+                    } ${sidebarCollapsed ? 'justify-center px-0' : 'px-4 space-x-3'}`}
                   title={item.label}
                 >
                   <div className="shrink-0 relative">
                     {item.icon}
-                    {sidebarCollapsed && badgeCount > 0 && (
-                      <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-destructive border border-card shadow-sm animate-pulse" />
-                    )}
                   </div>
                   {!sidebarCollapsed && (
                     <div className="flex-1 flex items-center justify-between min-w-0">
                       <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="truncate">
                         {item.label}
                       </motion.span>
-                      {badgeCount > 0 && (
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black leading-none shrink-0 ${
-                          activeTab === item.id ? 'bg-primary-foreground text-primary' : 'bg-destructive text-destructive-foreground'
-                        }`}>
-                          {badgeCount}
-                        </span>
-                      )}
                     </div>
                   )}
                 </button>
@@ -1084,10 +1073,10 @@ export default function AdminPortal() {
         </div>
 
         {/* Sidebar Footer */}
-        <div className="space-y-2">
+        <div className="space-y-2 px-3">
           <button
             onClick={toggleTheme}
-            className={`w-full flex items-center py-2 rounded-xl border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-all cursor-pointer ${sidebarCollapsed ? 'justify-center px-0' : 'px-3.5 space-x-2.5 text-xs font-semibold'
+            className={`w-full flex items-center py-2 rounded-xl border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-all cursor-pointer ${sidebarCollapsed ? 'justify-center px-0' : 'px-3 space-x-2.5 text-xs font-semibold'
               }`}
           >
             {theme === 'dark' ? <Sun className="w-3.5 h-3.5 text-amber-500 shrink-0" /> : <Moon className="w-3.5 h-3.5 text-indigo-500 shrink-0" />}
@@ -1096,7 +1085,7 @@ export default function AdminPortal() {
 
           <button
             onClick={handleLogout}
-            className={`w-full flex items-center py-2 rounded-xl border border-destructive/20 text-destructive/80 hover:text-destructive hover:bg-destructive/10 transition-all cursor-pointer ${sidebarCollapsed ? 'justify-center px-0' : 'px-3.5 space-x-2.5 text-xs font-semibold'
+            className={`w-full flex items-center py-2 rounded-xl border border-destructive/20 text-destructive/80 hover:text-destructive hover:bg-destructive/10 transition-all cursor-pointer ${sidebarCollapsed ? 'justify-center px-0' : 'px-3 space-x-2.5 text-xs font-semibold'
               }`}
           >
             <LogOut className="w-3.5 h-3.5 shrink-0" />
@@ -1109,7 +1098,7 @@ export default function AdminPortal() {
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
 
         {/* Header Bar */}
-        <header className="h-16 border-b border-border bg-card/40 backdrop-blur-md px-6 flex items-center justify-between shrink-0">
+        <header className="h-16 border-b border-border bg-card/40 backdrop-blur-md px-6 flex items-center justify-between shrink-0 relative z-20">
           <div className="flex items-center space-x-4">
             <button
               onClick={() => setMobileMenuOpen(true)}
@@ -1154,7 +1143,7 @@ export default function AdminPortal() {
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
                     transition={{ duration: 0.15 }}
-                    className="absolute right-0 mt-2.5 w-80 bg-white dark:bg-neutral-900 border border-border rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col font-sans"
+                    className="absolute right-0 mt-2.5 w-80 bg-card border border-border rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col font-sans"
                   >
                     {/* Header */}
                     <div className="p-4 border-b border-border flex items-center justify-between bg-muted/20">

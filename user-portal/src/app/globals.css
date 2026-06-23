@@ -1,12 +1,12 @@
-@import url('https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,1..1000&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Monomaniac+One&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --font-sans: 'Google Sans Flex', sans-serif;
-  --font-heading: 'Monomaniac One', sans-serif;
+  --font-sans: 'Plus Jakarta Sans', sans-serif;
+  --font-heading: 'Outfit', sans-serif;
 
   --background: oklch(1 0 0);
   --foreground: oklch(0.148 0.004 228.8);
@@ -109,12 +109,11 @@ body {
 
 /* Custom Fonts & Styling Overrides */
 *, ::placeholder, input, button, select, textarea {
-  font-family: 'Google Sans Flex', sans-serif !important;
+  font-family: 'Plus Jakarta Sans', sans-serif !important;
 }
 
 h1, h2, h3, h4, h5, h6, .font-heading, [class*="font-heading"], [class*="font-outfit"] {
-  font-family: 'Monomaniac One', sans-serif !important;
-  font-weight: 400 !important;
+  font-family: 'Outfit', sans-serif !important;
 }
 
 code, pre, .font-mono, [class*="font-mono"] {

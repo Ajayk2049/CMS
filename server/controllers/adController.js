@@ -327,8 +327,12 @@ class AdController {
         return res.status(400).send({ success: false, message: 'Unsupported file type. Only MP4 and WEBM are allowed.' });
       }
 
+      // Route to tablet or screen subfolder under ads/
+      const deviceType = req.query.deviceType || 'tablet';
+      const targetSubdir = ['tablet', 'screen'].includes(deviceType) ? deviceType : 'tablet';
+
       const uniqueFilename = `vid_${uuidv4().replace(/-/g, '').slice(0, 16)}${ext}`;
-      const uploadsDir = path.join(__dirname, '..', 'uploads');
+      const uploadsDir = path.join(__dirname, '..', 'uploads', 'ads', targetSubdir);
       
       if (!fs.existsSync(uploadsDir)) {
         fs.mkdirSync(uploadsDir, { recursive: true });
@@ -337,8 +341,8 @@ class AdController {
       const filePath = path.join(uploadsDir, uniqueFilename);
       fs.writeFileSync(filePath, req.body);
 
-      // Return local server URL (the port can be dynamic from config or fallback to 8080)
-      const fileUrl = `http://localhost:${config.port || 8080}/uploads/${uniqueFilename}`;
+      // Return local server URL
+      const fileUrl = `http://localhost:${config.port || 8080}/uploads/ads/${targetSubdir}/${uniqueFilename}`;
 
       return res.status(200).send({
         success: true,
