@@ -84,6 +84,7 @@ function registerRoutes(fastify, options, done) {
     adminRoutes.post('/admin/hosts/review', adminController.reviewHostApplication);
     adminRoutes.get('/admin/bookings', adminController.getAdBookings);
     adminRoutes.post('/admin/bookings/review', adminController.reviewAdBooking);
+    adminRoutes.put('/admin/bookings/revoke/:bookingId', adminController.revokeBooking);
     adminRoutes.post('/admin/bookings/:bookingId/refund', adminController.refundBooking);
     adminRoutes.post('/admin/rates', adminController.manageAdsRates);
     adminRoutes.get('/admin/stats', adminController.getStats);

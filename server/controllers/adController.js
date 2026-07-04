@@ -7,6 +7,30 @@ const phonePeService = require('../services/phonePeService');
 const config = require('../config/config');
 const { v4: uuidv4 } = require('uuid');
 
+const resolveMediaUrl = (mediaUrl, host) => {
+  if (!mediaUrl) return '';
+  if (mediaUrl.startsWith('http')) {
+    if (mediaUrl.includes('localhost:') || mediaUrl.includes('127.0.0.1:')) {
+      const parts = mediaUrl.split('/uploads/');
+      return `http://${host}/uploads/${parts[1]}`;
+    }
+    return mediaUrl;
+  }
+  return `http://${host}${mediaUrl}`;
+};
+
+async function generateBookingId() {
+  let bookingId;
+  let exists = true;
+  while (exists) {
+    const randomPart = Math.random().toString(36).substring(2, 7).toUpperCase();
+    bookingId = `AD-${randomPart}`;
+    const count = await AdBooking.countDocuments({ bookingId });
+    if (count === 0) exists = false;
+  }
+  return bookingId;
+}
+
 class AdController {
   /**
    * Get unique states with approved host outlets
@@ -138,7 +162,7 @@ class AdController {
       // Generate IDs first
       const transactionId = `TXN_AD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
       const orderId = `ORD_AD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
-      const bookingId = `B_${uuidv4().replace(/-/g, '').slice(0, 12)}`;
+      const bookingId = await generateBookingId();
 
       // Construct redirect URL with verifyBookingId parameter
       const finalRedirectUrl = redirectUrl.includes('?')
@@ -299,7 +323,14 @@ class AdController {
       const bookings = await AdBooking.find({ advertiserId: req.user.uid })
         .populate('outletId', 'outletName city state')
         .sort({ createdAt: -1 });
-      return res.status(200).send({ success: true, data: bookings });
+
+      const mappedBookings = bookings.map(b => {
+        const obj = b.toObject();
+        obj.mediaUrl = resolveMediaUrl(obj.mediaUrl, req.headers.host);
+        return obj;
+      });
+
+      return res.status(200).send({ success: true, data: mappedBookings });
     } catch (error) {
       console.error('getMyBookings Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to fetch bookings' });
@@ -307,54 +338,145 @@ class AdController {
   }
 
   /**
-   * Upload video raw binary payload and save to local disk
+   * Upload video raw binary payload, transcode using ffmpeg (Android Baseline, 720p, 30fps) and save to disk
    */
   async uploadVideo(req, res) {
     const fs = require('fs');
     const path = require('path');
+    const os = require('os');
+    const { pipeline } = require('stream/promises');
+    const ffmpeg = require('fluent-ffmpeg');
+    const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+    const config = require('../config/config');
+    const MediaLog = require('../models/MediaLog');
+
+    ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+    const filenameHeader = req.headers['x-filename'] || 'video.mp4';
+    const ext = path.extname(filenameHeader).toLowerCase();
     
-    // Check if body is buffer
-    if (!Buffer.isBuffer(req.body)) {
-      return res.status(400).send({ success: false, message: 'Invalid file payload. Expected raw binary buffer.' });
+    // Enforce file extension to only support mp4, webm
+    if (!['.mp4', '.webm'].includes(ext)) {
+      return res.status(400).send({ success: false, message: 'Unsupported file type. Only MP4 and WEBM are allowed.' });
     }
 
+    // Create an initial tracking row in the database media log table
+    let mediaLog;
     try {
-      const filenameHeader = req.headers['x-filename'] || 'video.mp4';
-      const ext = path.extname(filenameHeader).toLowerCase() || '.mp4';
-      
-      // Enforce file extension to only support mp4, webm
-      if (!['.mp4', '.webm'].includes(ext)) {
-        return res.status(400).send({ success: false, message: 'Unsupported file type. Only MP4 and WEBM are allowed.' });
+      mediaLog = new MediaLog({
+        originalFilename: filenameHeader,
+        status: 'processing'
+      });
+      await mediaLog.save();
+    } catch (dbErr) {
+      console.error('Failed to create MediaLog:', dbErr.message);
+      return res.status(500).send({ success: false, message: 'Failed to initialize upload tracking' });
+    }
+
+    // Route to tablet or screen subfolder under ads/
+    const deviceType = req.query.deviceType;
+    if (!deviceType || !['tablet', 'screen'].includes(deviceType)) {
+      return res.status(400).send({
+        success: false,
+        message: 'deviceType query parameter is required and must be "tablet" or "screen"'
+      });
+    }
+    const targetSubdir = deviceType;
+
+    // Resolution map: tablet = portrait 800x1280 (9:16), screen = landscape 1920x1080 (16:9)
+    const resolutionMap = {
+      tablet: '800x1280',
+      screen: '1920x1080'
+    };
+    const resolution = resolutionMap[deviceType];
+
+    // We output H.264 mp4 always for baseline compatibility
+    const uniqueFilename = `vid_${uuidv4().replace(/-/g, '').slice(0, 16)}.mp4`;
+    const uploadsDir = path.join(__dirname, '..', 'uploads', 'ads', targetSubdir);
+    
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const filePath = path.join(uploadsDir, uniqueFilename);
+    const tempPath = path.join(os.tmpdir(), `tmp-ad-upload-${Date.now()}${ext}`);
+
+    try {
+      // Stream the raw network payload directly to a temporary disk file.
+      // This solves the non-seekable pipe problem for BOTH MP4 and WebM.
+      await pipeline(req.body, fs.createWriteStream(tempPath));
+
+      // Run FFmpeg Transcoding using the temporary file path as source
+      await new Promise((resolve, reject) => {
+        ffmpeg(tempPath)
+          .videoCodec('libx264')
+          .size(resolution)
+          .fps(30)
+          .outputOptions([
+            '-profile:v baseline', 
+            '-level 3.1',          
+            '-pix_fmt yuv420p',    
+            '-movflags +faststart' // Crucial for low-powered Android download-and-stream
+          ])
+          .audioCodec('aac')
+          .audioChannels(2)
+          .on('end', resolve)
+          .on('error', reject)
+          .save(filePath);
+      });
+
+      // Clean up temp file safely on success
+      if (fs.existsSync(tempPath)) {
+        try {
+          fs.unlinkSync(tempPath);
+        } catch (err) {
+          console.error('Failed to delete temp file:', err.message);
+        }
       }
 
-      // Route to tablet or screen subfolder under ads/
-      const deviceType = req.query.deviceType || 'tablet';
-      const targetSubdir = ['tablet', 'screen'].includes(deviceType) ? deviceType : 'tablet';
+      // Update MediaLog as completed
+      mediaLog.status = 'completed';
+      mediaLog.finalizedFilename = uniqueFilename;
+      mediaLog.outputPath = filePath;
+      await mediaLog.save();
 
-      const uniqueFilename = `vid_${uuidv4().replace(/-/g, '').slice(0, 16)}${ext}`;
-      const uploadsDir = path.join(__dirname, '..', 'uploads', 'ads', targetSubdir);
-      
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
-
-      const filePath = path.join(uploadsDir, uniqueFilename);
-      fs.writeFileSync(filePath, req.body);
-
-      // Return local server URL
-      const fileUrl = `http://localhost:${config.port || 8080}/uploads/ads/${targetSubdir}/${uniqueFilename}`;
+      // Return relative server URL
+      const fileUrl = `/uploads/ads/${targetSubdir}/${uniqueFilename}`;
 
       return res.status(200).send({
         success: true,
-        message: 'Video uploaded successfully',
+        message: 'Video uploaded and optimized successfully',
         data: {
           filename: uniqueFilename,
           url: fileUrl
         }
       });
+
     } catch (error) {
-      console.error('uploadVideo Error:', error.message);
-      return res.status(500).send({ success: false, message: 'Failed to upload video due to server error' });
+      console.error('uploadVideo Transcoding Error:', error.message);
+      
+      // Clean up temp file safely on error
+      if (fs.existsSync(tempPath)) {
+        try {
+          fs.unlinkSync(tempPath);
+        } catch (err) {}
+      }
+
+      // Remove corrupt output file
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (err) {}
+      }
+
+      // Update MediaLog as failed
+      if (mediaLog) {
+        mediaLog.status = 'failed';
+        mediaLog.errorMessage = error.message;
+        await mediaLog.save();
+      }
+
+      return res.status(500).send({ success: false, message: 'Failed to upload and transcode video: ' + error.message });
     }
   }
 

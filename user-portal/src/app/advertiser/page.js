@@ -28,6 +28,13 @@ import { config } from '@/config';
 
 const API_BASE = config.apiUrl;
 
+const resolveMediaUrl = (url) => {
+  if (!url) return '';
+  if (url.startsWith('http')) return url;
+  const base = API_BASE.split('/api/v1')[0];
+  return `${base}${url}`;
+};
+
 export default function AdvertiserDashboard() {
   const router = useRouter();
 
@@ -244,6 +251,11 @@ export default function AdvertiserDashboard() {
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    if (!selectedDeviceType) {
+      setError('Please select a Display Type (Tablet or Screen) before uploading.');
+      return;
+    }
 
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
     if (!['.mp4', '.webm'].includes(ext)) {
@@ -594,7 +606,7 @@ export default function AdvertiserDashboard() {
                                   </button>
                                 )}
                                 <button
-                                  onClick={() => setPreviewVideoUrl(booking.mediaUrl)}
+                                  onClick={() => setPreviewVideoUrl(resolveMediaUrl(booking.mediaUrl))}
                                   className="p-1.5 bg-primary/10 hover:bg-primary/20 border border-primary/20 rounded-xl text-primary transition-all cursor-pointer flex items-center justify-center"
                                   title="Play Video Asset"
                                 >
@@ -649,13 +661,13 @@ export default function AdvertiserDashboard() {
                                     <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Video Asset Preview</span>
                                     <div className="w-full max-w-[320px] aspect-video rounded-xl border border-border/40 bg-black overflow-hidden relative">
                                       <video
-                                        src={booking.mediaUrl}
+                                        src={resolveMediaUrl(booking.mediaUrl)}
                                         controls
                                         className="w-full h-full object-contain"
                                       />
                                     </div>
                                     <a
-                                      href={booking.mediaUrl}
+                                      href={resolveMediaUrl(booking.mediaUrl)}
                                       target="_blank"
                                       rel="noreferrer"
                                       className="text-xs text-primary hover:underline font-bold mt-1 inline-block"
@@ -791,28 +803,40 @@ export default function AdvertiserDashboard() {
                       <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Media File Asset</label>
 
                       <div className="space-y-4">
-                        {/* File Upload Box */}
+                        {/* File Upload Box — disabled until device type is selected */}
                         <div className="flex items-center space-x-3">
-                          <label className="flex-1 flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-6 cursor-pointer transition-all">
-                            <Upload className="w-5 h-5 text-muted-foreground mb-2" />
-                            <span className="text-xs font-bold text-foreground">
-                              {uploading ? 'Uploading Video...' : 'Upload Video File (.mp4, .webm)'}
-                            </span>
-                            <span className="text-[10px] text-muted-foreground mt-1">Raw binary file upload</span>
-                            <input
-                              type="file"
-                              accept="video/mp4,video/webm"
-                              onChange={handleFileUpload}
-                              disabled={uploading}
-                              className="hidden"
-                            />
-                          </label>
+                          {!selectedDeviceType ? (
+                            <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-border/40 rounded-xl py-6 opacity-50 cursor-not-allowed">
+                              <Upload className="w-5 h-5 text-muted-foreground mb-2" />
+                              <span className="text-xs font-bold text-foreground">
+                                Select a Display Type first to upload
+                              </span>
+                              <span className="text-[10px] text-muted-foreground mt-1">Tablet: 800×1280 portrait · Screen: 1920×1080 landscape</span>
+                            </div>
+                          ) : (
+                            <label className="flex-1 flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-6 cursor-pointer transition-all">
+                              <Upload className="w-5 h-5 text-muted-foreground mb-2" />
+                              <span className="text-xs font-bold text-foreground">
+                                {uploading ? 'Uploading Video...' : 'Upload Video File (.mp4, .webm)'}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground mt-1">
+                                Will be transcoded to {selectedDeviceType === 'tablet' ? '800×1280 portrait' : '1920×1080 landscape'}
+                              </span>
+                              <input
+                                type="file"
+                                accept="video/mp4,video/webm"
+                                onChange={handleFileUpload}
+                                disabled={uploading}
+                                className="hidden"
+                              />
+                            </label>
+                          )}
                         </div>
 
                         {/* Or URL input */}
                         <div className="relative">
                           <input
-                            type="url"
+                            type="text"
                             placeholder="Or, paste video URL (e.g. https://mybucket.com/ads/commercial.mp4)"
                             value={mediaUrl}
                             onChange={(e) => setMediaUrl(e.target.value)}
@@ -825,7 +849,7 @@ export default function AdvertiserDashboard() {
                           <div className="p-3 bg-muted/40 rounded-xl border border-border/40">
                             <p className="text-[10px] font-bold text-muted-foreground mb-2 uppercase">Video Preview</p>
                             <video
-                              src={mediaUrl}
+                              src={resolveMediaUrl(mediaUrl)}
                               controls
                               className="w-full max-h-40 rounded-lg bg-black"
                             />

@@ -31,7 +31,7 @@ const merchantSockets = new Map();
 // Fastify Setup (REST & WebSocket)
 // ----------------------------------------------------
 const fastify = Fastify({ 
-  logger: true,
+  logger: { level: 'error' },
   bodyLimit: 1048576 // 1MB default body limit
 });
 
@@ -48,6 +48,19 @@ async function startFastify() {
   });
 
   await fastify.register(websocket);
+
+  // Clean API route logger (skips OPTIONS and device sync polls)
+  fastify.addHook('onRequest', (request, reply, done) => {
+    const url = request.raw.url || '';
+    if (
+      request.method !== 'OPTIONS' && 
+      !url.includes('/auth/device/ads') && 
+      !url.includes('/ws')
+    ) {
+      console.log(`\x1b[36m[API]\x1b[0m ${request.method} ${url}`);
+    }
+    done();
+  });
 
   // Global IP rate limiting (150 requests per minute per IP)
   await fastify.register(rateLimit, {
@@ -111,10 +124,7 @@ async function startFastify() {
   fastify.addContentTypeParser(
     ['application/octet-stream', 'video/mp4', 'video/webm', 'image/jpeg', 'image/png', 'image/webp'],
     function (req, payload, done) {
-      const chunks = [];
-      payload.on('data', chunk => chunks.push(chunk));
-      payload.on('end', () => done(null, Buffer.concat(chunks)));
-      payload.on('error', err => done(err));
+      done(null, payload); // Pass the raw payload stream through to req.body
     }
   );
 
@@ -146,6 +156,30 @@ async function startFastify() {
   await mongoose.connect(config.mongoUri);
   console.log('[Database] Connected to MongoDB');
 
+  // Run media logs retention cleanup on boot
+  const { cleanupOldMediaLogs } = require('./utils/mediaCleanup');
+  cleanupOldMediaLogs().catch(err => console.error('[CLEANUP] Boot cleanup failed:', err.message));
+
+  // Run boot-time cleanup of orphaned temporary upload files
+  (() => {
+    try {
+      const os = require('os');
+      const tempDir = os.tmpdir();
+      const files = fs.readdirSync(tempDir);
+      let count = 0;
+      for (const file of files) {
+        if (file.startsWith('tmp-ad-upload-')) {
+          fs.unlinkSync(path.join(tempDir, file));
+          count++;
+        }
+      }
+      if (count > 0) {
+        console.log(`[CLEANUP] Removed ${count} orphaned temporary upload files.`);
+      }
+    } catch (err) {
+      console.error('[CLEANUP] Failed to clear temp files:', err.message);
+    }
+  })();
 
   // Seed some default pricing plans if none exist
   const ratesCount = await AdsRates.countDocuments({});
@@ -446,6 +480,57 @@ const orderServiceHandlers = {
       const order = await Order.findOne({ orderId });
       if (!order) {
         return callback({ code: grpc.status.NOT_FOUND, message: `Order ${orderId} not found` });
+      }
+
+      // If payment is pending, query PhonePe status check
+      if (order.paymentStatus === 'pending') {
+        let mappedStatus = 'PENDING';
+        let checkResult = { status: 'PENDING', code: 'PAYMENT_PENDING', raw: null };
+        try {
+          checkResult = await phonePeService.checkTransactionStatus(order.transactionId);
+          mappedStatus = checkResult.status; // COMPLETED, FAILED, PENDING
+          
+          console.log(`[gRPC Order Status Check for ${orderId}]:`, checkResult);
+
+          if (config.demoMode && (mappedStatus === 'FAILED' || checkResult.code === 'TRANSACTION_NOT_FOUND')) {
+            mappedStatus = 'COMPLETED';
+            checkResult.code = 'PAYMENT_SUCCESS';
+          }
+        } catch (err) {
+          console.error('[gRPC Order Status Check Error]:', err.message);
+          if (config.demoMode) {
+            mappedStatus = 'COMPLETED';
+            checkResult.code = 'PAYMENT_SUCCESS';
+          }
+        }
+
+        if (mappedStatus === 'COMPLETED') {
+          // Update transaction ledger
+          await PhonePeTransaction.updateOne(
+            { transactionId: order.transactionId },
+            { 
+              status: 'completed',
+              responseCode: checkResult.code || 'PAYMENT_SUCCESS',
+              rawCallbackPayload: checkResult.raw || { demoMode: true }
+            }
+          );
+
+          // Update order status
+          order.paymentStatus = 'completed';
+          await order.save();
+        } else if (mappedStatus === 'FAILED') {
+          await PhonePeTransaction.updateOne(
+            { transactionId: order.transactionId },
+            { 
+              status: 'failed',
+              responseCode: checkResult.code || 'PAYMENT_ERROR',
+              rawCallbackPayload: checkResult.raw || { demoMode: true }
+            }
+          );
+
+          order.paymentStatus = 'failed';
+          await order.save();
+        }
       }
 
       callback(null, {

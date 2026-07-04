@@ -11,11 +11,35 @@ const crypto = require('crypto');
 const validator = require('../utils/validation');
 const { v4: uuidv4 } = require('uuid');
 
+const resolveMediaUrl = (mediaUrl, host) => {
+  if (!mediaUrl) return '';
+  if (mediaUrl.startsWith('http')) {
+    if (mediaUrl.includes('localhost:') || mediaUrl.includes('127.0.0.1:')) {
+      const parts = mediaUrl.split('/uploads/');
+      return `http://${host}/uploads/${parts[1]}`;
+    }
+    return mediaUrl;
+  }
+  return `http://${host}${mediaUrl}`;
+};
+
 function verifyPassword(password, storedPassword) {
   if (!storedPassword || !storedPassword.includes(':')) return false;
   const [salt, originalHash] = storedPassword.split(':');
   const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+}
+
+async function generateDeviceId(prefix) {
+  let deviceId;
+  let exists = true;
+  while (exists) {
+    const randomPart = Math.random().toString(36).substring(2, 7).toUpperCase();
+    deviceId = `DEV-${prefix}-${randomPart}`;
+    const count = await Device.countDocuments({ deviceId });
+    if (count === 0) exists = false;
+  }
+  return deviceId;
 }
 
 class AdminController {
@@ -69,7 +93,7 @@ class AdminController {
         const prefix = app.deviceType === 'tablet' ? 'TAB' : 'SCR';
         
         for (let i = 0; i < app.quantity; i++) {
-          const deviceId = `DEV_${prefix}_${uuidv4().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+          const deviceId = await generateDeviceId(prefix);
           const device = new Device({
             deviceId,
             deviceType: app.deviceType,
@@ -115,7 +139,14 @@ class AdminController {
         .populate('advertiserId', 'phone name')
         .populate('outletId', 'outletName city state')
         .sort({ createdAt: -1 });
-      return res.status(200).send({ success: true, data: bookings });
+
+      const mappedBookings = bookings.map(b => {
+        const obj = b.toObject();
+        obj.mediaUrl = resolveMediaUrl(obj.mediaUrl, req.headers.host);
+        return obj;
+      });
+
+      return res.status(200).send({ success: true, data: mappedBookings });
     } catch (error) {
       console.error('admin getAdBookings Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to fetch bookings' });
@@ -160,10 +191,13 @@ class AdminController {
       
       await booking.save();
 
+      const obj = booking.toObject();
+      obj.mediaUrl = resolveMediaUrl(obj.mediaUrl, req.headers.host);
+
       return res.status(200).send({
         success: true,
         message: `Campaign has been ${booking.approvalStatus}`,
-        data: booking
+        data: obj
       });
     } catch (error) {
       console.error('reviewAdBooking Error:', error.message);
@@ -292,7 +326,7 @@ class AdminController {
       }
 
       const prefix = deviceType === 'tablet' ? 'TAB' : 'SCR';
-      const deviceId = `DEV_${prefix}_${uuidv4().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+      const deviceId = await generateDeviceId(prefix);
       
       const device = new Device({
         deviceId,
@@ -643,6 +677,90 @@ class AdminController {
       return res.status(500).send({ success: false, message: 'Failed to process refund: ' + error.message });
     }
   }
+
+  /**
+   * Revoke an approved ad booking (admin-initiated)
+   */
+  async revokeBooking(req, res) {
+    const { bookingId } = req.params;
+    const { adminPassword, reason } = req.body || {};
+
+    if (!adminPassword) {
+      return res.status(400).send({ success: false, message: 'Administrator password is required' });
+    }
+    if (!reason || !reason.trim()) {
+      return res.status(400).send({ success: false, message: 'Reason for revocation is required' });
+    }
+
+    const fs = require('fs');
+    const path = require('path');
+    const MediaLog = require('../models/MediaLog');
+
+    try {
+      const admin = await User.findById(req.user.uid);
+      if (!admin || admin.role !== 'admin') {
+        return res.status(403).send({ success: false, message: 'Unauthorized access' });
+      }
+
+      const isPasswordValid = verifyPassword(adminPassword, admin.password);
+      if (!isPasswordValid) {
+        return res.status(400).send({ success: false, message: 'Invalid password. Action rejected.' });
+      }
+
+      // Case-insensitive query to support any case variations
+      const booking = await AdBooking.findOne({
+        bookingId: { $regex: new RegExp(`^${bookingId}$`, 'i') }
+      });
+      if (!booking) {
+        return res.status(404).send({ success: false, message: 'Booking not found' });
+      }
+
+      // Robust check for 'approved' status (case-insensitive and trimmed)
+      if (!booking.approvalStatus || booking.approvalStatus.toLowerCase().trim() !== 'approved') {
+        return res.status(400).send({ success: false, message: 'Only approved bookings can be revoked' });
+      }
+
+      // Delete the video file locally
+      let localFilePath = null;
+      if (booking.mediaUrl) {
+        const urlParts = booking.mediaUrl.split('/uploads/');
+        if (urlParts.length > 1) {
+          const relativePath = urlParts[1];
+          localFilePath = path.join(__dirname, '..', 'uploads', relativePath);
+          if (fs.existsSync(localFilePath)) {
+            try {
+              fs.unlinkSync(localFilePath);
+            } catch (err) {
+              console.error('Failed to delete media file locally:', err.message);
+            }
+          }
+        }
+      }
+
+      // Log the delete/revoke action in medialogs
+      const mediaLog = new MediaLog({
+        originalFilename: booking.mediaUrl || 'unknown',
+        finalizedFilename: booking.mediaUrl ? path.basename(booking.mediaUrl) : 'unknown',
+        outputPath: localFilePath || 'deleted',
+        status: 'failed',
+        errorMessage: `Revoked by admin: ${admin.email || admin.name}. Reason: ${reason.trim()}`
+      });
+      await mediaLog.save();
+
+      booking.approvalStatus = 'revoked';
+      await booking.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'Campaign has been revoked, local media file deleted, and logged successfully',
+        data: booking
+      });
+    } catch (error) {
+      console.error('revokeBooking Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to revoke booking: ' + error.message });
+    }
+  }
+
 }
 
 module.exports = new AdminController();

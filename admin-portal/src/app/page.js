@@ -124,9 +124,16 @@ export default function AdminPortal() {
   const [userSubTab, setUserSubTab] = useState('merchant');
   const [rateSubTab, setRateSubTab] = useState('tablet');
   const [hostFilter, setHostFilter] = useState('all');
+  const [adFilter, setAdFilter] = useState('all');
 
   // Combined Requests Tab subtab
   const [requestsSubTab, setRequestsSubTab] = useState('campaigns'); // 'campaigns' or 'hosts'
+
+  // Revoke modal states
+  const [showRevokeModal, setShowRevokeModal] = useState(false);
+  const [revokePassword, setRevokePassword] = useState('');
+  const [revokeReason, setRevokeReason] = useState('');
+  const [revokeLoading, setRevokeLoading] = useState(false);
 
   // Dashboard graph filtering range
   const [chartRange, setChartRange] = useState(7); // 1, 3, 7, 10, 15, 30
@@ -174,6 +181,11 @@ export default function AdminPortal() {
     const savedHostFilter = localStorage.getItem('adminHostFilter');
     if (savedHostFilter) {
       setHostFilter(savedHostFilter);
+    }
+
+    const savedAdFilter = localStorage.getItem('adminAdFilter');
+    if (savedAdFilter) {
+      setAdFilter(savedAdFilter);
     }
 
     const savedRequestsSubTab = localStorage.getItem('adminRequestsSubTab');
@@ -233,6 +245,12 @@ export default function AdminPortal() {
       localStorage.setItem('adminHostFilter', hostFilter);
     }
   }, [hostFilter, mounted]);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminAdFilter', adFilter);
+    }
+  }, [adFilter, mounted]);
 
   useEffect(() => {
     if (mounted) {
@@ -592,6 +610,38 @@ export default function AdminPortal() {
     }
   };
 
+  const handleRevokeCampaign = async (e) => {
+    e.preventDefault();
+    if (!revokePassword) {
+      showNotification('error', 'Administrator password is required');
+      return;
+    }
+    if (!revokeReason.trim()) {
+      showNotification('error', 'Reason for revocation is required');
+      return;
+    }
+
+    setRevokeLoading(true);
+    try {
+      await axios.put(`${API_BASE}/admin/bookings/revoke/${selectedCampaign.bookingId}`, {
+        adminPassword: revokePassword,
+        reason: revokeReason
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      showNotification('success', `Campaign ${selectedCampaign.bookingId} revoked successfully`);
+      setShowRevokeModal(false);
+      setRevokePassword('');
+      setRevokeReason('');
+      setSelectedCampaign(null);
+      fetchCampaigns(token);
+    } catch (err) {
+      showNotification('error', err.response?.data?.message || 'Failed to revoke campaign');
+    } finally {
+      setRevokeLoading(false);
+    }
+  };
+
   const handleCreateRate = async (e) => {
     e.preventDefault();
     try {
@@ -924,9 +974,13 @@ export default function AdminPortal() {
 
   // Filtered campaigns for Pending Ads tab search and global search
   const filteredCampaigns = campaigns.filter(c => {
-    if (c.paymentStatus !== 'completed' || c.approvalStatus !== 'pending') {
-      return false;
-    }
+    if (c.paymentStatus !== 'completed') return false;
+    
+    // Status filters
+    if (adFilter === 'pending' && c.approvalStatus !== 'pending') return false;
+    if (adFilter === 'approved' && c.approvalStatus !== 'approved') return false;
+    if (adFilter === 'rejected' && (c.approvalStatus !== 'rejected' && c.approvalStatus !== 'revoked')) return false;
+
     const query = (searchQuery || campaignSearchQuery).trim().toLowerCase();
     if (!query) return true;
     return (
@@ -1234,8 +1288,11 @@ export default function AdminPortal() {
 
           {/* Notifications alert */}
           {notification.message && (
-            <div className={`fixed bottom-6 right-6 p-4 rounded-2xl shadow-2xl border text-xs font-bold z-50 flex items-center space-x-2 animate-bounce ${notification.type === 'success' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-destructive/10 text-destructive border-destructive/20'
-              }`}>
+            <div className={`fixed bottom-6 right-6 p-4 rounded-2xl shadow-2xl border text-xs font-bold z-[999] flex items-center space-x-2 animate-bounce ${
+              notification.type === 'success'
+                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+                : 'bg-destructive/10 text-destructive border-destructive/20'
+            }`}>
               <div className={`w-2 h-2 rounded-full ${notification.type === 'success' ? 'bg-emerald-500' : 'bg-destructive'}`} />
               <span>{notification.message}</span>
             </div>
@@ -1391,38 +1448,47 @@ export default function AdminPortal() {
                       <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Active</span>
                     </div>
 
-                    <div className="flex items-center justify-around h-[180px]">
-                      {/* Donut Circle */}
-                      <div className="relative w-24 h-24 shrink-0">
-                        <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                          <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--border)" strokeWidth="3" />
-                          <circle cx="18" cy="18" r="15.915" fill="none" stroke="#3b82f6" strokeWidth="3" strokeDasharray="60 40" strokeDashoffset="25" />
-                          <circle cx="18" cy="18" r="15.915" fill="none" stroke="#6366f1" strokeWidth="3" strokeDasharray="30 70" strokeDashoffset="85" />
-                        </svg>
-                        <div className="absolute inset-0 flex flex-col items-center justify-center leading-none text-center">
-                          <span className="text-lg font-black">{stats?.devices?.total || 0}</span>
-                          <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-widest mt-1">Total</span>
-                        </div>
-                      </div>
+                    {(() => {
+                      const totalDevs = stats?.devices?.total || devices.length || 0;
+                      const tabletCount = devices.filter(d => d.deviceType === 'tablet').length;
+                      const screenCount = devices.filter(d => d.deviceType === 'screen').length;
+                      const tabletPct = totalDevs > 0 ? Math.round((tabletCount / totalDevs) * 100) : 0;
+                      const screenPct = totalDevs > 0 ? Math.round((screenCount / totalDevs) * 100) : 0;
+                      return (
+                        <div className="flex items-center justify-around h-[180px]">
+                          {/* Donut Circle */}
+                          <div className="relative w-24 h-24 shrink-0">
+                            <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                              <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--border)" strokeWidth="3" />
+                              <circle cx="18" cy="18" r="15.915" fill="none" stroke="#3b82f6" strokeWidth="3" strokeDasharray={`${tabletPct} ${100 - tabletPct}`} strokeDashoffset="25" />
+                              <circle cx="18" cy="18" r="15.915" fill="none" stroke="#6366f1" strokeWidth="3" strokeDasharray={`${screenPct} ${100 - screenPct}`} strokeDashoffset={`${100 - tabletPct + 25}`} />
+                            </svg>
+                            <div className="absolute inset-0 flex flex-col items-center justify-center leading-none text-center">
+                              <span className="text-lg font-black">{totalDevs}</span>
+                              <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-widest mt-1">Total</span>
+                            </div>
+                          </div>
 
-                      {/* Legends */}
-                      <div className="space-y-3 text-xs font-semibold">
-                        <div className="flex items-center space-x-2">
-                          <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
-                          <div>
-                            <p className="text-foreground">Tablets</p>
-                            <p className="text-[9px] text-muted-foreground font-bold">60% of fleet</p>
+                          {/* Legends */}
+                          <div className="space-y-3 text-xs font-semibold">
+                            <div className="flex items-center space-x-2">
+                              <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                              <div>
+                                <p className="text-foreground">Tablets ({tabletCount})</p>
+                                <p className="text-[9px] text-muted-foreground font-bold">{tabletPct}% of fleet</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
+                              <div>
+                                <p className="text-foreground">Screens ({screenCount})</p>
+                                <p className="text-[9px] text-muted-foreground font-bold">{screenPct}% of fleet</p>
+                              </div>
+                            </div>
                           </div>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
-                          <div>
-                            <p className="text-foreground">Screens</p>
-                            <p className="text-[9px] text-muted-foreground font-bold">30% of fleet</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -1822,11 +1888,11 @@ export default function AdminPortal() {
                         <div className="space-y-4">
                           <h5 className="text-xs font-bold border-b border-border/50 pb-2 text-foreground">Venues & Devices</h5>
 
-                          {hosts.filter(h => h.userId?._id === selectedUser._id || h.userId === selectedUser._id).length === 0 ? (
+                          {hosts.filter(h => (h.userId?._id || h.userId)?.toString() === selectedUser._id?.toString()).length === 0 ? (
                             <p className="text-[10px] text-muted-foreground italic py-3">No hosting requests filed.</p>
                           ) : (
-                            hosts.filter(h => h.userId?._id === selectedUser._id || h.userId === selectedUser._id).map((app) => {
-                              const appDevices = devices.filter(d => d.hostApplicationId?._id === app._id || d.hostApplicationId === app._id);
+                            hosts.filter(h => (h.userId?._id || h.userId)?.toString() === selectedUser._id?.toString()).map((app) => {
+                              const appDevices = devices.filter(d => (d.hostApplicationId?._id || d.hostApplicationId)?.toString() === app._id?.toString());
                               return (
                                 <div key={app._id} className="p-4 bg-background/50 rounded-2xl border border-border/50 space-y-3">
                                   <div className="flex justify-between items-start">
@@ -1861,10 +1927,10 @@ export default function AdminPortal() {
                         <div className="space-y-4">
                           <h5 className="text-xs font-bold border-b border-border/50 pb-2 text-foreground">Campaign Bookings</h5>
 
-                          {campaigns.filter(c => c.advertiserId?._id === selectedUser._id || c.advertiserId === selectedUser._id).length === 0 ? (
+                          {campaigns.filter(c => (c.advertiserId?._id || c.advertiserId)?.toString() === selectedUser._id?.toString()).length === 0 ? (
                             <p className="text-[10px] text-muted-foreground italic py-3">No ad campaigns booked.</p>
                           ) : (
-                            campaigns.filter(c => c.advertiserId?._id === selectedUser._id || c.advertiserId === selectedUser._id).map((book) => (
+                            campaigns.filter(c => (c.advertiserId?._id || c.advertiserId)?.toString() === selectedUser._id?.toString()).map((book) => (
                               <div key={book.bookingId} className="p-4 bg-background/50 rounded-2xl border border-border/50 space-y-2">
                                 <div className="flex justify-between items-start">
                                   <p className="text-xs font-bold text-foreground">ID: {book.bookingId}</p>
@@ -1941,6 +2007,25 @@ export default function AdminPortal() {
                       ))}
                     </div>
                   )}
+
+                  {requestsSubTab === 'campaigns' && (
+                    <div className="flex space-x-2 bg-muted/30 p-1 rounded-xl border border-border/60">
+                      {['all', 'pending', 'approved', 'rejected'].map((filter) => (
+                        <button
+                          key={filter}
+                          onClick={() => {
+                            setAdFilter(filter);
+                          }}
+                          className={`text-[10px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${adFilter === filter
+                            ? 'bg-primary text-primary-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                          {filter}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Subtab Content */}
@@ -1949,8 +2034,20 @@ export default function AdminPortal() {
                     {filteredCampaigns.length === 0 ? (
                       <div className="text-center py-20 border border-border rounded-[32px] text-xs text-muted-foreground glassmorphism bg-card/20 animate-fade-in">
                         <UserCheck className="w-8 h-8 text-muted-foreground/40 mx-auto mb-4" />
-                        <p className="font-semibold">All booked and paid ad campaigns are resolved.</p>
-                        <p className="text-[10px] mt-1">Wait for advertisers to place new campaigns.</p>
+                        <p className="font-semibold">
+                          {adFilter === 'approved' 
+                            ? 'No approved ad campaigns found.' 
+                            : adFilter === 'rejected' 
+                            ? 'No rejected or revoked ad campaigns found.' 
+                            : adFilter === 'pending'
+                            ? 'All booked and paid ad campaigns are resolved.'
+                            : 'No ad campaigns found.'}
+                        </p>
+                        <p className="text-[10px] mt-1">
+                          {adFilter === 'approved' 
+                            ? 'Approve pending campaigns to see them here.' 
+                            : 'No matching campaigns are available.'}
+                        </p>
                       </div>
                     ) : (
                       <div className="mx-1 mt-2 overflow-x-auto animate-fade-in">
@@ -1998,29 +2095,55 @@ export default function AdminPortal() {
                                 </td>
                                 <td className="p-4">
                                   <div className="flex items-center justify-center space-x-2">
-                                    <button
-                                      onClick={() => handleReviewCampaign(booking.bookingId, 'approve')}
-                                      disabled={!watchedVideos.has(booking.bookingId)}
-                                      title={!watchedVideos.has(booking.bookingId) ? 'You must watch the video before approving' : 'Approve this campaign'}
-                                      className={`px-3 py-1.5 border font-bold rounded-lg transition-all flex items-center space-x-1 ${watchedVideos.has(booking.bookingId)
-                                        ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border-emerald-500/20 hover:border-emerald-500 cursor-pointer'
-                                        : 'bg-muted/50 text-muted-foreground border-border cursor-not-allowed opacity-50'
-                                        }`}
-                                    >
-                                      <Check className="w-3.5 h-3.5" />
-                                      <span>{watchedVideos.has(booking.bookingId) ? 'Approve' : 'Watch First'}</span>
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setSelectedCampaign(booking);
-                                        setDenyReasonText('');
-                                        setShowDenyModal(true);
-                                      }}
-                                      className="px-3 py-1.5 bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/20 hover:border-destructive font-bold rounded-lg transition-all cursor-pointer flex items-center space-x-1"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                      <span>Deny</span>
-                                    </button>
+                                    {booking.approvalStatus === 'pending' ? (
+                                      <>
+                                        <button
+                                          onClick={() => handleReviewCampaign(booking.bookingId, 'approve')}
+                                          disabled={!watchedVideos.has(booking.bookingId)}
+                                          title={!watchedVideos.has(booking.bookingId) ? 'You must watch the video before approving' : 'Approve this campaign'}
+                                          className={`px-3 py-1.5 border font-bold rounded-lg transition-all flex items-center space-x-1 ${watchedVideos.has(booking.bookingId)
+                                            ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border-emerald-500/20 hover:border-emerald-500 cursor-pointer'
+                                            : 'bg-muted/50 text-muted-foreground border-border cursor-not-allowed opacity-50'
+                                            }`}
+                                        >
+                                          <Check className="w-3.5 h-3.5" />
+                                          <span>{watchedVideos.has(booking.bookingId) ? 'Approve' : 'Watch First'}</span>
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            setSelectedCampaign(booking);
+                                            setDenyReasonText('');
+                                            setShowDenyModal(true);
+                                          }}
+                                          className="px-3 py-1.5 bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/20 hover:border-destructive font-bold rounded-lg transition-all cursor-pointer flex items-center space-x-1"
+                                        >
+                                          <X className="w-3.5 h-3.5" />
+                                          <span>Deny</span>
+                                        </button>
+                                      </>
+                                    ) : booking.approvalStatus === 'approved' ? (
+                                      <button
+                                        onClick={() => {
+                                          setSelectedCampaign(booking);
+                                          setRevokePassword('');
+                                          setRevokeReason('');
+                                          setShowRevokeModal(true);
+                                        }}
+                                        className="px-3 py-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 font-bold rounded-lg transition-all cursor-pointer flex items-center space-x-1 shadow-sm font-semibold"
+                                        title="Revoke active campaign"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                        <span>Revoke</span>
+                                      </button>
+                                    ) : (
+                                      <span className={`px-2 py-1 rounded-md text-[10px] font-extrabold uppercase tracking-wide ${
+                                        booking.approvalStatus === 'rejected'
+                                          ? 'bg-destructive/10 text-destructive border border-destructive/10'
+                                          : 'bg-orange-500/10 text-orange-500 border border-orange-500/10'
+                                      }`}>
+                                        {booking.approvalStatus}
+                                      </span>
+                                    )}
                                   </div>
                                 </td>
                               </tr>
@@ -2768,6 +2891,87 @@ export default function AdminPortal() {
                   className="px-4 py-2 bg-destructive hover:bg-destructive/90 text-white font-bold rounded-xl transition-all cursor-pointer text-xs"
                 >
                   Confirm Rejection
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Revoke Campaign Modal */}
+      {showRevokeModal && selectedCampaign && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-card border border-border w-full max-w-md rounded-[32px] shadow-2xl p-6 relative animate-fade-in">
+            <div className="flex justify-between items-center mb-4 border-b border-border/50 pb-4">
+              <h3 className="font-outfit text-base font-bold text-foreground flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-destructive" />
+                <span>Revoke Ad Campaign</span>
+              </h3>
+              <button
+                onClick={() => {
+                  setShowRevokeModal(false);
+                  setSelectedCampaign(null);
+                  setRevokePassword('');
+                  setRevokeReason('');
+                }}
+                className="p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRevokeCampaign} className="space-y-4">
+              <p className="text-xs text-muted-foreground font-semibold">
+                Revoking campaign <span className="font-mono font-bold text-primary">{selectedCampaign.bookingId}</span> is a destructive action. This will immediately stop ad rotation and permanently delete the video file from the server.
+              </p>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+                  Reason for Revocation
+                </label>
+                <textarea
+                  required
+                  rows="3"
+                  placeholder="Provide reason for revoking this campaign..."
+                  value={revokeReason}
+                  onChange={(e) => setRevokeReason(e.target.value)}
+                  className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">
+                  Administrator Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter admin password to confirm"
+                  value={revokePassword}
+                  onChange={(e) => setRevokePassword(e.target.value)}
+                  className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRevokeModal(false);
+                    setSelectedCampaign(null);
+                    setRevokePassword('');
+                    setRevokeReason('');
+                  }}
+                  className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground font-bold rounded-xl transition-all cursor-pointer border border-border text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={revokeLoading}
+                  className="px-4 py-2 bg-destructive hover:bg-destructive/90 text-white font-bold rounded-xl transition-all cursor-pointer text-xs disabled:opacity-50"
+                >
+                  {revokeLoading ? 'Revoking...' : 'Confirm Revocation'}
                 </button>
               </div>
             </form>

@@ -179,41 +179,41 @@ class HostController {
     const sharp = require('sharp');
     const { v4: uuidv4 } = require('uuid');
     const config = require('../config/config');
+    const { pipeline } = require('stream/promises');
 
-    if (!Buffer.isBuffer(req.body)) {
-      return res.status(400).send({ success: false, message: 'Invalid file payload. Expected raw binary buffer.' });
+    const filenameHeader = req.headers['x-filename'] || 'image.png';
+    const ext = path.extname(filenameHeader).toLowerCase() || '.png';
+
+    // Enforce image extensions
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+      return res.status(400).send({ success: false, message: 'Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.' });
     }
 
+    const uniqueFilename = `menu_${uuidv4().replace(/-/g, '').slice(0, 16)}.webp`;
+    const uploadsDir = path.join(__dirname, '..', 'uploads', 'menu');
+
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const filePath = path.join(uploadsDir, uniqueFilename);
+
     try {
-      const filenameHeader = req.headers['x-filename'] || 'image.png';
-      const ext = path.extname(filenameHeader).toLowerCase() || '.png';
-
-      // Enforce image extensions
-      if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
-        return res.status(400).send({ success: false, message: 'Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.' });
-      }
-
-      const uniqueFilename = `menu_${uuidv4().replace(/-/g, '').slice(0, 16)}.webp`;
-      const uploadsDir = path.join(__dirname, '..', 'uploads', 'menu');
-
-      if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-      }
-
-      const filePath = path.join(uploadsDir, uniqueFilename);
-
       // Optimize and resize image using sharp
-      const optimizedBuffer = await sharp(req.body)
+      const sharpStream = sharp()
         .resize(800, 800, {
           fit: 'inside',
           withoutEnlargement: true
         })
-        .webp({ quality: 80 })
-        .toBuffer();
+        .webp({ quality: 80 });
 
-      fs.writeFileSync(filePath, optimizedBuffer);
+      await pipeline(
+        req.body,
+        sharpStream,
+        fs.createWriteStream(filePath)
+      );
 
-      const fileUrl = `http://localhost:${config.port || 8080}/uploads/menu/${uniqueFilename}`;
+      const fileUrl = `/uploads/menu/${uniqueFilename}`;
 
       return res.status(200).send({
         success: true,
@@ -225,6 +225,13 @@ class HostController {
       });
     } catch (error) {
       console.error('uploadImage Error:', error.message);
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (unlinkErr) {
+          console.error('Failed to unlink corrupt file:', unlinkErr.message);
+        }
+      }
       return res.status(500).send({ success: false, message: 'Failed to upload and process image: ' + error.message });
     }
   }

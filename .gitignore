@@ -44,6 +44,7 @@ project_blueprint.md
 sms_api.md
 user.md
 issues.md
+architecture.md
 
 # Flutter / Dart caches and generated files
 .dart_tool/
@@ -76,4 +77,5 @@ server/scratch/**
 # Uploaded media assets (ignore files, keep folder structure via .gitkeep)
 server/uploads/*
 !server/uploads/.gitkeep
+server/delete_dummies.js
 

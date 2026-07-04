@@ -5,6 +5,18 @@ const Device = require('../models/Device');
 const AdBooking = require('../models/AdBooking');
 const { deviceActivationSchema } = require('../utils/zodSchemas');
 
+const resolveMediaUrl = (mediaUrl, host) => {
+  if (!mediaUrl) return '';
+  if (mediaUrl.startsWith('http')) {
+    if (mediaUrl.includes('localhost:') || mediaUrl.includes('127.0.0.1:')) {
+      const parts = mediaUrl.split('/uploads/');
+      return `http://${host}/uploads/${parts[1]}`;
+    }
+    return mediaUrl;
+  }
+  return `http://${host}${mediaUrl}`;
+};
+
 // Helper to hash passwords using pbkdf2 (same as authController.js)
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -106,12 +118,24 @@ class DeviceAuthController {
         approvalStatus: 'approved'
       });
 
-      const ads = bookings.map(b => ({
-        bookingId: b.bookingId,
-        mediaUrl: b.mediaUrl,
-        durationSeconds: 15,
-        title: `Campaign ${b.bookingId}`
-      }));
+      // Filter out campaigns whose ad duration has expired
+      const now = new Date();
+      const activeBookings = bookings.filter(b => {
+        const expiryDate = new Date(b.createdAt);
+        expiryDate.setDate(expiryDate.getDate() + b.adDurationDays);
+        return expiryDate >= now;
+      });
+
+      const ads = activeBookings.map(b => {
+        const absoluteUrl = resolveMediaUrl(b.mediaUrl, req.headers.host);
+        return {
+          bookingId: b.bookingId,
+          mediaUrl: absoluteUrl,
+          durationSeconds: 15,
+          title: `Campaign ${b.bookingId}`,
+          mediaType: (absoluteUrl.endsWith('.mp4') || absoluteUrl.endsWith('.webm')) ? 'video' : 'static'
+        };
+      });
 
       return res.status(200).send({
         success: true,

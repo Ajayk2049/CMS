@@ -8,9 +8,6 @@ import {
   MapPin,
   BarChart3,
   ArrowRight,
-  ShieldCheck,
-  Star,
-  UtensilsCrossed,
   ChevronLeft,
   ChevronRight,
   CheckCircle2

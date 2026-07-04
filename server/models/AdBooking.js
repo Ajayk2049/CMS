@@ -58,7 +58,7 @@ const AdBookingSchema = new mongoose.Schema({
   },
   approvalStatus: {
     type: String,
-    enum: ['pending', 'approved', 'rejected'],
+    enum: ['pending', 'approved', 'rejected', 'revoked'],
     default: 'pending',
     index: true
   },

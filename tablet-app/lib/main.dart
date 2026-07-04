@@ -1,19 +1,34 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:grpc/grpc.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:video_player/video_player.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:fixnum/fixnum.dart';
 
 import 'generated/device.pbgrpc.dart';
 import 'generated/menu.pbgrpc.dart';
 import 'generated/order.pbgrpc.dart';
 
+import 'constants.dart';
+import 'menu_state.dart';
+import 'ad_player_service.dart';
+import 'ad_sync_service.dart';
+import 'widgets/ad_view.dart';
+import 'widgets/menu_catalog.dart';
+import 'widgets/order_summary.dart';
+import 'widgets/checkout_modal.dart';
+
+// ═══════════════════════════════════════════════════════════════════
+//  ENTRY POINT
+// ═══════════════════════════════════════════════════════════════════
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   final prefs = await SharedPreferences.getInstance();
   final token = prefs.getString('token') ?? '';
   final serverHost = prefs.getString('serverHost') ?? '';
@@ -31,7 +46,11 @@ void main() async {
   ));
 }
 
-class TabletopOrderingApp extends StatelessWidget {
+// ═══════════════════════════════════════════════════════════════════
+//  ROOT APP — Theme management
+// ═══════════════════════════════════════════════════════════════════
+
+class TabletopOrderingApp extends StatefulWidget {
   final bool initialActivated;
   final String initialServerHost;
   final String initialDeviceId;
@@ -50,30 +69,141 @@ class TabletopOrderingApp extends StatelessWidget {
   });
 
   @override
+  State<TabletopOrderingApp> createState() => _TabletopOrderingAppState();
+}
+
+class _TabletopOrderingAppState extends State<TabletopOrderingApp> {
+  ThemeMode _themeMode = ThemeMode.dark;
+  Timer? _themeTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThemeMode();
+    _startThemeTimer();
+  }
+
+  @override
+  void dispose() {
+    _themeTimer?.cancel();
+    super.dispose();
+  }
+
+  void _loadThemeMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasOverride = prefs.containsKey('isLightTheme');
+
+    if (hasOverride) {
+      final isLight = prefs.getBool('isLightTheme') ?? false;
+      setState(() {
+        _themeMode = isLight ? ThemeMode.light : ThemeMode.dark;
+      });
+    } else {
+      _checkTimeBasedTheme();
+    }
+  }
+
+  void _startThemeTimer() {
+    _themeTimer = Timer.periodic(kThemeCheckInterval, (timer) {
+      _checkTimeBasedTheme();
+    });
+  }
+
+  void _checkTimeBasedTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasOverride = prefs.containsKey('isLightTheme');
+
+    if (!hasOverride) {
+      final hour = DateTime.now().hour;
+      final isDay = hour >= 7 && hour < 20; // 7am to 8pm Light
+      final targetMode = isDay ? ThemeMode.light : ThemeMode.dark;
+      if (_themeMode != targetMode) {
+        setState(() {
+          _themeMode = targetMode;
+        });
+      }
+    }
+  }
+
+  void toggleTheme() async {
+    final prefs = await SharedPreferences.getInstance();
+    final newIsLight = _themeMode == ThemeMode.dark;
+    await prefs.setBool('isLightTheme', newIsLight);
+    setState(() {
+      _themeMode = newIsLight ? ThemeMode.light : ThemeMode.dark;
+    });
+  }
+
+  static final ThemeData _lightTheme = ThemeData(
+    brightness: Brightness.light,
+    primaryColor: Colors.blueAccent,
+    useMaterial3: true,
+    scaffoldBackgroundColor: kSlateLight,
+    cardTheme: CardThemeData(
+      color: Colors.white,
+      elevation: 2,
+      shadowColor: Colors.black.withValues(alpha: 0.05),
+      shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
+    ),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: Color(0xFFF1F5F9),
+      foregroundColor: Color(0xFF1E293B),
+      elevation: 0,
+    ),
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: Colors.blueAccent,
+      brightness: Brightness.light,
+      surface: Colors.white,
+    ),
+  );
+
+  static final ThemeData _darkTheme = ThemeData(
+    brightness: Brightness.dark,
+    primaryColor: Colors.blueAccent,
+    useMaterial3: true,
+    scaffoldBackgroundColor: kScaffoldDarkBg,
+    cardTheme: const CardThemeData(
+      color: kCardDark,
+      elevation: 0,
+      shape: RoundedRectangleBorder(borderRadius: kCardBorderRadius),
+    ),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: kCardDark,
+      foregroundColor: Colors.white,
+      elevation: 0,
+    ),
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: Colors.blueAccent,
+      brightness: Brightness.dark,
+      surface: kCardDark,
+    ),
+  );
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Tabletop Ordering Kiosk',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        primarySwatch: Colors.blue,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF0B0F19),
-        cardTheme: const CardThemeData(
-          color: Color(0xFF1E293B),
-        ),
-      ),
+      themeMode: _themeMode,
+      theme: _lightTheme,
+      darkTheme: _darkTheme,
       home: MainDeviceRouter(
-        initialActivated: initialActivated,
-        initialServerHost: initialServerHost,
-        initialDeviceId: initialDeviceId,
-        initialToken: initialToken,
-        initialHostApplicationId: initialHostApplicationId,
-        initialBypassPassword: initialBypassPassword,
+        initialActivated: widget.initialActivated,
+        initialServerHost: widget.initialServerHost,
+        initialDeviceId: widget.initialDeviceId,
+        initialToken: widget.initialToken,
+        initialHostApplicationId: widget.initialHostApplicationId,
+        initialBypassPassword: widget.initialBypassPassword,
+        toggleTheme: toggleTheme,
+        currentThemeMode: _themeMode,
       ),
     );
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  DEVICE ROUTER — Switches between setup and kiosk screens
+// ═══════════════════════════════════════════════════════════════════
 
 class MainDeviceRouter extends StatefulWidget {
   final bool initialActivated;
@@ -82,6 +212,8 @@ class MainDeviceRouter extends StatefulWidget {
   final String initialToken;
   final String initialHostApplicationId;
   final String initialBypassPassword;
+  final VoidCallback toggleTheme;
+  final ThemeMode currentThemeMode;
 
   const MainDeviceRouter({
     super.key,
@@ -91,6 +223,8 @@ class MainDeviceRouter extends StatefulWidget {
     required this.initialToken,
     required this.initialHostApplicationId,
     required this.initialBypassPassword,
+    required this.toggleTheme,
+    required this.currentThemeMode,
   });
 
   @override
@@ -116,7 +250,8 @@ class _MainDeviceRouterState extends State<MainDeviceRouter> {
     _bypassPassword = widget.initialBypassPassword;
   }
 
-  void _onActivate(String serverHost, String deviceId, String token, String hostApplicationId, String password) {
+  void _onActivate(String serverHost, String deviceId, String token,
+      String hostApplicationId, String password) {
     setState(() {
       _serverHost = serverHost;
       _deviceId = deviceId;
@@ -134,6 +269,7 @@ class _MainDeviceRouterState extends State<MainDeviceRouter> {
     await prefs.remove('deviceId');
     await prefs.remove('hostApplicationId');
     await prefs.remove('bypassPassword');
+    await prefs.remove('isLightTheme');
 
     setState(() {
       _isActivated = false;
@@ -148,7 +284,11 @@ class _MainDeviceRouterState extends State<MainDeviceRouter> {
   @override
   Widget build(BuildContext context) {
     if (!_isActivated) {
-      return DeviceSetupScreen(onActivate: _onActivate);
+      return DeviceSetupScreen(
+        onActivate: _onActivate,
+        toggleTheme: widget.toggleTheme,
+        currentThemeMode: widget.currentThemeMode,
+      );
     }
     return KioskScreen(
       serverHost: _serverHost,
@@ -157,13 +297,27 @@ class _MainDeviceRouterState extends State<MainDeviceRouter> {
       hostApplicationId: _hostApplicationId,
       bypassPassword: _bypassPassword,
       onReset: _onReset,
+      toggleTheme: widget.toggleTheme,
+      currentThemeMode: widget.currentThemeMode,
     );
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  DEVICE SETUP SCREEN — One-time activation
+// ═══════════════════════════════════════════════════════════════════
+
 class DeviceSetupScreen extends StatefulWidget {
   final Function(String, String, String, String, String) onActivate;
-  const DeviceSetupScreen({super.key, required this.onActivate});
+  final VoidCallback toggleTheme;
+  final ThemeMode currentThemeMode;
+
+  const DeviceSetupScreen({
+    super.key,
+    required this.onActivate,
+    required this.toggleTheme,
+    required this.currentThemeMode,
+  });
 
   @override
   State<DeviceSetupScreen> createState() => _DeviceSetupScreenState();
@@ -177,6 +331,15 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
   String _error = '';
   bool _loading = false;
 
+  @override
+  void dispose() {
+    _serverHostController.dispose();
+    _deviceIdController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    super.dispose();
+  }
+
   void _submit() async {
     setState(() {
       _error = '';
@@ -188,7 +351,10 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
     final password = _passwordController.text.trim();
     final confirmPassword = _confirmPasswordController.text.trim();
 
-    if (serverHost.isEmpty || deviceId.isEmpty || password.isEmpty || confirmPassword.isEmpty) {
+    if (serverHost.isEmpty ||
+        deviceId.isEmpty ||
+        password.isEmpty ||
+        confirmPassword.isEmpty) {
       setState(() {
         _error = 'All fields are required';
         _loading = false;
@@ -216,21 +382,25 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
       final prefs = await SharedPreferences.getInstance();
       String? hardwareId = prefs.getString('hardware_id');
       if (hardwareId == null) {
-        hardwareId = 'hw_tab_${DateTime.now().millisecondsSinceEpoch}_$deviceId';
+        hardwareId =
+            'hw_tab_${DateTime.now().millisecondsSinceEpoch}_$deviceId';
         await prefs.setString('hardware_id', hardwareId);
       }
 
-      final url = Uri.parse('http://$serverHost:4200/api/v1/auth/device/activate');
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'deviceId': deviceId,
-          'hardwareId': hardwareId,
-          'deviceType': 'tablet',
-          'kioskPassword': password,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final url = Uri.parse(
+          'http://$serverHost:4200/api/v1/auth/device/activate');
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'deviceId': deviceId,
+              'hardwareId': hardwareId,
+              'deviceType': 'tablet',
+              'kioskPassword': password,
+            }),
+          )
+          .timeout(kHttpTimeout);
 
       final data = jsonDecode(response.body);
 
@@ -244,7 +414,8 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
         await prefs.setString('hostApplicationId', hostApplicationId);
         await prefs.setString('bypassPassword', password);
 
-        widget.onActivate(serverHost, deviceId, token, hostApplicationId, password);
+        widget.onActivate(
+            serverHost, deviceId, token, hostApplicationId, password);
       } else {
         setState(() {
           _error = data['message'] ?? 'Activation failed';
@@ -253,7 +424,8 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
       }
     } catch (e) {
       setState(() {
-        _error = 'Connection failed: Ensure server is running and IP is correct';
+        _error =
+            'Connection failed: Ensure server is running and IP is correct';
         _loading = false;
       });
     }
@@ -262,54 +434,60 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF0F172A), Color(0xFF1E1B4B)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: Icon(
+              widget.currentThemeMode == ThemeMode.light
+                  ? Icons.dark_mode_outlined
+                  : Icons.light_mode_outlined,
+            ),
+            onPressed: widget.toggleTheme,
+            tooltip: "Toggle Light/Dark Theme",
           ),
-        ),
+        ],
+      ),
+      extendBodyBehindAppBar: true,
+      body: Container(
+        decoration: kDarkGradientBg,
         child: Center(
           child: SingleChildScrollView(
             child: Container(
               width: 450,
-              padding: const EdgeInsets.all(32),
+              padding: kSetupCardPadding,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(24),
+                color: Colors.white.withValues(alpha: 0.04),
+                borderRadius: const BorderRadius.all(Radius.circular(24)),
                 border: Border.all(color: Colors.white10),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.settings_suggest, size: 64, color: Colors.blueAccent),
+                  const Icon(Icons.settings_suggest_rounded,
+                      size: 64, color: Colors.blueAccent),
                   const SizedBox(height: 16),
-                  const Text(
-                    "Kiosk Tablet Setup",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-                  ),
+                  const Text("Kiosk Tablet Setup",
+                      textAlign: TextAlign.center, style: kSetupTitleStyle),
                   const SizedBox(height: 8),
                   const Text(
                     "One-time authorization setup for tabletop display device.",
                     textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                    style: kSetupSubtitleStyle,
                   ),
                   const SizedBox(height: 24),
                   if (_error.isNotEmpty) ...[
                     Container(
-                      padding: const EdgeInsets.all(12),
+                      padding: kCardPadding,
                       decoration: BoxDecoration(
-                        color: Colors.redAccent.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.redAccent.withOpacity(0.2)),
+                        color: Colors.redAccent.withValues(alpha: 0.1),
+                        borderRadius: kInputBorderRadius,
+                        border: Border.all(
+                            color: Colors.redAccent.withValues(alpha: 0.2)),
                       ),
-                      child: Text(
-                        _error,
-                        style: const TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
+                      child: Text(_error, style: kErrorTextStyle),
                     ),
                     const SizedBox(height: 16),
                   ],
@@ -317,9 +495,11 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                     controller: _serverHostController,
                     decoration: InputDecoration(
                       labelText: "Server Host / IP",
-                      helperText: "e.g. 10.0.2.2 (Emulator) or 192.168.1.X (Local Wifi)",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      prefixIcon: const Icon(Icons.dns),
+                      helperText:
+                          "e.g. 10.0.2.2 (Emulator) or 192.168.1.X (Local Wifi)",
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.lan_outlined),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -327,8 +507,9 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                     controller: _deviceIdController,
                     decoration: InputDecoration(
                       labelText: "Device ID (e.g. DEV_TAB_XXXX)",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      prefixIcon: const Icon(Icons.tablet_mac),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.tablet_android_outlined),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -337,8 +518,9 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                     obscureText: true,
                     decoration: InputDecoration(
                       labelText: "Set Bypass Password",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      prefixIcon: const Icon(Icons.lock_outline),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.lock_open_outlined),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -347,8 +529,9 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                     obscureText: true,
                     decoration: InputDecoration(
                       labelText: "Confirm Bypass Password",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      prefixIcon: const Icon(Icons.lock),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.lock_outline),
                     ),
                   ),
                   const SizedBox(height: 24),
@@ -358,11 +541,18 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       backgroundColor: Colors.blueAccent,
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                     ),
                     child: _loading
-                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : const Text("Authorize & Bind Device", style: TextStyle(fontWeight: FontWeight.bold)),
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Text("Authorize & Bind Device",
+                            style:
+                                TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),
@@ -374,6 +564,10 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  KIOSK SCREEN — Main kiosk orchestrator
+// ═══════════════════════════════════════════════════════════════════
+
 class KioskScreen extends StatefulWidget {
   final String serverHost;
   final String deviceId;
@@ -381,6 +575,8 @@ class KioskScreen extends StatefulWidget {
   final String hostApplicationId;
   final String bypassPassword;
   final VoidCallback onReset;
+  final VoidCallback toggleTheme;
+  final ThemeMode currentThemeMode;
 
   const KioskScreen({
     super.key,
@@ -390,6 +586,8 @@ class KioskScreen extends StatefulWidget {
     required this.hostApplicationId,
     required this.bypassPassword,
     required this.onReset,
+    required this.toggleTheme,
+    required this.currentThemeMode,
   });
 
   @override
@@ -397,7 +595,11 @@ class KioskScreen extends StatefulWidget {
 }
 
 class _KioskScreenState extends State<KioskScreen> {
+  // ── Screen-level state (legitimate root setState targets) ──
   bool _isIdle = true;
+  bool _showCart = false;
+
+  // ── gRPC ──
   late ClientChannel _channel;
   late DeviceServiceClient _deviceClient;
   late MenuServiceClient _menuClient;
@@ -405,32 +607,43 @@ class _KioskScreenState extends State<KioskScreen> {
   late CallOptions _callOptions;
   Timer? _heartbeatTimer;
 
-  // Menu and Cart states
-  List<MenuItem> _menuItems = [];
-  final Map<String, int> _cart = {}; // itemId -> quantity
-  bool _menuLoading = false;
-  String _menuError = '';
+  // ── Decoupled services ──
+  late final AdPlayerService _adPlayer;
+  late final AdSyncService _adSync;
+  final CartNotifier _cart = CartNotifier();
+  final MenuNotifier _menu = MenuNotifier();
 
-  // Ads state
-  List<Map<String, dynamic>> _adCampaigns = [];
-  int _currentAdIndex = 0;
-  Timer? _adRotateTimer;
-  VideoPlayerController? _videoPlayerController;
-  bool _adLoading = false;
+  // ── Timers ──
+  Timer? _inactivityTimer;
 
   @override
   void initState() {
     super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
     _initGrpc();
     _registerAndStartHeartbeat();
     _fetchMenu();
-    _fetchAds();
+
+    // Initialize ad services
+    _adPlayer = AdPlayerService(
+      onImpression: _trackAdImpression,
+    );
+
+    _adSync = AdSyncService(
+      serverHost: widget.serverHost,
+      token: widget.token,
+      adsDirectory: kAdsDirectoryPath,
+      onPlaylistUpdated: _onPlaylistUpdated,
+    );
+
+    _bootAds();
   }
 
   void _initGrpc() {
     _channel = ClientChannel(
       widget.serverHost,
-      port: 50051,
+      port: 4201,
       options: const ChannelOptions(
         credentials: ChannelCredentials.insecure(),
       ),
@@ -442,7 +655,7 @@ class _KioskScreenState extends State<KioskScreen> {
 
     _callOptions = CallOptions(
       metadata: {'authorization': 'Bearer ${widget.token}'},
-      timeout: const Duration(seconds: 10),
+      timeout: kHttpTimeout,
     );
   }
 
@@ -454,187 +667,121 @@ class _KioskScreenState extends State<KioskScreen> {
         ..hostApplicationId = widget.hostApplicationId;
 
       await _deviceClient.registerDevice(req, options: _callOptions);
-      print('gRPC Device registered successfully');
+      debugPrint('gRPC Device registered successfully');
     } catch (e) {
-      print('gRPC Device registration failed: $e');
+      debugPrint('gRPC Device registration failed: $e');
     }
 
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (timer) async {
+    _heartbeatTimer =
+        Timer.periodic(kHeartbeatInterval, (timer) async {
       try {
-        await _deviceClient.sendHeartbeat(HeartbeatRequest()..deviceId = widget.deviceId, options: _callOptions);
+        await _deviceClient.sendHeartbeat(
+            HeartbeatRequest()..deviceId = widget.deviceId,
+            options: _callOptions);
       } catch (e) {
-        print('gRPC Heartbeat failed: $e');
+        debugPrint('gRPC Heartbeat failed: $e');
       }
     });
   }
 
   void _fetchMenu() async {
-    if (mounted) {
-      setState(() {
-        _menuLoading = true;
-        _menuError = '';
-      });
-    }
+    _menu.setLoading();
 
     try {
       final req = GetMenuRequest()
         ..deviceId = widget.deviceId
-        ..merchantId = ''; // resolved from token by backend
+        ..merchantId = '';
 
       final response = await _menuClient.getMenu(req, options: _callOptions);
 
       if (mounted) {
-        setState(() {
-          _menuItems = response.items;
-          _menuLoading = false;
-        });
+        _menu.setItems(response.items);
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _menuError = 'Failed to load menu. Showing local backup catalog.';
-          _menuLoading = false;
-          _loadMockFallbackMenu();
-        });
+        _menu.setError();
+        _loadMockFallbackMenu();
       }
     }
   }
 
   void _loadMockFallbackMenu() {
-    // Standard mock fallback menu if gRPC call fails or is empty
-    _menuItems = [
+    _menu.setItems([
       MenuItem()
         ..itemId = 'item_fallback_1'
         ..name = 'Pepperoni Pizza Grande'
         ..description = 'Extra cheese, fresh basil on a wood-fired crust'
-        ..price = Int64(44900) // 449.00 INR
+        ..price = Int64(44900)
         ..category = 'Main Course'
         ..isAvailable = true,
       MenuItem()
         ..itemId = 'item_fallback_2'
         ..name = 'Crispy French Fries'
         ..description = 'With parmesan & garlic rosemary mayo dip'
-        ..price = Int64(22900) // 229.00 INR
+        ..price = Int64(22900)
         ..category = 'Starters'
         ..isAvailable = true,
       MenuItem()
         ..itemId = 'item_fallback_3'
         ..name = 'Cheeseburger Deluxe'
         ..description = 'Flame grilled double beef patty, brioche bun'
-        ..price = Int64(29900) // 299.00 INR
+        ..price = Int64(29900)
         ..category = 'Main Course'
         ..isAvailable = true,
       MenuItem()
         ..itemId = 'item_fallback_4'
         ..name = 'Iced Hazelnut Latte'
         ..description = 'Double fresh espresso shot, cold micro foam'
-        ..price = Int64(17900) // 179.00 INR
+        ..price = Int64(17900)
         ..category = 'Beverages'
         ..isAvailable = true,
-    ];
+    ]);
   }
 
-  void _fetchAds() async {
-    if (mounted) {
-      setState(() => _adLoading = true);
+  // ────────────────── Ad lifecycle ──────────────────
+
+  void _bootAds() async {
+    debugPrint('[BOOT] Starting sync sequence...');
+
+    if (Platform.isAndroid) {
+      final status = await Permission.manageExternalStorage.request();
+      if (!status.isGranted) {
+        await Permission.storage.request();
+      }
     }
 
-    try {
-      final url = Uri.parse('http://${widget.serverHost}:4200/api/v1/auth/device/ads');
-      final response = await http.get(
-        url,
-        headers: {'Authorization': 'Bearer ${widget.token}'},
-      ).timeout(const Duration(seconds: 10));
-
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200 && data['success'] == true) {
-        final List list = data['data'] ?? [];
-        if (mounted) {
-          setState(() {
-            _adCampaigns = list.map((item) => Map<String, dynamic>.from(item)).toList();
-            _adLoading = false;
-          });
-          _startAdLoop();
-        }
-      } else {
-        if (mounted) setState(() => _adLoading = false);
-        _loadFallbackAds();
-      }
-    } catch (e) {
-      if (mounted) setState(() => _adLoading = false);
-      _loadFallbackAds();
+    final cachedPlaylist = await _adSync.boot();
+    if (cachedPlaylist.isNotEmpty && _isIdle) {
+      _adPlayer.startLoop(cachedPlaylist);
     }
   }
 
-  void _loadFallbackAds() {
-    _adCampaigns = [
-      {
-        'bookingId': 'B_FALLBACK_1',
-        'mediaUrl': '',
-        'title': 'Aibot Ink Solutions',
-        'subtitle': 'Digitize your outlet with our premium tablet menus.'
-      },
-      {
-        'bookingId': 'B_FALLBACK_2',
-        'mediaUrl': '',
-        'title': 'FitLife Gym Indiranagar - 30% Off',
-        'subtitle': 'Scan to claim discount voucher.'
+  void _onPlaylistUpdated(List<String> newPlaylist, List<String> activeFileNames) {
+    if (!mounted) return;
+
+    if (_adPlayer.state.value.playlist.isEmpty && newPlaylist.isNotEmpty) {
+      if (_isIdle) {
+        _adPlayer.startLoop(newPlaylist);
       }
-    ];
-    _startAdLoop();
-  }
-
-  void _startAdLoop() {
-    if (_adCampaigns.isEmpty) return;
-    _currentAdIndex = 0;
-    _setupCurrentAdPlayback();
-  }
-
-  void _setupCurrentAdPlayback() {
-    _adRotateTimer?.cancel();
-    _videoPlayerController?.dispose();
-    _videoPlayerController = null;
-
-    if (_adCampaigns.isEmpty) return;
-    final ad = _adCampaigns[_currentAdIndex];
-    final mediaUrl = ad['mediaUrl'] as String? ?? '';
-
-    // Log Ad telemetry impression via gRPC
-    _trackAdImpression(ad['bookingId'] ?? 'unknown');
-
-    if (mediaUrl.isNotEmpty && (mediaUrl.endsWith('.mp4') || mediaUrl.endsWith('.webm'))) {
-      final absoluteMediaUrl = mediaUrl.startsWith('http') 
-          ? mediaUrl 
-          : 'http://${widget.serverHost}:4200$mediaUrl';
-
-      _videoPlayerController = VideoPlayerController.networkUrl(Uri.parse(absoluteMediaUrl))
-        ..initialize().then((_) {
-          if (mounted) {
-            setState(() {});
-            _videoPlayerController!.play();
-            _videoPlayerController!.setLooping(false);
-          }
-        }).catchError((err) {
-          print('Video Player Init Error: $err');
-        });
-
-      // Listen for video completion to go to next ad
-      _videoPlayerController!.addListener(() {
-        if (_videoPlayerController != null &&
-            _videoPlayerController!.value.position >= _videoPlayerController!.value.duration) {
-          _nextAd();
-        }
-      });
-
-      // Safety timeout in case video loading hangs
-      _adRotateTimer = Timer(const Duration(seconds: 18), _nextAd);
     } else {
-      // Static Ad: Rotate after 8 seconds
-      _adRotateTimer = Timer(const Duration(seconds: 8), _nextAd);
+      _adPlayer.updatePlaylist(newPlaylist);
     }
+
+    _adSync.setProtectedPaths(_adPlayer.activeFilePaths);
   }
 
-  void _trackAdImpression(String bookingId) async {
+  void _trackAdImpression(String adSource) async {
+    String bookingId = 'unknown';
+    if (adSource.startsWith('static__')) {
+      final parts = adSource.split('__');
+      if (parts.length >= 2) bookingId = parts[1];
+    } else {
+      final fileName = adSource.split('/').last.split('\\').last;
+      if (fileName.startsWith('ad_')) {
+        bookingId = fileName.replaceAll('ad_', '').split('.').first;
+      }
+    }
+
     try {
       final req = AdImpressionRequest()
         ..deviceId = widget.deviceId
@@ -644,28 +791,90 @@ class _KioskScreenState extends State<KioskScreen> {
 
       await _deviceClient.trackAdImpression(req, options: _callOptions);
     } catch (e) {
-      print('gRPC Track ad impression telemetry failed: $e');
+      debugPrint('gRPC Track ad impression telemetry failed: $e');
     }
   }
 
-  void _nextAd() {
-    if (_adCampaigns.isEmpty) return;
-    if (mounted) {
-      setState(() {
-        _currentAdIndex = (_currentAdIndex + 1) % _adCampaigns.length;
+  // ────────────────── Idle/Activity management ──────────────────
+
+  void _resetIdleTimer() {
+    _inactivityTimer?.cancel();
+    if (!_isIdle) {
+      _inactivityTimer = Timer(kInactivityTimeout, () {
+        if (mounted) {
+          _cart.clear();
+          setState(() {
+            _isIdle = true;
+            _showCart = false;
+          });
+          _adPlayer.resume();
+        }
       });
-      _setupCurrentAdPlayback();
     }
   }
 
-  @override
-  void dispose() {
-    _heartbeatTimer?.cancel();
-    _adRotateTimer?.cancel();
-    _videoPlayerController?.dispose();
-    _channel.shutdown();
-    super.dispose();
+  void _cancelIdleTimer() {
+    _inactivityTimer?.cancel();
+    _inactivityTimer = null;
   }
+
+  void _enterMenuMode() {
+    setState(() {
+      _isIdle = false;
+      _showCart = false;
+    });
+    _adPlayer.pause();
+    _resetIdleTimer();
+  }
+
+  void _returnToAds() {
+    _cart.clear();
+    setState(() {
+      _isIdle = true;
+      _showCart = false;
+    });
+    _adSync.syncNow();
+    _adPlayer.resume();
+    _cancelIdleTimer();
+  }
+
+  // ────────────────── Order placement ──────────────────
+
+  void _placeOrder() {
+    final snapshot = _cart.value;
+    if (snapshot.isEmpty) return;
+    final menuItems = _menu.value.items;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => OrderCheckoutModal(
+        orderClient: _orderClient,
+        callOptions: _callOptions,
+        deviceId: widget.deviceId,
+        menuItems: menuItems,
+        cart: snapshot.toMap(),
+        totalAmountPaise: (snapshot.totalPrice(menuItems) * 100).toInt(),
+        onOrderCompleted: () {
+          _cart.clear();
+          setState(() {
+            _isIdle = true;
+            _showCart = false;
+          });
+          _adPlayer.resume();
+          _cancelIdleTimer();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Payment Completed! Order sent to kitchen."),
+              backgroundColor: Colors.green,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ────────────────── Unlock/Reset ──────────────────
 
   void _promptUnlock() {
     final passwordController = TextEditingController();
@@ -688,10 +897,11 @@ class _KioskScreenState extends State<KioskScreen> {
           ElevatedButton(
             onPressed: () {
               if (passwordController.text == widget.bypassPassword) {
-                Navigator.pop(context); // close dialog
-                widget.onReset(); // deactivate device/go back to setup
+                Navigator.pop(context);
+                widget.onReset();
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Kiosk mode unlocked successfully")),
+                  const SnackBar(
+                      content: Text("Kiosk mode unlocked successfully")),
                 );
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -703,647 +913,217 @@ class _KioskScreenState extends State<KioskScreen> {
           )
         ],
       ),
-    );
+    ).then((_) => passwordController.dispose());
   }
 
-  double _getCartTotal() {
-    double total = 0;
-    _cart.forEach((itemId, quantity) {
-      final item = _menuItems.firstWhere((i) => i.itemId == itemId);
-      total += (item.price.toDouble() / 100.0) * quantity;
-    });
-    return total;
+  // ────────────────── Lifecycle ──────────────────
+
+  @override
+  void dispose() {
+    _heartbeatTimer?.cancel();
+    _inactivityTimer?.cancel();
+    _adPlayer.dispose();
+    _adSync.dispose();
+    _cart.dispose();
+    _menu.dispose();
+    _channel.shutdown();
+    super.dispose();
   }
 
-  void _placeOrder() {
-    if (_cart.isEmpty) return;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => OrderCheckoutModal(
-        orderClient: _orderClient,
-        callOptions: _callOptions,
-        deviceId: widget.deviceId,
-        menuItems: _menuItems,
-        cart: _cart,
-        totalAmountPaise: (_getCartTotal() * 100).toInt(),
-        onOrderCompleted: () {
-          setState(() {
-            _cart.clear();
-            _isIdle = true;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Payment Completed! Order sent to kitchen."),
-              backgroundColor: Colors.green,
-            ),
-          );
-        },
-      ),
-    );
-  }
+  // ────────────────── Build ──────────────────
 
   @override
   Widget build(BuildContext context) {
     if (_isIdle) {
       return Scaffold(
         body: GestureDetector(
-          onTap: () {
-            setState(() {
-              _isIdle = false;
-            });
-          },
+          behavior: HitTestBehavior.opaque,
+          onTap: _enterMenuMode,
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // Ad Display
-              if (_adCampaigns.isNotEmpty) _buildAdView(),
-              
-              // Touch layout message
-              const Positioned(
-                bottom: 40,
-                left: 0,
-                right: 0,
-                child: Text(
-                  "TOUCH SCREEN TO VIEW FOOD MENU",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                    letterSpacing: 2.0,
-                    shadows: [
-                      Shadow(color: Colors.black, blurRadius: 10, offset: Offset(2, 2)),
-                    ],
-                  ),
-                ),
+              AdViewWidget(
+                playerState: _adPlayer.state,
+                deviceId: widget.deviceId,
+                adCampaigns: _adSync.adCampaigns,
               ),
-              // Hidden Admin Unlock Button (Top Right)
               Positioned(
                 top: 40,
                 right: 20,
                 child: IconButton(
-                  icon: const Icon(Icons.lock_open, color: Colors.white10),
+                  icon: const Icon(Icons.admin_panel_settings_outlined,
+                      color: Colors.white24),
                   onPressed: _promptUnlock,
                   tooltip: "Exit Kiosk",
                 ),
-              )
+              ),
             ],
           ),
         ),
       );
     }
 
-    // Category lists helper
-    final Map<String, List<MenuItem>> categorizedItems = {
-      'Starters': [],
-      'Main Course': [],
-      'Dessert': [],
-      'Beverages': [],
-    };
+    final isPortrait =
+        MediaQuery.of(context).orientation == Orientation.portrait;
+    final viewportHeight = MediaQuery.of(context).size.height -
+        kToolbarHeight -
+        MediaQuery.of(context).padding.top -
+        MediaQuery.of(context).padding.bottom;
 
-    for (var item in _menuItems) {
-      if (categorizedItems.containsKey(item.category)) {
-        categorizedItems[item.category]!.add(item);
-      } else {
-        categorizedItems.putIfAbsent(item.category, () => []).add(item);
-      }
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF1E293B),
-        title: Text("Outlet Kiosk: ${widget.deviceId} — Table 05"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.lock_open),
-            onPressed: _promptUnlock,
-            tooltip: "Exit Kiosk Mode",
-          ),
-          IconButton(
-            icon: const Icon(Icons.slideshow),
-            onPressed: () {
-              setState(() {
-                _isIdle = true;
-                _cart.clear();
-              });
-            },
-            tooltip: "Return to ad slideshow",
-          )
-        ],
-      ),
-      body: Row(
-        children: [
-          // Dynamic Menu catalog
-          Expanded(
-            flex: 2,
-            child: _menuLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _menuItems.isEmpty
-                    ? const Center(child: Text("No menu items available."))
-                    : ListView(
-                        padding: const EdgeInsets.all(24),
-                        children: categorizedItems.keys.map((category) {
-                          final items = categorizedItems[category]!;
-                          if (items.isEmpty) return const SizedBox.shrink();
-
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 12.0),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 8,
-                                      height: 20,
-                                      color: Colors.blueAccent,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      category.toUpperCase(),
-                                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blueAccent),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              GridView.builder(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 2,
-                                  crossAxisSpacing: 16,
-                                  mainAxisSpacing: 16,
-                                  childAspectRatio: 1.5,
-                                ),
-                                itemCount: items.length,
-                                itemBuilder: (context, index) {
-                                  final item = items[index];
-                                  final absoluteImageUrl = item.imageUrl.isNotEmpty 
-                                      ? (item.imageUrl.startsWith('http') 
-                                          ? item.imageUrl 
-                                          : 'http://${widget.serverHost}:4200${item.imageUrl}')
-                                      : '';
-
-                                  return Card(
-                                    clipBehavior: Clip.antiAlias,
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                    child: Row(
-                                      children: [
-                                        // Menu Image
-                                        Container(
-                                          width: 110,
-                                          height: double.infinity,
-                                          color: Colors.black26,
-                                          child: absoluteImageUrl.isNotEmpty
-                                              ? Image.network(
-                                                  absoluteImageUrl,
-                                                  fit: BoxFit.cover,
-                                                  errorBuilder: (context, error, stackTrace) => const Icon(Icons.restaurant, size: 40, color: Colors.white24),
-                                                )
-                                              : const Icon(Icons.restaurant, size: 40, color: Colors.white24),
-                                        ),
-                                        Expanded(
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(12.0),
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                              children: [
-                                                Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                                  children: [
-                                                    Text(
-                                                      item.name,
-                                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                                                      maxLines: 1,
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
-                                                    const SizedBox(height: 4),
-                                                    Text(
-                                                      item.description,
-                                                      style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-                                                      maxLines: 2,
-                                                      overflow: TextOverflow.ellipsis,
-                                                    ),
-                                                  ],
-                                                ),
-                                                Row(
-                                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                                  children: [
-                                                    Text(
-                                                      "₹${(item.price.toDouble() / 100.0).toStringAsFixed(1)}",
-                                                      style: const TextStyle(fontWeight: FontWeight.w900, color: Colors.blueAccent, fontSize: 16),
-                                                    ),
-                                                    ElevatedButton(
-                                                      onPressed: item.isAvailable
-                                                          ? () {
-                                                              setState(() {
-                                                                _cart[item.itemId] = (_cart[item.itemId] ?? 0) + 1;
-                                                              });
-                                                            }
-                                                          : null,
-                                                      style: ElevatedButton.styleFrom(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                                        minimumSize: Size.zero,
-                                                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                                      ),
-                                                      child: Text(item.isAvailable ? "ADD" : "OUT"),
-                                                    ),
-                                                  ],
-                                                )
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                              const SizedBox(height: 24),
-                            ],
-                          );
-                        }).toList(),
-                      ),
-          ),
-          
-          // Order Summary Panel (Sidebar)
-          Container(
-            width: 320,
-            decoration: const BoxDecoration(
-              color: Color(0xFF0F172A),
-              border: Border(left: BorderSide(color: Colors.white10)),
+    return Listener(
+      onPointerDown: (_) => _resetIdleTimer(),
+      child: Scaffold(
+        appBar: AppBar(
+          leading: (isPortrait && _showCart)
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  onPressed: () {
+                    setState(() {
+                      _showCart = false;
+                    });
+                  },
+                  tooltip: "Back to Menu",
+                )
+              : null,
+          title: Text(isPortrait && _showCart
+              ? "Order Summary"
+              : "Outlet Kiosk: ${widget.deviceId} — Table 05"),
+          actions: [
+            IconButton(
+              icon: Icon(
+                widget.currentThemeMode == ThemeMode.light
+                    ? Icons.dark_mode_outlined
+                    : Icons.light_mode_outlined,
+              ),
+              onPressed: widget.toggleTheme,
+              tooltip: "Toggle Light/Dark Theme",
             ),
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            if (isPortrait && !_showCart)
+              ValueListenableBuilder<CartSnapshot>(
+                valueListenable: _cart,
+                builder: (context, cart, _) {
+                  return IconButton(
+                    icon: Badge(
+                      isLabelVisible: cart.isNotEmpty,
+                      label: Text('${cart.totalItemCount}'),
+                      child: const Icon(Icons.shopping_bag_outlined),
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _showCart = true;
+                      });
+                    },
+                    tooltip: "View Order",
+                  );
+                },
+              ),
+            IconButton(
+              icon: const Icon(Icons.admin_panel_settings_outlined),
+              onPressed: _promptUnlock,
+              tooltip: "Exit Kiosk Mode",
+            ),
+            IconButton(
+              icon: const Icon(Icons.play_circle_outline_rounded),
+              onPressed: _returnToAds,
+              tooltip: "Return to ad slideshow",
+            ),
+          ],
+        ),
+        body: Stack(
+          children: [
+            Row(
               children: [
-                const Text("Order Summary", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20)),
-                const SizedBox(height: 20),
                 Expanded(
-                  child: _cart.isEmpty
-                      ? const Center(child: Text("Cart is empty", style: TextStyle(color: Color(0xFF64748B))))
-                      : ListView.builder(
-                          itemCount: _cart.length,
-                          itemBuilder: (context, index) {
-                            final itemId = _cart.keys.elementAt(index);
-                            final quantity = _cart[itemId]!;
-                            final item = _menuItems.firstWhere((i) => i.itemId == itemId);
-
-                            return ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(item.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                              subtitle: Text("₹${(item.price.toDouble() / 100.0).toStringAsFixed(1)} x $quantity", style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.remove_circle_outline, color: Colors.blueAccent, size: 20),
-                                    onPressed: () {
-                                      setState(() {
-                                        if (quantity > 1) {
-                                          _cart[itemId] = quantity - 1;
-                                        } else {
-                                          _cart.remove(itemId);
-                                        }
-                                      });
-                                    },
-                                  ),
-                                  Text("$quantity", style: const TextStyle(fontWeight: FontWeight.bold)),
-                                  IconButton(
-                                    icon: const Icon(Icons.add_circle_outline, color: Colors.blueAccent, size: 20),
-                                    onPressed: () {
-                                      setState(() {
-                                        _cart[itemId] = quantity + 1;
-                                      });
-                                    },
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
+                  flex: 3,
+                  child: _showCart && isPortrait
+                      ? Padding(
+                          padding: kCatalogPadding,
+                          child: OrderSummaryPanel(
+                            cartNotifier: _cart,
+                            menuItems: _menu.value.items,
+                            showHeader: false,
+                            onPlaceOrder: _placeOrder,
+                          ),
+                        )
+                      : MenuCatalogWidget(
+                          menuNotifier: _menu,
+                          cartNotifier: _cart,
+                          serverHost: widget.serverHost,
+                          viewportHeight: viewportHeight,
                         ),
                 ),
-                if (_cart.isNotEmpty) ...[
-                  const Divider(),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12.0),
-                    key: const ValueKey('checkout_summary'),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text("Total:", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                        Text("₹${_getCartTotal().toStringAsFixed(2)}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.blueAccent)),
-                      ],
+                if (!isPortrait)
+                  Container(
+                    width: 1,
+                    color: kDividerDark,
+                  ),
+                if (!isPortrait)
+                  Expanded(
+                    flex: 1,
+                    child: Container(
+                      color: kGradientDarkStart,
+                      padding: kCatalogPadding,
+                      child: OrderSummaryPanel(
+                        cartNotifier: _cart,
+                        menuItems: _menu.value.items,
+                        showHeader: true,
+                        onPlaceOrder: _placeOrder,
+                      ),
                     ),
                   ),
-                  ElevatedButton.icon(
-                    onPressed: _placeOrder,
-                    icon: const Icon(Icons.payment),
-                    label: const Text("Confirm & Place Order", style: TextStyle(fontWeight: FontWeight.bold)),
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(50),
-                      backgroundColor: Colors.blueAccent,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  )
-                ]
               ],
             ),
-          )
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAdView() {
-    final ad = _adCampaigns[_currentAdIndex];
-    final mediaUrl = ad['mediaUrl'] as String? ?? '';
-    final title = ad['title'] as String? ?? '';
-    final subtitle = ad['subtitle'] as String? ?? ad['description'] ?? '';
-
-    final hasVideo = mediaUrl.isNotEmpty && (mediaUrl.endsWith('.mp4') || mediaUrl.endsWith('.webm'));
-    final isVideoInitialized = _videoPlayerController != null && _videoPlayerController!.value.isInitialized;
-
-    return Container(
-      color: Colors.black,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Play Video
-          if (hasVideo && isVideoInitialized)
-            FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: _videoPlayerController!.value.size.width,
-                height: _videoPlayerController!.value.size.height,
-                child: VideoPlayer(_videoPlayerController!),
-              ),
-            )
-          else
-            // Fallback UI or Static Graphic
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFF0F172A), Color(0xFF1E1B4B)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.play_circle_fill, size: 80, color: Colors.blueAccent),
-                    const SizedBox(height: 20),
-                    Text(
-                      "DEVICE IN SESSION: ${widget.deviceId}",
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold),
+            if (isPortrait && !_showCart)
+              ValueListenableBuilder<CartSnapshot>(
+                valueListenable: _cart,
+                builder: (context, cart, _) {
+                  if (cart.isEmpty) return const SizedBox.shrink();
+                  return Positioned(
+                    bottom: 24,
+                    left: 24,
+                    right: 24,
+                    child: Container(
+                      height: 60,
+                      decoration: BoxDecoration(
+                        color: Colors.blueAccent,
+                        borderRadius: kFloatingCartBorderRadius,
+                        border: Border.all(color: Colors.white24, width: 1),
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            setState(() {
+                              _showCart = true;
+                            });
+                          },
+                          borderRadius: kFloatingCartBorderRadius,
+                          child: Padding(
+                            padding: kFloatingCartPadding,
+                            child: Row(
+                              mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  "VIEW ORDER (${cart.totalItemCount} ITEMS)",
+                                  style: kFloatingCartItemsStyle,
+                                ),
+                                Text(
+                                  "₹${cart.totalPrice(_menu.value.items).toStringAsFixed(2)}  →",
+                                  style: kFloatingCartTotalStyle,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 10),
-                    const Text(
-                      "SPONSORED ADVERTISEMENT",
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 2, color: Colors.blue),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      title,
-                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(fontSize: 14, color: Color(0xFF94A3B8)),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
+                  );
+                },
               ),
-            ),
-            
-          // QR overlay on the bottom right for active campaigns (if valid URL or index)
-          Positioned(
-            bottom: 30,
-            right: 30,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4)),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 100,
-                    height: 100,
-                    child: QrImageView(
-                      data: mediaUrl.isNotEmpty ? mediaUrl : 'http://${widget.serverHost}:4200/ad/${ad['bookingId']}',
-                      version: QrVersions.auto,
-                      size: 100,
-                      gapless: false,
-                      foregroundColor: Colors.black,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    "Scan to Claim Offer",
-                    style: TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold),
-                  )
-                ],
-              ),
-            ),
-          )
-        ],
-      ),
-    );
-  }
-}
-
-class OrderCheckoutModal extends StatefulWidget {
-  final OrderServiceClient orderClient;
-  final CallOptions callOptions;
-  final String deviceId;
-  final List<MenuItem> menuItems;
-  final Map<String, int> cart;
-  final int totalAmountPaise;
-  final VoidCallback onOrderCompleted;
-
-  const OrderCheckoutModal({
-    super.key,
-    required this.orderClient,
-    required this.callOptions,
-    required this.deviceId,
-    required this.menuItems,
-    required this.cart,
-    required this.totalAmountPaise,
-    required this.onOrderCompleted,
-  });
-
-  @override
-  State<OrderCheckoutModal> createState() => _OrderCheckoutModalState();
-}
-
-class _OrderCheckoutModalState extends State<OrderCheckoutModal> {
-  bool _loading = true;
-  String _error = '';
-  String _orderId = '';
-  String _paymentUrl = '';
-  Timer? _statusPollTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _createOrder();
-  }
-
-  void _createOrder() async {
-    try {
-      final orderItems = widget.cart.entries.map((entry) {
-        final item = widget.menuItems.firstWhere((i) => i.itemId == entry.key);
-        return OrderItem()
-          ..itemId = item.itemId
-          ..name = item.name
-          ..quantity = entry.value
-          ..price = item.price; // price in paise
-      }).toList();
-
-      final req = CreateOrderRequest()
-        ..deviceId = widget.deviceId
-        ..merchantId = ''
-        ..tableNumber = 'Table 5'
-        ..items.addAll(orderItems)
-        ..totalAmount = Int64(widget.totalAmountPaise);
-
-      final response = await widget.orderClient.createOrder(req, options: widget.callOptions);
-
-      if (response.success) {
-        if (mounted) {
-          setState(() {
-            _orderId = response.orderId;
-            _paymentUrl = response.paymentUrl;
-            _loading = false;
-          });
-        }
-        _startPolling(responseOrderId: response.orderId);
-      } else {
-        if (mounted) {
-          setState(() {
-            _error = response.message;
-            _loading = false;
-          });
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = 'Failed to process order via server: $e';
-          _loading = false;
-        });
-      }
-    }
-  }
-
-  void _startPolling({required String responseOrderId}) {
-    _statusPollTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
-      try {
-        final checkReq = GetOrderStatusRequest()..orderId = responseOrderId;
-        final response = await widget.orderClient.getOrderStatus(checkReq, options: widget.callOptions);
-
-        if (response.paymentStatus == 'completed') {
-          _statusPollTimer?.cancel();
-          Navigator.pop(context); // close modal
-          widget.onOrderCompleted();
-        } else if (response.paymentStatus == 'failed') {
-          _statusPollTimer?.cancel();
-          if (mounted) {
-            setState(() {
-              _error = 'Payment transaction failed. Please retry.';
-            });
-          }
-        }
-      } catch (e) {
-        print('Polling order status error: $e');
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _statusPollTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text("Complete Checkout", style: TextStyle(fontWeight: FontWeight.bold)),
-      content: SizedBox(
-        width: 320,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_loading) ...[
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              const Text("Initializing payment URL..."),
-            ] else if (_error.isNotEmpty) ...[
-              const Icon(Icons.error_outline, color: Colors.red, size: 50),
-              const SizedBox(height: 16),
-              Text(_error, style: const TextStyle(color: Colors.redAccent), textAlign: TextAlign.center),
-            ] else ...[
-              const Icon(Icons.qr_code_scanner, color: Colors.blueAccent, size: 50),
-              const SizedBox(height: 16),
-              const Text(
-                "Scan PhonePe QR to Pay",
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                "Order ID: $_orderId",
-                style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                color: Colors.white,
-                child: QrImageView(
-                  data: _paymentUrl,
-                  version: QrVersions.auto,
-                  size: 200,
-                  foregroundColor: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: 8),
-                  Text("Waiting for payment callback...", style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
-                ],
-              )
-            ],
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            _statusPollTimer?.cancel();
-            Navigator.pop(context);
-          },
-          child: const Text("Cancel"),
-        ),
-      ],
     );
   }
 }
