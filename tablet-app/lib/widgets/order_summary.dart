@@ -1,13 +1,3 @@
-/// Order summary panel — displays cart contents and checkout button.
-///
-/// BOTTLENECK ADDRESSED:
-/// - Cart item quantity changes triggered root setState, rebuilding the entire
-///   menu grid, video player, and app bar alongside the order summary.
-///
-/// FIX: This widget observes CartNotifier via ValueListenableBuilder. Only the
-/// order summary list, total, and checkout button rebuild on cart changes.
-library;
-
 import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../menu_state.dart';
@@ -19,6 +9,7 @@ class OrderSummaryPanel extends StatelessWidget {
   final List<MenuItem> menuItems;
   final bool showHeader;
   final VoidCallback onPlaceOrder;
+  final String serverHost;
 
   const OrderSummaryPanel({
     super.key,
@@ -26,6 +17,7 @@ class OrderSummaryPanel extends StatelessWidget {
     required this.menuItems,
     required this.showHeader,
     required this.onPlaceOrder,
+    required this.serverHost,
   });
 
   @override
@@ -33,96 +25,259 @@ class OrderSummaryPanel extends StatelessWidget {
     return ValueListenableBuilder<CartSnapshot>(
       valueListenable: cartNotifier,
       builder: (context, cart, _) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (showHeader) ...[
-              const Text("Order Summary", style: kOrderHeaderStyle),
-              const SizedBox(height: 20),
-            ],
-            Expanded(
-              child: cart.isEmpty
-                  ? const Center(
-                      child: Text("Cart is empty", style: kEmptyCartStyle))
-                  : ListView.builder(
-                      itemCount: cart.items.length,
-                      itemBuilder: (context, index) {
-                        final itemId = cart.items.keys.elementAt(index);
-                        final quantity = cart.items[itemId]!;
-                        final item = menuItems.firstWhere(
-                          (i) => i.itemId == itemId,
-                          orElse: () => MenuItem()
-                            ..itemId = itemId
-                            ..name = 'Unknown Item'
-                            ..price = Int64(0),
-                        );
+        if (cart.isEmpty) {
+          return const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.shopping_cart_outlined, size: 64, color: kTextGrey),
+                SizedBox(height: 16),
+                Text("Your cart is empty", style: kEmptyCartStyle),
+              ],
+            ),
+          );
+        }
 
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(item.name, style: kOrderItemTitleStyle),
-                          subtitle: Text(
-                            "₹${(item.price.toDouble() / 100.0).toStringAsFixed(1)} x $quantity",
-                            style: kOrderItemSubtitleStyle,
+        final subtotal = cart.totalPrice(menuItems);
+        final taxesAndFees = subtotal * 0.09; // 9% taxes & fees as shown in the mockup
+        final total = subtotal + taxesAndFees;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: ListView.separated(
+                itemCount: cart.items.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 16),
+                itemBuilder: (context, index) {
+                  final itemId = cart.items.keys.elementAt(index);
+                  final quantity = cart.items[itemId]!;
+                  final item = menuItems.firstWhere(
+                    (i) => i.itemId == itemId,
+                    orElse: () => MenuItem()
+                      ..itemId = itemId
+                      ..name = 'Unknown Item'
+                      ..price = Int64(0),
+                  );
+
+                  final absoluteImageUrl = item.imageUrl.isNotEmpty
+                      ? (item.imageUrl.startsWith('http')
+                          ? item.imageUrl
+                          : 'http://$serverHost:4200${item.imageUrl}')
+                      : '';
+
+                  final unitPrice = item.price.toDouble() / 100.0;
+                  final lineTotal = unitPrice * quantity;
+
+                  return Container(
+                    decoration: const BoxDecoration(
+                      color: kCardBg,
+                      borderRadius: kCardBorderRadius,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: 6,
+                          offset: Offset(0, 3),
+                        )
+                      ],
+                    ),
+                    padding: const EdgeInsets.all(16),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        // Food Image
+                        ClipRRect(
+                          borderRadius: kImageBorderRadius,
+                          child: Container(
+                            width: 90,
+                            height: 90,
+                            color: kScaffoldBg,
+                            child: absoluteImageUrl.isNotEmpty
+                                ? Image.network(
+                                    absoluteImageUrl,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) =>
+                                        const Icon(Icons.restaurant_menu, color: kTextGrey),
+                                  )
+                                : const Icon(Icons.restaurant_menu, color: kTextGrey),
                           ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
+                        ),
+                        const SizedBox(width: 16),
+                        // Details Column
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.remove_circle_outline_rounded,
-                                  color: Colors.blueAccent,
-                                  size: 20,
-                                ),
-                                onPressed: () =>
-                                    cartNotifier.removeItem(itemId),
+                              Text(
+                                item.name,
+                                style: kCardTitleStyle.copyWith(fontSize: 18),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              Text('$quantity',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold)),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.add_circle_outline_rounded,
-                                  color: Colors.blueAccent,
-                                  size: 20,
+                              const SizedBox(height: 4),
+                              Text(
+                                "Unit price: ₹${unitPrice.toStringAsFixed(2)}",
+                                style: kCardDescriptionStyle.copyWith(fontSize: 13),
+                              ),
+                              const SizedBox(height: 12),
+                              // Pill Qty Stepper
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: kScaffoldBg,
+                                  borderRadius: BorderRadius.circular(30),
                                 ),
-                                onPressed: () => cartNotifier.addItem(itemId),
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      constraints: const BoxConstraints(),
+                                      padding: const EdgeInsets.all(8),
+                                      icon: const Icon(Icons.remove, color: kAccentBlue, size: 18),
+                                      onPressed: () => cartNotifier.removeItem(itemId),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '$quantity',
+                                      style: kQuantityTextStyle.copyWith(color: kTextDark),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    IconButton(
+                                      constraints: const BoxConstraints(),
+                                      padding: const EdgeInsets.all(8),
+                                      icon: const Icon(Icons.add, color: kAccentBlue, size: 18),
+                                      onPressed: () => cartNotifier.addItem(itemId),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ],
                           ),
-                        );
-                      },
+                        ),
+                        const SizedBox(width: 16),
+                        // Price & Trash
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            const Text(
+                              "Line total",
+                              style: kCardDescriptionStyle,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              "₹${lineTotal.toStringAsFixed(2)}",
+                              style: kTotalValueStyle.copyWith(fontSize: 18),
+                            ),
+                            const SizedBox(height: 12),
+                            // Trash Icon inside red-bordered circle
+                            GestureDetector(
+                              onTap: () {
+                                // Remove all items of this type
+                                for (int i = 0; i < quantity; i++) {
+                                  cartNotifier.removeItem(itemId);
+                                }
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.red.shade200, width: 1.5),
+                                  color: Colors.red.shade50,
+                                ),
+                                padding: const EdgeInsets.all(8),
+                                child: Icon(Icons.delete_outline_rounded, color: Colors.red.shade400, size: 20),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
+                  );
+                },
+              ),
             ),
-            if (cart.isNotEmpty) ...[
-              const Divider(),
-              Padding(
-                padding: kCheckoutTotalPadding,
-                key: const ValueKey('checkout_summary'),
+            const SizedBox(height: 16),
+            // Calculations Card
+            Container(
+              decoration: const BoxDecoration(
+                color: kCardBg,
+                borderRadius: kCardBorderRadius,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 6,
+                    offset: Offset(0, 3),
+                  )
+                ],
+              ),
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text("Subtotal", style: kOrderItemSubtitleStyle.copyWith(fontSize: 14)),
+                      Text("₹${subtotal.toStringAsFixed(2)}", style: kCardTitleStyle.copyWith(fontSize: 14)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text("Taxes & fees (9%)", style: kOrderItemSubtitleStyle.copyWith(fontSize: 14)),
+                      Text("₹${taxesAndFees.toStringAsFixed(2)}", style: kCardTitleStyle.copyWith(fontSize: 14)),
+                    ],
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Divider(color: kDividerColor, height: 1),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text("Total", style: kTotalLabelStyle.copyWith(fontSize: 18)),
+                      Text(
+                        "₹${total.toStringAsFixed(2)}",
+                        style: kTotalValueStyle.copyWith(fontSize: 24),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            // Proceed to Payment button
+            SizedBox(
+              height: 64,
+              child: ElevatedButton(
+                onPressed: onPlaceOrder,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: kAccentBlue,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(32)),
+                  elevation: 2,
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text("Total:", style: kTotalLabelStyle),
-                    Text(
-                      "₹${cart.totalPrice(menuItems).toStringAsFixed(2)}",
-                      style: kTotalValueStyle,
+                    const SizedBox(width: 24), // to center text somewhat
+                    const Text(
+                      "Proceed to Payment",
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.white24,
+                        shape: BoxShape.circle,
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      child: const Icon(Icons.arrow_forward, color: Colors.white, size: 20),
                     ),
                   ],
                 ),
               ),
-              ElevatedButton.icon(
-                onPressed: onPlaceOrder,
-                icon: const Icon(Icons.qr_code_2_rounded),
-                label: const Text("Confirm & Place Order",
-                    style: kCheckoutTitleStyle),
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(50),
-                  backgroundColor: Colors.blueAccent,
-                  foregroundColor: Colors.white,
-                  shape: const RoundedRectangleBorder(
-                      borderRadius: kInputBorderRadius),
-                ),
-              ),
-            ],
+            ),
           ],
         );
       },

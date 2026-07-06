@@ -23,6 +23,7 @@ const AdBooking = require('./models/AdBooking');
 const PhonePeTransaction = require('./models/PhonePeTransaction');
 const AdsRates = require('./models/AdsRates');
 const Report = require('./models/Report');
+const HostApplication = require('./models/HostApplication');
 
 // WebSocket client sockets map (merchantId -> ws socket)
 const merchantSockets = new Map();
@@ -369,6 +370,9 @@ const menuServiceHandlers = {
       const claims = verifyGrpcToken(call);
       const { hostApplicationId } = claims;
 
+      const app = await HostApplication.findById(hostApplicationId);
+      const outletName = app ? app.outletName : 'Aster & Ice';
+
       const menu = await Menu.findOne({ hostApplicationId });
       const items = menu ? menu.items.map(item => ({
         itemId: item.itemId,
@@ -382,7 +386,7 @@ const menuServiceHandlers = {
 
       callback(null, {
         success: true,
-        message: menu ? 'Menu retrieved' : 'No menu found, empty list returned',
+        message: outletName,
         items
       });
     } catch (err) {

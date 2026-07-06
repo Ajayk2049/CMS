@@ -73,109 +73,36 @@ class TabletopOrderingApp extends StatefulWidget {
 }
 
 class _TabletopOrderingAppState extends State<TabletopOrderingApp> {
-  ThemeMode _themeMode = ThemeMode.dark;
-  Timer? _themeTimer;
-
   @override
   void initState() {
     super.initState();
-    _loadThemeMode();
-    _startThemeTimer();
   }
 
   @override
   void dispose() {
-    _themeTimer?.cancel();
     super.dispose();
-  }
-
-  void _loadThemeMode() async {
-    final prefs = await SharedPreferences.getInstance();
-    final hasOverride = prefs.containsKey('isLightTheme');
-
-    if (hasOverride) {
-      final isLight = prefs.getBool('isLightTheme') ?? false;
-      setState(() {
-        _themeMode = isLight ? ThemeMode.light : ThemeMode.dark;
-      });
-    } else {
-      _checkTimeBasedTheme();
-    }
-  }
-
-  void _startThemeTimer() {
-    _themeTimer = Timer.periodic(kThemeCheckInterval, (timer) {
-      _checkTimeBasedTheme();
-    });
-  }
-
-  void _checkTimeBasedTheme() async {
-    final prefs = await SharedPreferences.getInstance();
-    final hasOverride = prefs.containsKey('isLightTheme');
-
-    if (!hasOverride) {
-      final hour = DateTime.now().hour;
-      final isDay = hour >= 7 && hour < 20; // 7am to 8pm Light
-      final targetMode = isDay ? ThemeMode.light : ThemeMode.dark;
-      if (_themeMode != targetMode) {
-        setState(() {
-          _themeMode = targetMode;
-        });
-      }
-    }
-  }
-
-  void toggleTheme() async {
-    final prefs = await SharedPreferences.getInstance();
-    final newIsLight = _themeMode == ThemeMode.dark;
-    await prefs.setBool('isLightTheme', newIsLight);
-    setState(() {
-      _themeMode = newIsLight ? ThemeMode.light : ThemeMode.dark;
-    });
   }
 
   static final ThemeData _lightTheme = ThemeData(
     brightness: Brightness.light,
-    primaryColor: Colors.blueAccent,
+    primaryColor: kAccentBlue,
     useMaterial3: true,
-    scaffoldBackgroundColor: kSlateLight,
-    cardTheme: CardThemeData(
-      color: Colors.white,
-      elevation: 2,
-      shadowColor: Colors.black.withValues(alpha: 0.05),
-      shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
-    ),
-    appBarTheme: const AppBarTheme(
-      backgroundColor: Color(0xFFF1F5F9),
-      foregroundColor: Color(0xFF1E293B),
-      elevation: 0,
-    ),
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: Colors.blueAccent,
-      brightness: Brightness.light,
-      surface: Colors.white,
-    ),
-  );
-
-  static final ThemeData _darkTheme = ThemeData(
-    brightness: Brightness.dark,
-    primaryColor: Colors.blueAccent,
-    useMaterial3: true,
-    scaffoldBackgroundColor: kScaffoldDarkBg,
+    scaffoldBackgroundColor: kScaffoldBg,
     cardTheme: const CardThemeData(
-      color: kCardDark,
-      elevation: 0,
+      color: kCardBg,
+      elevation: 4,
+      shadowColor: Colors.black12,
       shape: RoundedRectangleBorder(borderRadius: kCardBorderRadius),
     ),
     appBarTheme: const AppBarTheme(
-      backgroundColor: kCardDark,
-      foregroundColor: Colors.white,
+      backgroundColor: Colors.transparent,
+      foregroundColor: kTextDark,
       elevation: 0,
     ),
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: Colors.blueAccent,
-      brightness: Brightness.dark,
-      surface: kCardDark,
+    colorScheme: const ColorScheme.light(
+      primary: kAccentBlue,
+      surface: kCardBg,
+      onSurface: kTextDark,
     ),
   );
 
@@ -184,9 +111,8 @@ class _TabletopOrderingAppState extends State<TabletopOrderingApp> {
     return MaterialApp(
       title: 'Tabletop Ordering Kiosk',
       debugShowCheckedModeBanner: false,
-      themeMode: _themeMode,
+      themeMode: ThemeMode.light,
       theme: _lightTheme,
-      darkTheme: _darkTheme,
       home: MainDeviceRouter(
         initialActivated: widget.initialActivated,
         initialServerHost: widget.initialServerHost,
@@ -194,8 +120,8 @@ class _TabletopOrderingAppState extends State<TabletopOrderingApp> {
         initialToken: widget.initialToken,
         initialHostApplicationId: widget.initialHostApplicationId,
         initialBypassPassword: widget.initialBypassPassword,
-        toggleTheme: toggleTheme,
-        currentThemeMode: _themeMode,
+        toggleTheme: () {},
+        currentThemeMode: ThemeMode.light,
       ),
     );
   }
@@ -451,16 +377,22 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
       ),
       extendBodyBehindAppBar: true,
       body: Container(
-        decoration: kDarkGradientBg,
+        color: kScaffoldBg,
         child: Center(
           child: SingleChildScrollView(
             child: Container(
               width: 450,
               padding: kSetupCardPadding,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.04),
-                borderRadius: const BorderRadius.all(Radius.circular(24)),
-                border: Border.all(color: Colors.white10),
+              decoration: const BoxDecoration(
+                color: kCardBg,
+                borderRadius: BorderRadius.all(Radius.circular(24)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 12,
+                    offset: Offset(0, 4),
+                  )
+                ],
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -598,6 +530,8 @@ class _KioskScreenState extends State<KioskScreen> {
   // ── Screen-level state (legitimate root setState targets) ──
   bool _isIdle = true;
   bool _showCart = false;
+  String _outletName = 'Aster & Ice';
+  String _selectedCategory = '';
 
   // ── gRPC ──
   late ClientChannel _channel;
@@ -695,6 +629,12 @@ class _KioskScreenState extends State<KioskScreen> {
       final response = await _menuClient.getMenu(req, options: _callOptions);
 
       if (mounted) {
+        setState(() {
+          _outletName = response.message.isNotEmpty ? response.message : 'Aster & Ice';
+          if (_selectedCategory.isEmpty && response.items.isNotEmpty) {
+            _selectedCategory = response.items.first.category;
+          }
+        });
         _menu.setItems(response.items);
       }
     } catch (e) {
@@ -706,7 +646,7 @@ class _KioskScreenState extends State<KioskScreen> {
   }
 
   void _loadMockFallbackMenu() {
-    _menu.setItems([
+    final mockItems = [
       MenuItem()
         ..itemId = 'item_fallback_1'
         ..name = 'Pepperoni Pizza Grande'
@@ -735,7 +675,13 @@ class _KioskScreenState extends State<KioskScreen> {
         ..price = Int64(17900)
         ..category = 'Beverages'
         ..isAvailable = true,
-    ]);
+    ];
+    setState(() {
+      if (_selectedCategory.isEmpty) {
+        _selectedCategory = 'Starters';
+      }
+    });
+    _menu.setItems(mockItems);
   }
 
   // ────────────────── Ad lifecycle ──────────────────
@@ -965,165 +911,339 @@ class _KioskScreenState extends State<KioskScreen> {
 
     final isPortrait =
         MediaQuery.of(context).orientation == Orientation.portrait;
-    final viewportHeight = MediaQuery.of(context).size.height -
-        kToolbarHeight -
-        MediaQuery.of(context).padding.top -
-        MediaQuery.of(context).padding.bottom;
 
     return Listener(
       onPointerDown: (_) => _resetIdleTimer(),
       child: Scaffold(
-        appBar: AppBar(
-          leading: (isPortrait && _showCart)
-              ? IconButton(
-                  icon: const Icon(Icons.arrow_back_rounded),
-                  onPressed: () {
-                    setState(() {
-                      _showCart = false;
-                    });
-                  },
-                  tooltip: "Back to Menu",
-                )
-              : null,
-          title: Text(isPortrait && _showCart
-              ? "Order Summary"
-              : "Outlet Kiosk: ${widget.deviceId} — Table 05"),
-          actions: [
-            IconButton(
-              icon: Icon(
-                widget.currentThemeMode == ThemeMode.light
-                    ? Icons.dark_mode_outlined
-                    : Icons.light_mode_outlined,
+        backgroundColor: kScaffoldBg,
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 1. Dynamic Header
+              _buildHeader(isPortrait),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 24),
+                child: Divider(color: kDividerColor, height: 1),
               ),
-              onPressed: widget.toggleTheme,
-              tooltip: "Toggle Light/Dark Theme",
-            ),
-            if (isPortrait && !_showCart)
-              ValueListenableBuilder<CartSnapshot>(
-                valueListenable: _cart,
-                builder: (context, cart, _) {
-                  return IconButton(
-                    icon: Badge(
-                      isLabelVisible: cart.isNotEmpty,
-                      label: Text('${cart.totalItemCount}'),
-                      child: const Icon(Icons.shopping_bag_outlined),
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        _showCart = true;
-                      });
-                    },
-                    tooltip: "View Order",
-                  );
-                },
-              ),
-            IconButton(
-              icon: const Icon(Icons.admin_panel_settings_outlined),
-              onPressed: _promptUnlock,
-              tooltip: "Exit Kiosk Mode",
-            ),
-            IconButton(
-              icon: const Icon(Icons.play_circle_outline_rounded),
-              onPressed: _returnToAds,
-              tooltip: "Return to ad slideshow",
-            ),
-          ],
-        ),
-        body: Stack(
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: _showCart && isPortrait
-                      ? Padding(
-                          padding: kCatalogPadding,
-                          child: OrderSummaryPanel(
-                            cartNotifier: _cart,
-                            menuItems: _menu.value.items,
-                            showHeader: false,
-                            onPlaceOrder: _placeOrder,
-                          ),
-                        )
-                      : MenuCatalogWidget(
-                          menuNotifier: _menu,
+              // 2. Body Area
+              Expanded(
+                child: _showCart
+                    ? Padding(
+                        padding: const EdgeInsets.fromLTRB(40, 24, 40, 24),
+                        child: OrderSummaryPanel(
                           cartNotifier: _cart,
+                          menuItems: _menu.value.items,
+                          showHeader: false,
+                          onPlaceOrder: _placeOrder,
                           serverHost: widget.serverHost,
-                          viewportHeight: viewportHeight,
                         ),
-                ),
-                if (!isPortrait)
-                  Container(
-                    width: 1,
-                    color: kDividerDark,
-                  ),
-                if (!isPortrait)
-                  Expanded(
-                    flex: 1,
-                    child: Container(
-                      color: kGradientDarkStart,
-                      padding: kCatalogPadding,
-                      child: OrderSummaryPanel(
-                        cartNotifier: _cart,
-                        menuItems: _menu.value.items,
-                        showHeader: true,
-                        onPlaceOrder: _placeOrder,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            if (isPortrait && !_showCart)
-              ValueListenableBuilder<CartSnapshot>(
-                valueListenable: _cart,
-                builder: (context, cart, _) {
-                  if (cart.isEmpty) return const SizedBox.shrink();
-                  return Positioned(
-                    bottom: 24,
-                    left: 24,
-                    right: 24,
-                    child: Container(
-                      height: 60,
-                      decoration: BoxDecoration(
-                        color: Colors.blueAccent,
-                        borderRadius: kFloatingCartBorderRadius,
-                        border: Border.all(color: Colors.white24, width: 1),
-                      ),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: () {
-                            setState(() {
-                              _showCart = true;
-                            });
-                          },
-                          borderRadius: kFloatingCartBorderRadius,
-                          child: Padding(
-                            padding: kFloatingCartPadding,
-                            child: Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  "VIEW ORDER (${cart.totalItemCount} ITEMS)",
-                                  style: kFloatingCartItemsStyle,
+                      )
+                    : Stack(
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // Sidebar Categories
+                              _buildSidebar(),
+                              // Vertical divider
+                              Container(width: 1, color: kDividerColor),
+                              // Grid Catalog Menu
+                              Expanded(
+                                child: MenuCatalogWidget(
+                                  menuNotifier: _menu,
+                                  cartNotifier: _cart,
+                                  serverHost: widget.serverHost,
+                                  viewportHeight: MediaQuery.of(context).size.height,
+                                  selectedCategory: _selectedCategory,
                                 ),
-                                Text(
-                                  "₹${cart.totalPrice(_menu.value.items).toStringAsFixed(2)}  →",
-                                  style: kFloatingCartTotalStyle,
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        ),
+                          // Floating Bottom Cart Bar
+                          _buildFloatingCartBar(),
+                        ],
                       ),
-                    ),
-                  );
-                },
               ),
-          ],
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _buildHeader(bool isPortrait) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+      child: Row(
+        children: [
+          // Back Button (only shown on the Cart page)
+          if (_showCart) ...[
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _showCart = false;
+                });
+              },
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black12,
+                      blurRadius: 6,
+                      offset: Offset(0, 3),
+                    )
+                  ],
+                ),
+                padding: const EdgeInsets.all(12),
+                child: const Icon(Icons.arrow_back, color: kTextDark, size: 20),
+              ),
+            ),
+            const SizedBox(width: 20),
+          ],
+          // Title / Outlet name
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _showCart
+                    ? Text(
+                        _outletName.toUpperCase(),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          color: kAccentBlue,
+                          letterSpacing: 1.5,
+                        ),
+                      )
+                    : Text(
+                        _outletName,
+                        style: const TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.w800,
+                          color: kTextDark,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                if (_showCart) ...[
+                  const SizedBox(height: 2),
+                  const Text(
+                    "Your Cart",
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: kTextDark,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          // Play button (Return to Ads slideshow)
+          IconButton(
+            icon: const Icon(Icons.play_circle_outline_rounded, color: kTextGrey),
+            onPressed: _returnToAds,
+            tooltip: "Return to ad slideshow",
+          ),
+          const SizedBox(width: 8),
+          // Settings/Unlock button
+          IconButton(
+            icon: const Icon(Icons.admin_panel_settings_outlined, color: kTextGrey),
+            onPressed: _promptUnlock,
+            tooltip: "Exit Kiosk Mode",
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebar() {
+    final categoriesOrder = ['Starters', 'Main Course', 'Dessert', 'Beverages'];
+    final categories = <String>[];
+    for (final cat in categoriesOrder) {
+      if (_menu.value.items.any((item) => item.category.toLowerCase() == cat.toLowerCase())) {
+        categories.add(cat);
+      }
+    }
+    for (final item in _menu.value.items) {
+      if (!categoriesOrder.any((cat) => cat.toLowerCase() == item.category.toLowerCase()) &&
+          !categories.contains(item.category)) {
+        categories.add(item.category);
+      }
+    }
+    if (categories.isEmpty) {
+      categories.addAll(categoriesOrder);
+    }
+
+    return Container(
+      width: 120,
+      color: kSidebarBg,
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
+      child: Column(
+        children: [
+          Expanded(
+            child: ListView.separated(
+              itemCount: categories.length,
+              separatorBuilder: (context, index) => const SizedBox(height: 16),
+              itemBuilder: (context, index) {
+                final cat = categories[index];
+                final isSelected = cat.toLowerCase() == _selectedCategory.toLowerCase();
+
+                IconData iconData;
+                switch (cat.toLowerCase()) {
+                  case 'starters':
+                    iconData = Icons.local_florist_outlined;
+                    break;
+                  case 'main course':
+                    iconData = Icons.dinner_dining_outlined;
+                    break;
+                  case 'dessert':
+                  case 'desserts':
+                    iconData = Icons.icecream_outlined;
+                    break;
+                  case 'beverages':
+                  case 'drinks':
+                    iconData = Icons.local_bar_outlined;
+                    break;
+                  default:
+                    iconData = Icons.restaurant_menu_rounded;
+                }
+
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _selectedCategory = cat;
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected ? kAccentBlue : kCardBg,
+                      borderRadius: kCardBorderRadius,
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: 4,
+                          offset: Offset(0, 2),
+                        )
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          iconData,
+                          color: isSelected ? Colors.white : kTextDark,
+                          size: 26,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          cat,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: isSelected ? Colors.white : kTextDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFloatingCartBar() {
+    return ValueListenableBuilder<CartSnapshot>(
+      valueListenable: _cart,
+      builder: (context, cart, _) {
+        if (cart.isEmpty) return const SizedBox.shrink();
+        return Positioned(
+          bottom: 24,
+          left: 144,
+          right: 24,
+          child: Container(
+            height: 72,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: kFloatingCartBorderRadius,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black12,
+                  blurRadius: 10,
+                  offset: Offset(0, 4),
+                )
+              ],
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      decoration: const BoxDecoration(
+                        color: kAccentBlue,
+                        shape: BoxShape.circle,
+                      ),
+                      padding: const EdgeInsets.all(10),
+                      child: Badge(
+                        isLabelVisible: cart.isNotEmpty,
+                        label: Text('${cart.totalItemCount}', style: const TextStyle(color: Colors.white)),
+                        child: const Icon(Icons.shopping_cart_outlined, color: Colors.white, size: 20),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          "${cart.totalItemCount} items in cart",
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: kTextDark),
+                        ),
+                        Text(
+                          "Total value: Rs. ${cart.totalPrice(_menu.value.items).toStringAsFixed(2)}",
+                          style: const TextStyle(fontSize: 12, color: kTextGrey),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _showCart = true;
+                    });
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: kAccentBlue,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    elevation: 2,
+                  ),
+                  child: const Row(
+                    children: [
+                      Text("View Cart", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      SizedBox(width: 8),
+                      Icon(Icons.arrow_forward_rounded, size: 16),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

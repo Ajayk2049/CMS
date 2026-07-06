@@ -79,3 +79,7 @@ server/uploads/*
 !server/uploads/.gitkeep
 server/delete_dummies.js
 
+# Flow diagrams
+flow_diagram/
+Flow_Diagrams/
+

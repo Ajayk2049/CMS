@@ -60,6 +60,10 @@ class AdViewWidget extends StatelessWidget {
     const double overflowW = baseWidth + 160.0;
     const double leftOffset = -15.0;
 
+    final videoPaths = playerState.value.playlist
+        .where((path) => !path.startsWith('static__') && path.isNotEmpty)
+        .toList();
+
     return RepaintBoundary(
       child: ClipRect(
         child: OverflowBox(
@@ -75,10 +79,10 @@ class AdViewWidget extends StatelessWidget {
                 width: overflowW,
                 height: baseHeight,
                 child: AndroidView(
+                  key: const Key('native_ad_player'),
                   viewType: 'native_video_view',
                   creationParams: {
-                    'path': videoPath,
-                    'looping': playerState.value.playlist.length == 1,
+                    'paths': videoPaths,
                   },
                   creationParamsCodec: const StandardMessageCodec(),
                 ),
@@ -110,7 +114,7 @@ class AdViewWidget extends StatelessWidget {
     }
 
     return Container(
-      color: kScaffoldDarkBg,
+      color: kScaffoldBg,
       child: Padding(
         padding: kCatalogPadding,
         child: Column(

@@ -29,7 +29,7 @@ class AdPlayerService {
 
   List<String> _playlist = [];
   int _currentIndex = 0;
-  Timer? _gapTimer;
+  Timer? _staticTimer;
   bool _isPaused = false;
   bool _disposed = false;
 
@@ -44,6 +44,7 @@ class AdPlayerService {
     if (_disposed) return;
     _playlist = List.from(playlist);
     _currentIndex = 0;
+    _sendPlaylistToNative();
     _playCurrent();
   }
 
@@ -53,11 +54,14 @@ class AdPlayerService {
       _stopAndClear();
       _playlist = [];
       _currentIndex = 0;
+      _channel.invokeMethod('setPlaylist', {'paths': <String>[]});
       _emitState();
       return;
     }
     final oldSource = _currentSource;
     _playlist = List.from(newPlaylist);
+    _sendPlaylistToNative();
+
     final oldIndex = newPlaylist.indexOf(oldSource);
     if (oldIndex >= 0) {
       _currentIndex = oldIndex;
@@ -71,18 +75,22 @@ class AdPlayerService {
   void pause() {
     _isPaused = true;
     _stopAndClear();
+    _channel.invokeMethod('pause');
     _emitState();
   }
 
   void resume() {
     if (_disposed) return;
     _isPaused = false;
-    if (_playlist.isNotEmpty) _playCurrent();
+    _sendPlaylistToNative();
+    if (_playlist.isNotEmpty) {
+      _playCurrent();
+    }
   }
 
   void dispose() {
     _disposed = true;
-    _gapTimer?.cancel();
+    _staticTimer?.cancel();
     state.dispose();
   }
 
@@ -90,6 +98,13 @@ class AdPlayerService {
       _currentIndex >= 0 && _currentIndex < _playlist.length
           ? _playlist[_currentIndex]
           : '';
+
+  void _sendPlaylistToNative() {
+    final videoPaths = _playlist
+        .where((path) => !path.startsWith('static__') && path.isNotEmpty)
+        .toList();
+    _channel.invokeMethod('setPlaylist', {'paths': videoPaths});
+  }
 
   void _playCurrent() {
     if (_disposed) return;
@@ -101,19 +116,20 @@ class AdPlayerService {
     }
 
     if (source.startsWith('static__')) {
+      _staticTimer?.cancel();
+      _channel.invokeMethod('pause');
       _emitState();
-      _gapTimer = Timer(kStaticAdDisplayDuration, () {
+      _staticTimer = Timer(kStaticAdDisplayDuration, () {
         if (!_disposed && !_isPaused) _advance();
       });
       return;
     }
 
-    // Black gap transition to give the native player time to load
-    _emitState(isTransitioning: true);
-    _gapTimer = Timer(kTransitionBlackDuration, () {
-      if (_disposed || _isPaused) return;
-      _emitState(); // Show video view
-    });
+    _staticTimer?.cancel();
+    _emitState();
+    if (!_isPaused) {
+      _channel.invokeMethod('play');
+    }
   }
 
   void _advance() {
@@ -123,8 +139,8 @@ class AdPlayerService {
   }
 
   void _stopAndClear() {
-    _gapTimer?.cancel();
-    _gapTimer = null;
+    _staticTimer?.cancel();
+    _staticTimer = null;
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
@@ -144,12 +160,12 @@ class AdPlayerService {
     }
   }
 
-  void _emitState({bool isTransitioning = false}) {
+  void _emitState() {
     if (_disposed) return;
     state.value = AdPlayerState(
       currentSource: _currentSource,
       playlist: List.unmodifiable(_playlist),
-      isTransitioning: isTransitioning,
+      isTransitioning: false,
     );
   }
 }

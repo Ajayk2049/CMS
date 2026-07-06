@@ -1,10 +1,3 @@
-/// Static constants for the Kiosk Tablet App.
-///
-/// Every value here was previously instantiated inline inside build methods,
-/// generating short-lived heap objects on every frame. Moving them to top-level
-/// constants eliminates those allocations entirely and reduces GC pressure.
-library;
-
 import 'package:flutter/material.dart';
 
 // ───────────────────────── Durations ─────────────────────────
@@ -71,98 +64,100 @@ const Duration kThemeCheckInterval = Duration(minutes: 5);
 
 // ───────────────────────── Colors ─────────────────────────
 
-const Color kScaffoldDarkBg = Color(0xFF0B0F19);
-const Color kCardDark = Color(0xFF1E293B);
-const Color kSlateLight = Color(0xFFF8FAFC);
-const Color kSlate400 = Color(0xFF94A3B8);
-const Color kSlate500 = Color(0xFF64748B);
-const Color kDividerDark = Color(0xFF334155);
-
-const Color kGradientDarkStart = Color(0xFF0F172A);
-const Color kGradientDarkEnd = Color(0xFF1E1B4B);
+const Color kScaffoldBg = Color(0xFFE4DFEB); // Lavender/grey/cream background
+const Color kCardBg = Color(0xFFFFFFFF); // Pure white card background
+const Color kAccentBlue = Color(0xFF56A4E1); // Accent blue color
+const Color kSidebarBg = Color(0xFFDCD7E3); // Slightly darker tone for sidebar
+const Color kTextDark = Color(0xFF1E1B4B); // Dark indigo for text
+const Color kTextGrey = Color(0xFF64748B); // Slate gray for descriptions
+const Color kDividerColor = Color(0xFFCBD5E1); // Slate gray divider
 
 // ───────────────────────── EdgeInsets (const, zero allocation) ─────────────────────────
 
-const EdgeInsets kCardPadding = EdgeInsets.all(12.0);
+const EdgeInsets kCardPadding = EdgeInsets.all(16.0);
 const EdgeInsets kCatalogPadding = EdgeInsets.all(24.0);
 const EdgeInsets kSetupCardPadding = EdgeInsets.all(32.0);
 const EdgeInsets kCategoryLabelPadding = EdgeInsets.symmetric(vertical: 12.0);
-const EdgeInsets kGradientOverlayPadding = EdgeInsets.fromLTRB(12, 24, 12, 12);
+const EdgeInsets kGradientOverlayPadding = EdgeInsets.fromLTRB(16, 24, 16, 16);
 const EdgeInsets kCheckoutTotalPadding = EdgeInsets.symmetric(vertical: 12.0);
-const EdgeInsets kFloatingCartPadding = EdgeInsets.symmetric(horizontal: 24.0);
+const EdgeInsets kFloatingCartPadding = EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0);
 
 // ───────────────────────── TextStyles (const, zero allocation) ─────────────────────────
 
 const TextStyle kCardTitleStyle = TextStyle(
   fontSize: 16,
   fontWeight: FontWeight.bold,
-  color: Colors.white,
+  color: kTextDark,
 );
 
 const TextStyle kCardDescriptionStyle = TextStyle(
   fontSize: 11,
-  color: Colors.white70,
+  color: kTextGrey,
 );
 
 const TextStyle kCardPriceStyle = TextStyle(
-  fontSize: 14,
+  fontSize: 15,
   fontWeight: FontWeight.w900,
-  color: Colors.blueAccent,
+  color: kAccentBlue,
 );
 
 const TextStyle kCategoryHeaderStyle = TextStyle(
-  fontSize: 18,
+  fontSize: 22,
   fontWeight: FontWeight.bold,
-  color: Colors.blueAccent,
+  color: kTextDark,
 );
 
 const TextStyle kCartButtonTextStyle = TextStyle(
   fontWeight: FontWeight.bold,
-  color: Colors.blueAccent,
+  color: kAccentBlue,
   fontSize: 12,
 );
 
 const TextStyle kQuantityTextStyle = TextStyle(
   fontWeight: FontWeight.bold,
-  color: Colors.blueAccent,
+  color: kAccentBlue,
   fontSize: 14,
 );
 
 const TextStyle kOrderHeaderStyle = TextStyle(
   fontWeight: FontWeight.bold,
-  fontSize: 20,
+  fontSize: 24,
+  color: kTextDark,
 );
 
 const TextStyle kOrderItemTitleStyle = TextStyle(
-  fontSize: 14,
-  fontWeight: FontWeight.w600,
+  fontSize: 16,
+  fontWeight: FontWeight.bold,
+  color: kTextDark,
 );
 
 const TextStyle kOrderItemSubtitleStyle = TextStyle(
-  color: kSlate400,
+  color: kTextGrey,
   fontSize: 12,
 );
 
 const TextStyle kTotalLabelStyle = TextStyle(
   fontSize: 16,
   fontWeight: FontWeight.bold,
+  color: kTextDark,
 );
 
 const TextStyle kTotalValueStyle = TextStyle(
-  fontSize: 18,
+  fontSize: 22,
   fontWeight: FontWeight.w900,
-  color: Colors.blueAccent,
+  color: kAccentBlue,
 );
 
 const TextStyle kSetupTitleStyle = TextStyle(
   fontSize: 24,
   fontWeight: FontWeight.bold,
   letterSpacing: 0.5,
+  color: kTextDark,
 );
 
 const TextStyle kSetupSubtitleStyle = TextStyle(
   fontSize: 12,
-  color: kSlate400,
+  color: kTextGrey,
 );
 
 const TextStyle kErrorTextStyle = TextStyle(
@@ -174,12 +169,12 @@ const TextStyle kErrorTextStyle = TextStyle(
 const TextStyle kAdWaitingTextStyle = TextStyle(
   fontSize: 16,
   fontWeight: FontWeight.bold,
-  color: Colors.white70,
+  color: kTextGrey,
 );
 
 const TextStyle kAdDeviceIdStyle = TextStyle(
   fontSize: 12,
-  color: kSlate400,
+  color: kTextGrey,
   fontWeight: FontWeight.bold,
 );
 
@@ -187,75 +182,72 @@ const TextStyle kAdSponsoredStyle = TextStyle(
   fontSize: 12,
   fontWeight: FontWeight.bold,
   letterSpacing: 2,
-  color: Colors.blue,
+  color: kAccentBlue,
 );
 
 const TextStyle kAdTitleStyle = TextStyle(
   fontSize: 24,
   fontWeight: FontWeight.bold,
+  color: kTextDark,
 );
 
 const TextStyle kAdSubtitleStyle = TextStyle(
   fontSize: 14,
-  color: kSlate400,
+  color: kTextGrey,
 );
 
 const TextStyle kFloatingCartItemsStyle = TextStyle(
   fontWeight: FontWeight.bold,
   fontSize: 16,
+  color: Colors.white,
 );
 
 const TextStyle kFloatingCartTotalStyle = TextStyle(
   fontWeight: FontWeight.w900,
   fontSize: 18,
+  color: Colors.white,
 );
 
 const TextStyle kCheckoutTitleStyle = TextStyle(
   fontWeight: FontWeight.bold,
+  color: kTextDark,
 );
 
 const TextStyle kCheckoutQRTitleStyle = TextStyle(
   fontWeight: FontWeight.bold,
   fontSize: 16,
+  color: kTextDark,
 );
 
 const TextStyle kCheckoutOrderIdStyle = TextStyle(
   fontSize: 12,
-  color: kSlate400,
+  color: kTextGrey,
 );
 
 const TextStyle kCheckoutWaitingStyle = TextStyle(
   fontSize: 12,
-  color: kSlate400,
+  color: kTextGrey,
 );
 
 const TextStyle kEmptyCartStyle = TextStyle(
-  color: kSlate500,
+  color: kTextGrey,
 );
 
 // ───────────────────────── Decorations ─────────────────────────
 
-const BoxDecoration kDarkGradientBg = BoxDecoration(
-  gradient: LinearGradient(
-    colors: [kGradientDarkStart, kGradientDarkEnd],
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-  ),
-);
-
-const BorderRadius kCardBorderRadius = BorderRadius.all(Radius.circular(20));
-const BorderRadius kImageBorderRadius = BorderRadius.all(Radius.circular(16));
-const BorderRadius kInputBorderRadius = BorderRadius.all(Radius.circular(12));
-const BorderRadius kFloatingCartBorderRadius = BorderRadius.all(Radius.circular(30));
+const BorderRadius kCardBorderRadius = BorderRadius.all(Radius.circular(24));
+const BorderRadius kImageBorderRadius = BorderRadius.all(Radius.circular(18));
+const BorderRadius kInputBorderRadius = BorderRadius.all(Radius.circular(16));
+const BorderRadius kFloatingCartBorderRadius = BorderRadius.all(Radius.circular(32));
 
 // ───────────────────────── Grid Delegates ─────────────────────────
 
 const SliverGridDelegateWithFixedCrossAxisCount kMenuGridDelegate =
     SliverGridDelegateWithFixedCrossAxisCount(
   crossAxisCount: 2,
-  crossAxisSpacing: 16,
-  mainAxisSpacing: 16,
-  childAspectRatio: 0.7,
+  crossAxisSpacing: 20,
+  mainAxisSpacing: 20,
+  childAspectRatio: 0.85, // Moderately taller cards to hold bottom stepper/layout cleanly
 );
 
 // ───────────────────────── Storage ─────────────────────────
@@ -268,5 +260,4 @@ const String kLastSyncTimeKey = 'last_sync_time';
 
 /// Extra pixels added to the video container to push the hardware decoder
 /// green stripe off-screen for Rockchip/Mali budget tablets.
-/// 80px was the confirmed working value per progress.md.
 const double kVideoOverflowPx = 80.0;

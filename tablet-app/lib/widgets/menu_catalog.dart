@@ -1,32 +1,14 @@
-/// Menu catalog widget — displays food items in a grid/list layout.
-///
-/// BOTTLENECK ADDRESSED:
-/// - The categorizedItems map was recreated on every build pass (line 1393 of
-///   original main.dart), allocating new Map and List objects per frame.
-/// - Cart quantity changes triggered setState at root, rebuilding ALL menu cards
-///   (183 unnecessary rebuilds per test session) even though the food images,
-///   names, and prices are static data.
-///
-/// FIX:
-/// - Menu items are observed via ValueListenableBuilder<MenuState> — rebuilds
-///   only when the menu data itself changes (fetch/reload).
-/// - Category map is computed once per menu data change, not per frame.
-/// - Each menu card's cart button is wrapped in its own ValueListenableBuilder
-///   on the CartNotifier, so only the specific button/quantity indicator rebuilds
-///   when the cart changes — not the entire grid.
-/// - RepaintBoundary on each card isolates scroll-triggered repaints.
-library;
-
 import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../menu_state.dart';
 import '../generated/menu.pbgrpc.dart';
 
-class MenuCatalogWidget extends StatelessWidget {
+class MenuCatalogWidget extends StatefulWidget {
   final MenuNotifier menuNotifier;
   final CartNotifier cartNotifier;
   final String serverHost;
   final double viewportHeight;
+  final String selectedCategory;
 
   const MenuCatalogWidget({
     super.key,
@@ -34,107 +16,269 @@ class MenuCatalogWidget extends StatelessWidget {
     required this.cartNotifier,
     required this.serverHost,
     required this.viewportHeight,
+    required this.selectedCategory,
   });
+
+  @override
+  State<MenuCatalogWidget> createState() => _MenuCatalogWidgetState();
+}
+
+class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
+  int _currentPage = 0;
+  String _activeSubcategory = 'All';
+
+  @override
+  void didUpdateWidget(MenuCatalogWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedCategory != widget.selectedCategory) {
+      setState(() {
+        _currentPage = 0;
+        _activeSubcategory = 'All';
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<MenuState>(
-      valueListenable: menuNotifier,
+      valueListenable: widget.menuNotifier,
       builder: (context, menuState, _) {
         if (menuState.isLoading) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(kAccentBlue)));
         }
         if (menuState.items.isEmpty) {
-          return const Center(child: Text("No menu items available."));
+          return const Center(child: Text("No menu items available.", style: TextStyle(color: kTextGrey)));
         }
 
-        // Compute categorized map once per menu data change
-        final categorizedItems = _categorize(menuState.items);
-        final isPortrait = MediaQuery.of(context).orientation == Orientation.portrait;
+        // Filter items by category first
+        final categoryItems = menuState.items.where((item) {
+          return item.category.toLowerCase() == widget.selectedCategory.toLowerCase();
+        }).toList();
 
-        return ListView(
-          padding: kCatalogPadding,
-          children: categorizedItems.entries.map((entry) {
-            final category = entry.key;
-            final items = entry.value;
-            if (items.isEmpty) return const SizedBox.shrink();
+        // Subcategory filters for Beverages/Drinks
+        final hasSubcategories = widget.selectedCategory.toLowerCase() == 'beverages' || 
+                                 widget.selectedCategory.toLowerCase() == 'drinks';
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                RepaintBoundary(
-                  child: Padding(
-                    padding: kCategoryLabelPadding,
-                    child: Row(
-                      children: [
-                        Container(width: 8, height: 20, color: Colors.blueAccent),
-                        const SizedBox(width: 8),
-                        Text(category.toUpperCase(), style: kCategoryHeaderStyle),
-                      ],
-                    ),
+        List<MenuItem> filteredItems = categoryItems;
+        if (hasSubcategories) {
+          filteredItems = categoryItems.where((item) {
+            final name = item.name.toLowerCase();
+            if (_activeSubcategory == 'Hot Drinks') {
+              return name.contains('latte') || name.contains('coffee') || name.contains('tea') || 
+                     name.contains('espresso') || name.contains('cappuccino') || name.contains('hot');
+            } else if (_activeSubcategory == 'Cold Drinks') {
+              return name.contains('iced') || name.contains('cold') || name.contains('shake') || 
+                     name.contains('soda') || name.contains('juice') || name.contains('smoothie') || 
+                     name.contains('mojito') || name.contains('lemonade') || name.contains('beer');
+            }
+            return true; // 'All'
+          }).toList();
+        }
+
+        final totalItems = filteredItems.length;
+        const itemsPerPage = 6;
+        final totalPages = (totalItems / itemsPerPage).ceil();
+
+        // Reset page if out of bounds
+        if (_currentPage >= totalPages && totalPages > 0) {
+          _currentPage = totalPages - 1;
+        }
+
+        // Paginate items (max 6)
+        final pagedItems = filteredItems.skip(_currentPage * itemsPerPage).take(itemsPerPage).toList();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Subcategory Selection & Info Row
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "${widget.selectedCategory} Picks",
+                        style: kCategoryHeaderStyle,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _getCategorySubtitle(widget.selectedCategory),
+                        style: kCardDescriptionStyle.copyWith(fontSize: 13),
+                      ),
+                    ],
                   ),
-                ),
-                isPortrait
-                    ? Column(
-                        children: items.map((item) {
-                          return SizedBox(
-                            height: viewportHeight - 140,
-                            child: Padding(
-                              padding: const EdgeInsets.only(bottom: 24.0),
-                              child: _MenuCard(
-                                item: item,
-                                cartNotifier: cartNotifier,
-                                serverHost: serverHost,
+                  // Subcategories (Hot / Cold Drinks)
+                  if (hasSubcategories)
+                    Row(
+                      children: ['All', 'Hot Drinks', 'Cold Drinks'].map((sub) {
+                        final isSelected = _activeSubcategory == sub;
+                        return GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _activeSubcategory = sub;
+                              _currentPage = 0;
+                            });
+                          },
+                          child: Container(
+                            margin: const EdgeInsets.only(left: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: isSelected ? kAccentBlue : kCardBg,
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black12,
+                                  blurRadius: 4,
+                                  offset: Offset(0, 2),
+                                )
+                              ],
+                            ),
+                            child: Text(
+                              sub,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: isSelected ? Colors.white : kTextDark,
                               ),
                             ),
-                          );
-                        }).toList(),
-                      )
-                    : GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate: kMenuGridDelegate,
-                        itemCount: items.length,
-                        itemBuilder: (context, index) {
-                          return _MenuCard(
-                            item: items[index],
-                            cartNotifier: cartNotifier,
-                            serverHost: serverHost,
-                          );
-                        },
+                          ),
+                        );
+                      }).toList(),
+                    )
+                  else
+                    // Item Count Pill
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: kSidebarBg,
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                const SizedBox(height: 24),
-              ],
-            );
-          }).toList(),
+                      child: Text(
+                        "$totalItems items",
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: kTextDark),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            // Grid items
+            Expanded(
+              child: pagedItems.isEmpty
+                  ? const Center(
+                      child: Text(
+                        "No items match the selected subcategory.",
+                        style: TextStyle(color: kTextGrey, fontSize: 16),
+                      ),
+                    )
+                  : GridView.builder(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      gridDelegate: kMenuGridDelegate,
+                      itemCount: pagedItems.length,
+                      physics: const NeverScrollableScrollPhysics(), // Grid fits perfectly inside expanded
+                      itemBuilder: (context, index) {
+                        return _MenuCard(
+                          item: pagedItems[index],
+                          cartNotifier: widget.cartNotifier,
+                          serverHost: widget.serverHost,
+                        );
+                      },
+                    ),
+            ),
+
+            // Pagination Controls at the bottom
+            if (totalPages > 1)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 24, top: 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Back button
+                    GestureDetector(
+                      onTap: _currentPage > 0
+                          ? () {
+                              setState(() {
+                                _currentPage--;
+                              });
+                            }
+                          : null,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _currentPage > 0 ? kCardBg : Colors.white24,
+                          boxShadow: _currentPage > 0
+                              ? const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))]
+                              : null,
+                        ),
+                        padding: const EdgeInsets.all(12),
+                        child: Icon(
+                          Icons.arrow_back_ios_new,
+                          color: _currentPage > 0 ? kAccentBlue : Colors.grey,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 24),
+                    Text(
+                      "Page ${_currentPage + 1} of $totalPages",
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: kTextDark),
+                    ),
+                    const SizedBox(width: 24),
+                    // Next button
+                    GestureDetector(
+                      onTap: _currentPage < totalPages - 1
+                          ? () {
+                              setState(() {
+                                _currentPage++;
+                              });
+                            }
+                          : null,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _currentPage < totalPages - 1 ? kCardBg : Colors.white24,
+                          boxShadow: _currentPage < totalPages - 1
+                              ? const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))]
+                              : null,
+                        ),
+                        padding: const EdgeInsets.all(12),
+                        child: Icon(
+                          Icons.arrow_forward_ios,
+                          color: _currentPage < totalPages - 1 ? kAccentBlue : Colors.grey,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
         );
       },
     );
   }
 
-  Map<String, List<MenuItem>> _categorize(List<MenuItem> items) {
-    final result = <String, List<MenuItem>>{
-      'Starters': [],
-      'Main Course': [],
-      'Dessert': [],
-      'Beverages': [],
-    };
-    for (final item in items) {
-      if (result.containsKey(item.category)) {
-        result[item.category]!.add(item);
-      } else {
-        result.putIfAbsent(item.category, () => []).add(item);
-      }
+  String _getCategorySubtitle(String category) {
+    switch (category.toLowerCase()) {
+      case 'starters':
+        return "Freshly prepared starters and finger bites";
+      case 'main course':
+        return "Hearty main dishes prepared fresh on order";
+      case 'dessert':
+      case 'desserts':
+        return "Sweet endings and pastries to satisfy your cravings";
+      case 'beverages':
+      case 'drinks':
+        return "Refreshments, mocktails, teas and coffees";
+      default:
+        return "Tasteful creations from our expert chefs";
     }
-    return result;
   }
 }
 
-/// Individual menu card with RepaintBoundary isolation.
-///
-/// The cart button area uses ValueListenableBuilder<CartSnapshot> so that
-/// quantity changes only rebuild the button — not the image, title, or
-/// description.
 class _MenuCard extends StatelessWidget {
   final MenuItem item;
   final CartNotifier cartNotifier;
@@ -154,96 +298,128 @@ class _MenuCard extends StatelessWidget {
             : 'http://$serverHost:4200${item.imageUrl}')
         : '';
 
-    return RepaintBoundary(
-      child: Card(
-        shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
-        color: kCardDark,
-        clipBehavior: Clip.antiAlias,
-        child: Padding(
-          padding: kCardPadding,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Title
-              Text(
-                item.name,
-                style: kCardTitleStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              // Image + gradient overlay
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: kImageBorderRadius,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      absoluteImageUrl.isNotEmpty
-                          ? Image.network(
-                              absoluteImageUrl,
-                              fit: BoxFit.fill,
-                              cacheWidth: 350,
-                              errorBuilder: (context, error, stackTrace) =>
-                                  _buildImagePlaceholder(),
-                            )
-                          : _buildImagePlaceholder(),
-                      Positioned(
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: _GradientOverlay(item: item),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              // Cart button — scoped rebuild via ValueListenableBuilder
-              SizedBox(
-                height: 40,
-                child: ValueListenableBuilder<CartSnapshot>(
-                  valueListenable: cartNotifier,
-                  builder: (context, cart, _) {
-                    final qty = cart.quantityOf(item.itemId);
-                    if (qty > 0) {
-                      return _buildQuantitySelector(qty);
-                    }
-                    return _buildAddToCartButton();
-                  },
-                ),
-              ),
-            ],
+
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: kCardBg,
+        borderRadius: kCardBorderRadius,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 6,
+            offset: Offset(0, 3),
+          )
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Image top frame
+          Expanded(
+            flex: 5,
+            child: absoluteImageUrl.isNotEmpty
+                ? Image.network(
+                    absoluteImageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) =>
+                        _buildImagePlaceholder(),
+                  )
+                : _buildImagePlaceholder(),
           ),
-        ),
+          // Content bottom frame
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Title and Price row
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        item.name,
+                        style: kCardTitleStyle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      "₹${(item.price.toDouble() / 100.0).toStringAsFixed(0)}",
+                      style: kCardPriceStyle,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                // Description
+                Text(
+                  item.description.isNotEmpty ? item.description : "Fresh delicious ${item.name} prepared by our chefs.",
+                  style: kCardDescriptionStyle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 12),
+                // Bottom row: Cart Actions
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    // Action button
+                    SizedBox(
+                      height: 38,
+                      child: ValueListenableBuilder<CartSnapshot>(
+                        valueListenable: cartNotifier,
+                        builder: (context, cart, _) {
+                          final qty = cart.quantityOf(item.itemId);
+                          if (qty > 0) {
+                            return _buildStepper(qty);
+                          }
+                          return _buildAddButton();
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildImagePlaceholder() {
     return Container(
-      color: Colors.black26,
-      child: const Icon(Icons.restaurant_menu_rounded, size: 40, color: Colors.white24),
+      color: kSidebarBg,
+      child: const Icon(Icons.restaurant_menu_rounded, size: 36, color: kTextGrey),
     );
   }
 
-  Widget _buildQuantitySelector(int qty) {
+  Widget _buildStepper(int qty) {
     return Container(
       decoration: BoxDecoration(
-        border: Border.all(color: Colors.blueAccent, width: 1.5),
-        borderRadius: kInputBorderRadius,
+        color: kScaffoldBg,
+        borderRadius: BorderRadius.circular(20),
       ),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            icon: const Icon(Icons.remove, color: Colors.blueAccent, size: 18),
+            constraints: const BoxConstraints(),
+            padding: const EdgeInsets.all(6),
+            icon: const Icon(Icons.remove, color: kAccentBlue, size: 16),
             onPressed: () => cartNotifier.removeItem(item.itemId),
           ),
-          Text('$qty', style: kQuantityTextStyle),
+          const SizedBox(width: 4),
+          Text('$qty', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: kTextDark)),
+          const SizedBox(width: 4),
           IconButton(
-            icon: const Icon(Icons.add, color: Colors.blueAccent, size: 18),
+            constraints: const BoxConstraints(),
+            padding: const EdgeInsets.all(6),
+            icon: const Icon(Icons.add, color: Colors.green, size: 16),
             onPressed: () => cartNotifier.addItem(item.itemId),
           ),
         ],
@@ -251,61 +427,26 @@ class _MenuCard extends StatelessWidget {
     );
   }
 
-  Widget _buildAddToCartButton() {
-    return OutlinedButton(
-      onPressed: item.isAvailable
-          ? () => cartNotifier.addItem(item.itemId)
-          : null,
-      style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: Colors.blueAccent, width: 1.5),
-        shape: RoundedRectangleBorder(borderRadius: kInputBorderRadius),
-        padding: EdgeInsets.zero,
-      ),
-      child: Text(
-        item.isAvailable ? "ADD TO CART" : "OUT OF STOCK",
-        style: kCartButtonTextStyle,
+  Widget _buildAddButton() {
+    return GestureDetector(
+      onTap: item.isAvailable ? () => cartNotifier.addItem(item.itemId) : null,
+      child: Container(
+        decoration: BoxDecoration(
+          color: item.isAvailable ? Colors.red : Colors.grey.shade300,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: const Text(
+          "Add",
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+          ),
+        ),
       ),
     );
   }
-}
 
-/// Gradient overlay at the bottom of a food image showing description and price.
-class _GradientOverlay extends StatelessWidget {
-  final MenuItem item;
-  const _GradientOverlay({required this.item});
 
-  static final _gradientDecoration = BoxDecoration(
-    gradient: LinearGradient(
-      begin: Alignment.topCenter,
-      end: Alignment.bottomCenter,
-      colors: [
-        Colors.black.withValues(alpha: 0.0),
-        Colors.black.withValues(alpha: 0.9),
-      ],
-    ),
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: _gradientDecoration,
-      padding: kGradientOverlayPadding,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            item.description,
-            style: kCardDescriptionStyle,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            "₹${(item.price.toDouble() / 100.0).toStringAsFixed(1)}",
-            style: kCardPriceStyle,
-          ),
-        ],
-      ),
-    );
-  }
 }
