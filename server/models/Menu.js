@@ -49,6 +49,10 @@ const MenuSchema = new mongoose.Schema({
     index: true
   },
   items: [MenuItemSchema],
+  categories: {
+    type: [String],
+    default: ['Starters', 'Main Course', 'Dessert', 'Beverages']
+  },
   createdAt: {
     type: Date,
     default: Date.now

@@ -119,14 +119,23 @@ class PhonePeService {
         amount
       });
 
+      const callbackUrl = config.phonePe.callbackUrl;
+
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `O-Bearer ${token}`
+      };
+
+      if (callbackUrl) {
+        headers['X-CALLBACK-URL'] = callbackUrl;
+        console.log(`[PhonePe] Using callback URL: ${callbackUrl}`);
+      }
+
       const response = await axios.post(
         `${config.phonePe.hostUrl}${endpoint}`,
         payload,
         {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `O-Bearer ${token}`
-          },
+          headers,
           timeout: 15000
         }
       );

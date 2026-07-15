@@ -121,7 +121,11 @@ export default function AdminPortal() {
 
   // Sub-tabs within sections
   const [deviceSubTab, setDeviceSubTab] = useState('tablet');
+  const [selectedVenueFilter, setSelectedVenueFilter] = useState('all');
   const [userSubTab, setUserSubTab] = useState('merchant');
+  const [venueSortOrder, setVenueSortOrder] = useState('name-asc');
+  const [deviceSortOrder, setDeviceSortOrder] = useState('id-asc');
+  const [selectedUserVenueId, setSelectedUserVenueId] = useState('all');
   const [rateSubTab, setRateSubTab] = useState('tablet');
   const [hostFilter, setHostFilter] = useState('all');
   const [adFilter, setAdFilter] = useState('all');
@@ -167,6 +171,9 @@ export default function AdminPortal() {
     if (savedDeviceSubTab) {
       setDeviceSubTab(savedDeviceSubTab);
     }
+
+    const savedVenueFilter = localStorage.getItem('adminSelectedVenueFilter') || 'all';
+    setSelectedVenueFilter(savedVenueFilter);
 
     const savedUserSubTab = localStorage.getItem('adminUserSubTab');
     if (savedUserSubTab) {
@@ -221,12 +228,17 @@ export default function AdminPortal() {
     }
   }, [activeTab, mounted]);
 
-  // Persist Sub-tabs & Filters
   useEffect(() => {
     if (mounted) {
       localStorage.setItem('adminDeviceSubTab', deviceSubTab);
     }
   }, [deviceSubTab, mounted]);
+
+  useEffect(() => {
+    if (mounted) {
+      localStorage.setItem('adminSelectedVenueFilter', selectedVenueFilter);
+    }
+  }, [selectedVenueFilter, mounted]);
 
   useEffect(() => {
     if (mounted) {
@@ -764,6 +776,19 @@ export default function AdminPortal() {
     });
   };
 
+  const handleDeleteRate = async (rateId) => {
+    if (!window.confirm(`Are you sure you want to delete rate "${rateId}"? This action cannot be undone.`)) return;
+    try {
+      await axios.delete(`${API_BASE}/admin/rates/${rateId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      showNotification('success', 'Pricing plan deleted');
+      fetchRates(token);
+    } catch (err) {
+      showNotification('error', err.response?.data?.message || 'Failed to delete pricing plan');
+    }
+  };
+
   // Global ID Lookup Search
   const handleGlobalSearch = (e) => {
     e.preventDefault();
@@ -841,7 +866,7 @@ export default function AdminPortal() {
             className="p-2.5 bg-card hover:bg-muted border border-border rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer flex items-center justify-center shadow-md"
             aria-label="Toggle theme"
           >
-            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-500" />}
+            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-blue-500" />}
           </button>
         </div>
 
@@ -892,7 +917,7 @@ export default function AdminPortal() {
 
               {/* Logo and Brand */}
               <div className="flex items-center justify-center space-x-3 mb-6">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
                   <Tv className="w-5 h-5 text-white" />
                 </div>
                 <div className="text-left">
@@ -995,6 +1020,10 @@ export default function AdminPortal() {
 
   const filteredDevices = devices.filter(d => {
     if (d.deviceType !== deviceSubTab) return false;
+    if (selectedVenueFilter !== 'all') {
+      const deviceHostId = d.hostApplicationId?._id || d.hostApplicationId;
+      if (deviceHostId !== selectedVenueFilter) return false;
+    }
     if (!searchQuery) return true;
     const query = searchQuery.trim().toLowerCase();
     return (
@@ -1071,18 +1100,18 @@ export default function AdminPortal() {
           <div className={`flex items-center mb-8 ${sidebarCollapsed ? 'justify-center' : 'px-4 space-x-2.5'}`}>
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="relative group w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shrink-0 shadow-md shadow-blue-500/20 cursor-pointer overflow-hidden transition-all duration-300"
+              className="relative group w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shrink-0 shadow-md shadow-blue-500/20 cursor-pointer overflow-hidden transition-all duration-300"
             >
               {/* Tv Icon */}
               <div className="transition-all duration-300 transform group-hover:scale-0 group-hover:opacity-0 flex items-center justify-center">
-                <Tv className="w-4 h-4 text-white" />
+                <Tv className="w-5 h-5 text-white" />
               </div>
               {/* Chevron Icon */}
               <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 transform scale-50 group-hover:scale-100">
                 {sidebarCollapsed ? (
-                  <ChevronRight className="w-4 h-4 text-white" />
+                  <ChevronRight className="w-5 h-5 text-white" />
                 ) : (
-                  <ChevronLeft className="w-4 h-4 text-white" />
+                  <ChevronLeft className="w-5 h-5 text-white" />
                 )}
               </div>
             </button>
@@ -1133,7 +1162,7 @@ export default function AdminPortal() {
             className={`w-full flex items-center py-2 rounded-xl border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-all cursor-pointer ${sidebarCollapsed ? 'justify-center px-0' : 'px-3 space-x-2.5 text-xs font-semibold'
               }`}
           >
-            {theme === 'dark' ? <Sun className="w-3.5 h-3.5 text-amber-500 shrink-0" /> : <Moon className="w-3.5 h-3.5 text-indigo-500 shrink-0" />}
+            {theme === 'dark' ? <Sun className="w-3.5 h-3.5 text-amber-500 shrink-0" /> : <Moon className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
             {!sidebarCollapsed && <span className="text-xs font-semibold">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
           </button>
 
@@ -1286,15 +1315,27 @@ export default function AdminPortal() {
         {/* Main Content Workspace */}
         <div className="flex-1 p-5 sm:p-6 overflow-y-auto min-w-0">
 
-          {/* Notifications alert */}
+          {/* Notifications alert (Opaque Toast Alert System) */}
           {notification.message && (
-            <div className={`fixed bottom-6 right-6 p-4 rounded-2xl shadow-2xl border text-xs font-bold z-[999] flex items-center space-x-2 animate-bounce ${
-              notification.type === 'success'
-                ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                : 'bg-destructive/10 text-destructive border-destructive/20'
-            }`}>
-              <div className={`w-2 h-2 rounded-full ${notification.type === 'success' ? 'bg-emerald-500' : 'bg-destructive'}`} />
-              <span>{notification.message}</span>
+            <div
+              className={`fixed top-6 right-6 p-4 rounded-2xl shadow-2xl border text-xs font-bold z-[999] flex items-center justify-between space-x-3 text-white border-transparent animate-fade-in ${
+                notification.type === 'success'
+                  ? 'bg-emerald-600 shadow-emerald-500/20'
+                  : notification.type === 'error'
+                    ? 'bg-rose-600 shadow-rose-500/20'
+                    : 'bg-[#0069a8] shadow-[#0069a8]/20'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                <span>{notification.message}</span>
+              </div>
+              <button
+                onClick={() => setNotification({ type: '', message: '' })}
+                className="p-1 hover:bg-white/20 rounded-lg transition-all cursor-pointer text-white/80 hover:text-white shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
             </div>
           )}
 
@@ -1314,7 +1355,7 @@ export default function AdminPortal() {
                   {/* Total Revenue */}
                   <div
                     onClick={() => setShowRevenueModal(true)}
-                    className="glassmorphism p-5 rounded-2xl bg-card/30 hover:border-emerald-500/35 hover:scale-[1.01] hover:bg-card/45 transition-all duration-200 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
+                    className="glassmorphism p-5 rounded-2xl bg-card/30 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
                   >
                     <div className="absolute right-4 top-4 p-2 bg-emerald-500/10 rounded-xl group-hover:bg-emerald-500/20 transition-all">
                       <IndianRupee className="w-4 h-4 text-emerald-500" />
@@ -1324,18 +1365,23 @@ export default function AdminPortal() {
                     <p className="text-[10px] text-muted-foreground mt-1 font-semibold group-hover:text-emerald-500 transition-colors">Click to view paid advertisers</p>
                   </div>
 
-                  {/* Deployed Devices */}
+                  {/* Total Ads Deployed */}
                   <div
-                    onClick={() => setActiveTab('devices')}
-                    className="glassmorphism p-5 rounded-2xl bg-card/30 hover:border-indigo-500/35 hover:scale-[1.01] hover:bg-card/45 transition-all duration-200 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
+                    onClick={() => {
+                      setActiveTab('requests');
+                      setRequestsSubTab('campaigns');
+                    }}
+                    className="glassmorphism p-5 rounded-2xl bg-card/30 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
                   >
-                    <div className="absolute right-4 top-4 p-2 bg-indigo-500/10 rounded-xl group-hover:bg-indigo-500/20 transition-all">
-                      <Smartphone className="w-4 h-4 text-indigo-500" />
+                    <div className="absolute right-4 top-4 p-2 bg-blue-500/10 rounded-xl group-hover:bg-blue-500/20 transition-all">
+                      <Tv className="w-4 h-4 text-blue-500" />
                     </div>
-                    <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Devices Deployed</p>
-                    <h3 className="font-outfit text-2xl font-black mt-2">{stats?.devices?.total || 0}</h3>
+                    <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Ads Deployed</p>
+                    <h3 className="font-outfit text-2xl font-black mt-2">
+                      {campaigns.filter(c => c.approvalStatus === 'approved').length}
+                    </h3>
                     <p className="text-[10px] text-muted-foreground mt-1 font-semibold">
-                      <span className="text-emerald-500 font-bold">{stats?.devices?.active || 0} online</span> / offline
+                      <span className="text-[#0069a8] font-bold">{campaigns.filter(c => c.approvalStatus === 'pending').length} pending</span> / {campaigns.length} total
                     </p>
                   </div>
 
@@ -1345,7 +1391,7 @@ export default function AdminPortal() {
                       setActiveTab('requests');
                       setRequestsSubTab('campaigns');
                     }}
-                    className="glassmorphism p-5 rounded-2xl bg-card/30 hover:border-orange-500/35 hover:scale-[1.01] hover:bg-card/45 transition-all duration-200 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
+                    className="glassmorphism p-5 rounded-2xl bg-card/30 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
                   >
                     <div className="absolute right-4 top-4 p-2 bg-orange-500/10 rounded-xl group-hover:bg-orange-500/20 transition-all">
                       <FileCheck className="w-4 h-4 text-orange-500" />
@@ -1360,7 +1406,7 @@ export default function AdminPortal() {
                   {/* Support tickets */}
                   <div
                     onClick={() => setActiveTab('reports')}
-                    className="glassmorphism p-5 rounded-2xl bg-card/30 hover:border-red-500/35 hover:scale-[1.01] hover:bg-card/45 transition-all duration-200 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
+                    className="glassmorphism p-5 rounded-2xl bg-card/30 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
                   >
                     <div className="absolute right-4 top-4 p-2 bg-red-500/10 rounded-xl group-hover:bg-red-500/20 transition-all">
                       <ClipboardList className="w-4 h-4 text-red-500" />
@@ -1373,117 +1419,59 @@ export default function AdminPortal() {
                   </div>
                 </div>
 
-                {/* SVG Charts Row */}
+                {/* Telemetry Status Row */}
                 <div className="grid lg:grid-cols-3 gap-5">
-                  {/* Dynamic Bar Chart: Revenue Trends */}
-                  <div className="lg:col-span-2 glassmorphism p-5 rounded-2xl bg-card/30 space-y-4 border border-border/50">
-                    <div className="flex items-center justify-between border-b border-border/40 pb-3 flex-wrap gap-2">
-                      <div className="flex items-center space-x-2">
-                        <TrendingUp className="w-4 h-4 text-blue-500" />
-                        <h4 className="font-outfit text-xs font-bold text-foreground">Platform Daily Revenue</h4>
-                      </div>
-
-                      {/* Chart range selector */}
-                      <div className="flex items-center space-x-1 bg-muted p-0.5 rounded-lg border border-border shrink-0">
-                        {[
-                          { label: 'Yesterday', val: 2 },
-                          { label: '3 Days', val: 3 },
-                          { label: '7 Days', val: 7 },
-                          { label: '10 Days', val: 10 },
-                          { label: '15 Days', val: 15 },
-                          { label: '1 Month', val: 30 }
-                        ].map((range) => (
-                          <button
-                            key={range.val}
-                            type="button"
-                            onClick={() => setChartRange(range.val)}
-                            className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase transition-all cursor-pointer ${chartRange === range.val ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-                              }`}
-                          >
-                            {range.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Bars Render */}
-                    <div className="w-full h-[180px] flex items-end justify-between gap-1 sm:gap-2 px-1 relative">
-                      {(() => {
-                        const revenueData = getRevenueChartData(chartRange);
-                        const maxAmount = Math.max(...revenueData.map(d => d.amount), 1);
-                        return revenueData.map((data, idx) => {
-                          const heightPercent = (data.amount / maxAmount) * 100;
-                          return (
-                            <div key={idx} className="flex-1 flex flex-col items-center group relative h-full justify-end">
-                              {/* Tooltip */}
-                              <div className="absolute bottom-full mb-2 bg-popover text-popover-foreground border border-border text-[9px] font-bold py-1 px-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all pointer-events-none whitespace-nowrap shadow-md z-10">
-                                ₹{data.amount.toFixed(2)}
-                              </div>
-
-                              {/* Bar */}
-                              <div
-                                style={{ height: `${Math.max(heightPercent, 2)}%` }}
-                                className="w-full bg-gradient-to-t from-blue-600 to-indigo-500 hover:from-blue-500 hover:to-indigo-400 rounded-t transition-all duration-300 relative shadow-sm"
-                              >
-                                <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity rounded-t" />
-                              </div>
-
-                              <span className="text-[7px] sm:text-[8px] font-semibold text-muted-foreground mt-1.5 truncate max-w-full text-center">
-                                {chartRange <= 7 ? data.label : data.label.split(' ')[1] || data.label}
-                              </span>
-                            </div>
-                          );
-                        });
-                      })()}
-                    </div>
-                  </div>
-
-                  {/* Donut Chart: Device Distribution */}
-                  <div className="glassmorphism p-5 rounded-2xl bg-card/30 space-y-4 border border-border/50">
+                  {/* Summary Stats Panel */}
+                  <div className="lg:col-span-3 glassmorphism p-5 rounded-2xl bg-card/30 space-y-4 border border-border/50">
                     <div className="flex items-center justify-between border-b border-border/40 pb-3">
                       <div className="flex items-center space-x-2">
-                        <PieChart className="w-4.5 h-4.5 text-indigo-500" />
-                        <h4 className="font-outfit text-xs font-bold text-foreground">Device Split</h4>
+                        <ShieldCheck className="w-4 h-4 text-primary" />
+                        <h4 className="font-outfit text-xs font-bold text-foreground">Kiosk Fleet Health & Metrics</h4>
                       </div>
-                      <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Active</span>
                     </div>
 
                     {(() => {
-                      const totalDevs = stats?.devices?.total || devices.length || 0;
-                      const tabletCount = devices.filter(d => d.deviceType === 'tablet').length;
-                      const screenCount = devices.filter(d => d.deviceType === 'screen').length;
-                      const tabletPct = totalDevs > 0 ? Math.round((tabletCount / totalDevs) * 100) : 0;
-                      const screenPct = totalDevs > 0 ? Math.round((screenCount / totalDevs) * 100) : 0;
+                      const total = devices.length;
+                      const online = devices.filter(d => d.status === 'online').length;
+                      const offline = total - online;
+                      const onlinePercentage = total > 0 ? Math.round((online / total) * 100) : 0;
+
                       return (
-                        <div className="flex items-center justify-around h-[180px]">
-                          {/* Donut Circle */}
-                          <div className="relative w-24 h-24 shrink-0">
-                            <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                              <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--border)" strokeWidth="3" />
-                              <circle cx="18" cy="18" r="15.915" fill="none" stroke="#3b82f6" strokeWidth="3" strokeDasharray={`${tabletPct} ${100 - tabletPct}`} strokeDashoffset="25" />
-                              <circle cx="18" cy="18" r="15.915" fill="none" stroke="#6366f1" strokeWidth="3" strokeDasharray={`${screenPct} ${100 - screenPct}`} strokeDashoffset={`${100 - tabletPct + 25}`} />
-                            </svg>
-                            <div className="absolute inset-0 flex flex-col items-center justify-center leading-none text-center">
-                              <span className="text-lg font-black">{totalDevs}</span>
-                              <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-widest mt-1">Total</span>
+                        <div className="grid md:grid-cols-3 gap-6 items-center">
+                          {/* Col 1: Operational Health progress */}
+                          <div className="space-y-2">
+                            <div className="flex justify-between text-[10px] font-black">
+                              <span className="text-primary font-bold">Operational Health Status</span>
+                              <span>{onlinePercentage}% Online</span>
+                            </div>
+                            <div className="w-full bg-muted rounded-full h-3 border border-border/40 overflow-hidden">
+                              <div
+                                className="bg-gradient-to-r from-blue-700 to-emerald-500 h-full rounded-full transition-all duration-500"
+                                style={{ width: `${onlinePercentage}%` }}
+                              />
                             </div>
                           </div>
 
-                          {/* Legends */}
-                          <div className="space-y-3 text-xs font-semibold">
-                            <div className="flex items-center space-x-2">
-                              <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
-                              <div>
-                                <p className="text-foreground">Tablets ({tabletCount})</p>
-                                <p className="text-[9px] text-muted-foreground font-bold">{tabletPct}% of fleet</p>
-                              </div>
+                          {/* Col 2: Active vs Total count */}
+                          <div className="flex items-center justify-between border-l border-border/40 pl-6 h-full py-1">
+                            <div>
+                              <span className="text-[10px] font-bold text-muted-foreground block">Active Terminals</span>
+                              <span className="text-xl font-black text-foreground mt-1 block">
+                                {online}{' '}
+                                <span className="text-xs font-semibold text-muted-foreground">/ {total} deployed</span>
+                              </span>
                             </div>
-                            <div className="flex items-center space-x-2">
-                              <div className="w-2.5 h-2.5 rounded-full bg-indigo-500" />
-                              <div>
-                                <p className="text-foreground">Screens ({screenCount})</p>
-                                <p className="text-[9px] text-muted-foreground font-bold">{screenPct}% of fleet</p>
-                              </div>
+                          </div>
+
+                          {/* Col 3: Quick status breakdown grid */}
+                          <div className="grid grid-cols-2 gap-3 border-l border-border/40 pl-6 h-full py-1">
+                            <div className="p-3 bg-emerald-500/5 border border-emerald-500/10 rounded-xl text-center flex flex-col justify-center">
+                              <span className="text-[9px] text-emerald-500 font-bold uppercase tracking-wider">Online</span>
+                              <p className="text-lg font-black text-emerald-600 dark:text-emerald-400 mt-0.5">{online}</p>
+                            </div>
+                            <div className="p-3 bg-muted/20 border border-border/30 rounded-xl text-center flex flex-col justify-center">
+                              <span className="text-[9px] text-muted-foreground font-bold uppercase tracking-wider">Offline</span>
+                              <p className="text-lg font-black text-foreground/80 mt-0.5">{offline}</p>
                             </div>
                           </div>
                         </div>
@@ -1516,7 +1504,11 @@ export default function AdminPortal() {
                           >
                             <div>
                               <p className="text-xs font-bold text-foreground">{app.outletName}</p>
-                              <p className="text-[10px] text-muted-foreground mt-0.5 capitalize">{app.deviceType}s (Qty: {app.quantity})</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5 font-bold uppercase">
+                                {app.requestTablet && `TAB (${app.tabletQuantity})`}
+                                {app.requestTablet && app.requestScreen && ' / '}
+                                {app.requestScreen && `SCR (${app.screenQuantity})`}
+                              </p>
                             </div>
                             <span className="text-[9px] font-bold text-primary shrink-0 uppercase tracking-wide">Review &rarr;</span>
                           </div>
@@ -1611,22 +1603,38 @@ export default function AdminPortal() {
                 className="space-y-6"
               >
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-border/50 pb-6">
-                  {/* Selector tabs */}
-                  <div className="bg-muted p-1 rounded-xl flex space-x-1 border border-border">
-                    <button
-                      onClick={() => setDeviceSubTab('tablet')}
-                      className={`px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-all ${deviceSubTab === 'tablet' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-                        }`}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+                    {/* Venue Filter Dropdown */}
+                    <select
+                      value={selectedVenueFilter}
+                      onChange={(e) => setSelectedVenueFilter(e.target.value)}
+                      className="bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-full sm:w-56 cursor-pointer"
                     >
-                      Tabletop Tablets
-                    </button>
-                    <button
-                      onClick={() => setDeviceSubTab('screen')}
-                      className={`px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-all ${deviceSubTab === 'screen' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                    >
-                      Wall Screens
-                    </button>
+                      <option value="all">All Approved Venues</option>
+                      {hosts.filter(h => h.status === 'approved').map((app) => (
+                        <option key={app._id} value={app._id}>
+                          {app.outletName} ({app.city})
+                        </option>
+                      ))}
+                    </select>
+
+                    {/* Selector tabs */}
+                    <div className="bg-muted p-1 rounded-xl flex space-x-1 border border-border shrink-0">
+                      <button
+                        onClick={() => setDeviceSubTab('tablet')}
+                        className={`px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-all ${deviceSubTab === 'tablet' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                      >
+                        Tabletop Tablets
+                      </button>
+                      <button
+                        onClick={() => setDeviceSubTab('screen')}
+                        className={`px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-all ${deviceSubTab === 'screen' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                      >
+                        Wall Screens
+                      </button>
+                    </div>
                   </div>
 
                   <button
@@ -1778,8 +1786,7 @@ export default function AdminPortal() {
                 <div className="grid lg:grid-cols-3 gap-6 items-start">
 
                   {/* Users table */}
-                  <div className={`mx-1 mt-2 overflow-x-auto animate-fade-in transition-all ${selectedUser ? 'lg:col-span-2' : 'lg:col-span-3'
-                    }`}>
+                  <div className="mx-1 mt-2 overflow-x-auto animate-fade-in transition-all lg:col-span-3">
                     <table className="w-full text-left border-collapse text-xs">
                       <thead>
                         <tr className="border-b border-border/80 text-muted-foreground font-bold uppercase tracking-wider bg-card/10">
@@ -1857,100 +1864,6 @@ export default function AdminPortal() {
                       </tbody>
                     </table>
                   </div>
-
-                  {/* Users assets drilldown view */}
-                  {selectedUser && (
-                    <motion.div
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      className="p-6 rounded-2xl bg-card/10 border border-border/40 space-y-6 relative"
-                    >
-                      <button
-                        onClick={() => setSelectedUser(null)}
-                        className="absolute right-4 top-4 p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-
-                      <div>
-                        <span className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20 animate-fade-in">
-                          {userSubTab} Account Details
-                        </span>
-                        {selectedUser.name && (
-                          <h3 className="font-outfit text-base font-extrabold mt-3 text-foreground">{selectedUser.name}</h3>
-                        )}
-                        <h4 className="font-outfit text-xs font-semibold text-muted-foreground mt-1">ID: {selectedUser._id}</h4>
-                        <p className="text-xs text-muted-foreground mt-1 font-semibold">Phone: {selectedUser.phone}</p>
-                      </div>
-
-                      {/* Drilldown content for host */}
-                      {userSubTab === 'merchant' ? (
-                        <div className="space-y-4">
-                          <h5 className="text-xs font-bold border-b border-border/50 pb-2 text-foreground">Venues & Devices</h5>
-
-                          {hosts.filter(h => (h.userId?._id || h.userId)?.toString() === selectedUser._id?.toString()).length === 0 ? (
-                            <p className="text-[10px] text-muted-foreground italic py-3">No hosting requests filed.</p>
-                          ) : (
-                            hosts.filter(h => (h.userId?._id || h.userId)?.toString() === selectedUser._id?.toString()).map((app) => {
-                              const appDevices = devices.filter(d => (d.hostApplicationId?._id || d.hostApplicationId)?.toString() === app._id?.toString());
-                              return (
-                                <div key={app._id} className="p-4 bg-background/50 rounded-2xl border border-border/50 space-y-3">
-                                  <div className="flex justify-between items-start">
-                                    <div>
-                                      <p className="text-xs font-bold text-foreground">{app.outletName}</p>
-                                      <p className="text-[9px] text-muted-foreground mt-0.5">{app.city}, {app.state}</p>
-                                    </div>
-                                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded capitalize ${app.status === 'approved' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'
-                                      }`}>
-                                      {app.status}
-                                    </span>
-                                  </div>
-
-                                  {app.status === 'approved' && (
-                                    <div className="space-y-1.5">
-                                      <p className="text-[9px] font-bold text-muted-foreground uppercase">Devices Assigned ({appDevices.length}):</p>
-                                      {appDevices.map((d) => (
-                                        <div key={d._id} className="flex justify-between items-center text-[10px] bg-card/40 p-2 rounded-lg border border-border/40">
-                                          <span className="font-semibold text-slate-300">{d.deviceId}</span>
-                                          <span className={`w-2 h-2 rounded-full ${d.status === 'online' ? 'bg-emerald-500' : 'bg-muted-foreground'}`} title={d.status} />
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      ) : (
-                        // Drilldown content for advertiser
-                        <div className="space-y-4">
-                          <h5 className="text-xs font-bold border-b border-border/50 pb-2 text-foreground">Campaign Bookings</h5>
-
-                          {campaigns.filter(c => (c.advertiserId?._id || c.advertiserId)?.toString() === selectedUser._id?.toString()).length === 0 ? (
-                            <p className="text-[10px] text-muted-foreground italic py-3">No ad campaigns booked.</p>
-                          ) : (
-                            campaigns.filter(c => (c.advertiserId?._id || c.advertiserId)?.toString() === selectedUser._id?.toString()).map((book) => (
-                              <div key={book.bookingId} className="p-4 bg-background/50 rounded-2xl border border-border/50 space-y-2">
-                                <div className="flex justify-between items-start">
-                                  <p className="text-xs font-bold text-foreground">ID: {book.bookingId}</p>
-                                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded capitalize ${book.approvalStatus === 'approved' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'
-                                    }`}>
-                                    {book.approvalStatus}
-                                  </span>
-                                </div>
-                                <div className="text-[10px] text-muted-foreground space-y-1">
-                                  <p><span className="font-semibold text-foreground">Target:</span> {book.outletId?.outletName || 'Venue'} ({book.city})</p>
-                                  <p><span className="font-semibold text-foreground">Plan:</span> {book.adDurationDays} Days / {book.deviceType} display</p>
-                                  <p><span className="font-semibold text-foreground">Cost:</span> ₹{book.amount / 100}</p>
-                                </div>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      )}
-                    </motion.div>
-                  )}
 
                 </div>
               </motion.div>
@@ -2196,8 +2109,15 @@ export default function AdminPortal() {
                                   <div>{app.contactPerson}</div>
                                   <div className="text-[10px] text-muted-foreground">{app.phone}</div>
                                 </td>
-                                <td className="p-4 font-semibold">
-                                  <span className="capitalize">{app.deviceType}</span> (Qty: {app.quantity})
+                                <td className="p-4">
+                                  <div className="text-[11px] space-y-0.5 font-bold">
+                                    {app.requestTablet && (
+                                      <div className="text-foreground">Tablet (Qty: {app.tabletQuantity})</div>
+                                    )}
+                                    {app.requestScreen && (
+                                      <div className="text-foreground">Screen (Qty: {app.screenQuantity})</div>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="p-4">
                                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded capitalize ${app.status === 'approved'
@@ -2256,10 +2176,16 @@ export default function AdminPortal() {
                               </div>
                               <div className="space-y-1">
                                 <span className="text-[10px] font-black text-muted-foreground uppercase">Device Configuration</span>
-                                <p className="text-foreground capitalize font-bold">
-                                  {selectedHostApp.deviceType} Display<br />
-                                  <span className="text-primary font-black text-sm">Quantity: {selectedHostApp.quantity}</span>
-                                </p>
+                                <div className="text-foreground capitalize font-bold">
+                                  <div className="text-xs font-bold space-y-1">
+                                    {selectedHostApp.requestTablet && (
+                                      <div>Tablet Display (Qty: {selectedHostApp.tabletQuantity})</div>
+                                    )}
+                                    {selectedHostApp.requestScreen && (
+                                      <div>Screen Display (Qty: {selectedHostApp.screenQuantity})</div>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
                             </div>
 
@@ -2468,14 +2394,24 @@ export default function AdminPortal() {
                             <p className="text-[10px] text-muted-foreground mt-0.5">{rate.durationDays} Days / {rate.frequency}</p>
                           </div>
 
-                          <div className="flex items-center space-x-4">
+                          <div className="flex items-center space-x-2">
                             <span className="font-black text-foreground text-sm">₹{rate.amount / 100}</span>
-                            <button
-                              onClick={() => startEditRate(rate)}
-                              className="p-1.5 hover:bg-primary hover:text-primary-foreground border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
-                            >
-                              <Settings className="w-3.5 h-3.5" />
-                            </button>
+                            <div className="flex space-x-1">
+                              <button
+                                onClick={() => startEditRate(rate)}
+                                className="p-1.5 hover:bg-primary hover:text-primary-foreground border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+                                title="Edit rate"
+                              >
+                                <Edit className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteRate(rate.rateId)}
+                                className="p-1.5 hover:bg-destructive hover:text-destructive-foreground border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+                                title="Delete rate"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))
@@ -2660,7 +2596,7 @@ export default function AdminPortal() {
 
               <div>
                 <div className="flex items-center space-x-3 mb-10">
-                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20">
                     <ShieldCheck className="w-5 h-5 text-white" />
                   </div>
                   <span className="font-outfit text-base font-bold tracking-tight">CMS Admin</span>
@@ -2703,7 +2639,7 @@ export default function AdminPortal() {
                   onClick={toggleTheme}
                   className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-all cursor-pointer"
                 >
-                  {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-500" />}
+                  {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-blue-500" />}
                   <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
                 </button>
 
@@ -3251,6 +3187,179 @@ export default function AdminPortal() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* User Details Modal (Popup) */}
+      {selectedUser && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-card border border-border w-full max-w-2xl rounded-[32px] shadow-2xl p-6 relative max-h-[90vh] overflow-y-auto animate-fade-in">
+            <div className="flex justify-between items-center mb-6 border-b border-border/50 pb-4">
+              <div>
+                <span className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20">
+                  {userSubTab === 'merchant' ? 'Merchant' : 'Advertiser'} Account Details
+                </span>
+                {selectedUser.name && (
+                  <h3 className="font-outfit text-lg font-bold text-foreground mt-2">{selectedUser.name}</h3>
+                )}
+                <p className="text-[11px] text-muted-foreground mt-1 font-semibold">ID: {selectedUser._id} | Phone: {selectedUser.phone} | Email: {selectedUser.email || 'N/A'}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedUser(null);
+                  setSelectedUserVenueId('all');
+                }}
+                className="p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Drilldown content for host (merchant) */}
+            {userSubTab === 'merchant' ? (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-muted/20 p-3 rounded-2xl border border-border/40">
+                  <h5 className="text-xs font-bold text-foreground">Venues & Devices</h5>
+                  
+                  {/* Venue selection dropdown */}
+                  <div className="flex items-center space-x-1.5 w-full sm:w-auto">
+                    <span className="text-[9px] font-bold text-muted-foreground uppercase shrink-0">Select Venue:</span>
+                    <select
+                      value={selectedUserVenueId}
+                      onChange={(e) => setSelectedUserVenueId(e.target.value)}
+                      className="bg-background border border-input rounded-lg px-2 py-1 text-[10px] font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer w-full sm:w-48"
+                    >
+                      <option value="all">All Venues</option>
+                      {hosts.filter(h => (h.userId?._id || h.userId)?.toString() === selectedUser._id?.toString()).map((app) => (
+                        <option key={app._id} value={app._id}>
+                          {app.outletName} ({app.city})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
+                  {(() => {
+                    const userHosts = hosts.filter(h => (h.userId?._id || h.userId)?.toString() === selectedUser._id?.toString());
+                    const filteredUserHosts = userHosts.filter(h => selectedUserVenueId === 'all' || h._id?.toString() === selectedUserVenueId?.toString());
+
+                    if (filteredUserHosts.length === 0) {
+                      return <p className="text-xs text-muted-foreground italic py-6 text-center">No venues match selection.</p>;
+                    }
+
+                    return filteredUserHosts.map((app) => {
+                      const appDevices = devices.filter(d => (d.hostApplicationId?._id || d.hostApplicationId)?.toString() === app._id?.toString());
+                      
+                      return (
+                        <div key={app._id} className="border-b border-border/30 pb-4 last:border-b-0 last:pb-0 space-y-3 pt-2">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <p className="text-xs font-bold text-foreground">{app.outletName}</p>
+                              <p className="text-[9px] text-muted-foreground mt-0.5">{app.city}, {app.state}</p>
+                            </div>
+                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded capitalize ${app.status === 'approved' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'
+                              }`}>
+                              {app.status}
+                            </span>
+                          </div>
+
+                          {app.status === 'approved' && (
+                            <div className="space-y-1.5">
+                              <p className="text-[9px] font-bold text-muted-foreground uppercase">Devices Assigned ({appDevices.length}):</p>
+                              {appDevices.length === 0 ? (
+                                <p className="text-[10px] text-muted-foreground italic">No devices provisioned yet.</p>
+                              ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {appDevices.map((d) => (
+                                    <div key={d._id} className="flex justify-between items-center text-[10px] bg-muted/20 p-2 rounded-lg">
+                                      <span className="font-semibold text-foreground/80">{d.deviceId}</span>
+                                      <span className={`inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] font-bold capitalize ${d.status === 'online' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-muted text-muted-foreground'}`}>
+                                        {d.status}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            ) : (
+              // Drilldown content for advertiser (campaign bookings)
+              <div className="space-y-4">
+                <div className="flex justify-between items-center bg-muted/20 p-3 rounded-2xl border border-border/40">
+                  <h5 className="text-xs font-bold text-foreground">Campaign Bookings ({campaigns.filter(c => (c.advertiserId?._id || c.advertiserId)?.toString() === selectedUser._id?.toString()).length})</h5>
+                  
+                  {/* Sorting dropdown for campaigns */}
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-[9px] font-bold text-muted-foreground uppercase">Sort:</span>
+                    <select
+                      value={venueSortOrder}
+                      onChange={(e) => setVenueSortOrder(e.target.value)}
+                      className="bg-background border border-input rounded-lg px-2 py-1 text-[10px] font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                    >
+                      <option value="name-asc">Campaign ID A-Z</option>
+                      <option value="name-desc">Campaign ID Z-A</option>
+                      <option value="status-approved">Approved First</option>
+                      <option value="status-pending">Pending First</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-1">
+                  {(() => {
+                    const userCampaigns = campaigns.filter(c => (c.advertiserId?._id || c.advertiserId)?.toString() === selectedUser._id?.toString());
+                    const sortedCampaigns = [...userCampaigns].sort((a, b) => {
+                      if (venueSortOrder === 'name-asc') {
+                        return a.bookingId.localeCompare(b.bookingId);
+                      }
+                      if (venueSortOrder === 'name-desc') {
+                        return b.bookingId.localeCompare(b.bookingId);
+                      }
+                      if (venueSortOrder === 'status-approved') {
+                        if (a.approvalStatus === 'approved' && b.approvalStatus !== 'approved') return -1;
+                        if (a.approvalStatus !== 'approved' && b.approvalStatus === 'approved') return 1;
+                        return 0;
+                      }
+                      if (venueSortOrder === 'status-pending') {
+                        if (a.approvalStatus === 'pending' && b.approvalStatus !== 'pending') return -1;
+                        if (a.approvalStatus !== 'pending' && b.approvalStatus === 'pending') return 1;
+                        return 0;
+                      }
+                      return 0;
+                    });
+
+                    if (sortedCampaigns.length === 0) {
+                      return <p className="text-xs text-muted-foreground italic py-6 text-center">No ad campaigns booked.</p>;
+                    }
+
+                    return sortedCampaigns.map((book) => (
+                      <div key={book.bookingId} className="border-b border-border/30 pb-4 last:border-b-0 last:pb-0 space-y-2 pt-2">
+                        <div className="flex justify-between items-start">
+                          <p className="text-xs font-bold text-foreground">Campaign ID: {book.bookingId}</p>
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded capitalize ${book.approvalStatus === 'approved' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-orange-500/10 text-orange-500'
+                            }`}>
+                            {book.approvalStatus}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-[10px] text-muted-foreground pt-1">
+                          <p><span className="font-semibold text-foreground">Venue:</span> {book.outletId?.outletName || 'Venue'} ({book.city})</p>
+                          <p><span className="font-semibold text-foreground">Duration:</span> {book.adDurationDays} Days ({book.deviceType})</p>
+                          <p><span className="font-semibold text-foreground">Total Paid:</span> ₹{book.amount / 100}</p>
+                          <p><span className="font-semibold text-foreground">Payment Status:</span> <span className="font-bold text-foreground capitalize">{book.paymentStatus}</span></p>
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

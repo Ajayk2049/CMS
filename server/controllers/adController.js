@@ -19,6 +19,111 @@ const resolveMediaUrl = (mediaUrl, host) => {
   return `http://${host}${mediaUrl}`;
 };
 
+const deleteMediaFile = (mediaUrl) => {
+  if (!mediaUrl) return;
+  const fs = require('fs');
+  const path = require('path');
+  const urlParts = mediaUrl.split('/uploads/');
+  if (urlParts.length > 1) {
+    const relativePath = urlParts[1];
+    const localFilePath = path.join(__dirname, '..', 'uploads', relativePath);
+    if (fs.existsSync(localFilePath)) {
+      try {
+        fs.unlinkSync(localFilePath);
+        console.log(`[Media Cleanup] Successfully deleted failed payment media: ${localFilePath}`);
+      } catch (err) {
+        console.error('[Media Cleanup] Failed to delete media file:', err.message);
+      }
+    }
+  }
+};
+
+const pollTransactionStatus = (bookingId, transactionId) => {
+  let attempts = 0;
+  const maxAttempts = 15; // 15 attempts * 10 seconds = 150 seconds (2.5 min) total
+  const interval = setInterval(async () => {
+    attempts++;
+    console.log(`[Auto-Polling] Checking status for booking ${bookingId} (Attempt ${attempts}/${maxAttempts})...`);
+    try {
+      const booking = await AdBooking.findOne({ bookingId });
+      if (!booking || booking.paymentStatus !== 'pending') {
+        console.log(`[Auto-Polling] Polling stopped for booking ${bookingId}. Status is already ${booking?.paymentStatus || 'unknown'}`);
+        clearInterval(interval);
+        return;
+      }
+
+      const checkResult = await phonePeService.checkTransactionStatus(transactionId);
+      const mappedStatus = checkResult.status; // COMPLETED, FAILED, PENDING
+
+      if (mappedStatus === 'COMPLETED') {
+        console.log(`[Auto-Polling] Booking ${bookingId} payment COMPLETED`);
+        await PhonePeTransaction.updateOne(
+          { transactionId },
+          { 
+            status: 'completed',
+            responseCode: checkResult.code || 'PAYMENT_SUCCESS',
+            rawCallbackPayload: checkResult.raw || { autoPolled: true }
+          }
+        );
+        booking.paymentStatus = 'completed';
+        booking.approvalStatus = 'pending';
+        booking.paymentId = checkResult.raw?.payload?.transactionId || checkResult.raw?.payload?.providerReferenceId || 'PAY_POLL_' + uuidv4().replace(/-/g, '').slice(0, 10).toUpperCase();
+        await booking.save();
+        clearInterval(interval);
+      } else if (mappedStatus === 'FAILED') {
+        console.log(`[Auto-Polling] Booking ${bookingId} payment FAILED`);
+        await PhonePeTransaction.updateOne(
+          { transactionId },
+          { status: 'failed' }
+        );
+        if (booking.mediaUrl) {
+          deleteMediaFile(booking.mediaUrl);
+        }
+        booking.paymentStatus = 'failed';
+        await booking.save();
+        clearInterval(interval);
+      } else {
+        console.log(`[Auto-Polling] Booking ${bookingId} is still PENDING`);
+        if (attempts >= maxAttempts) {
+          console.log(`[Auto-Polling] Max polling attempts reached for booking ${bookingId}. Marking as FAILED.`);
+          await PhonePeTransaction.updateOne(
+            { transactionId },
+            { status: 'failed', responseCode: 'POLLING_TIMEOUT' }
+          );
+          if (booking.mediaUrl) {
+            deleteMediaFile(booking.mediaUrl);
+          }
+          booking.paymentStatus = 'failed';
+          await booking.save();
+          clearInterval(interval);
+        }
+      }
+    } catch (err) {
+      console.error(`[Auto-Polling] Error checking status for booking ${bookingId}:`, err.message);
+      if (attempts >= maxAttempts) {
+        // On error at max attempts, also mark as failed
+        try {
+          await PhonePeTransaction.updateOne(
+            { transactionId },
+            { status: 'failed', responseCode: 'POLLING_ERROR' }
+          );
+          const booking = await AdBooking.findOne({ bookingId });
+          if (booking && booking.paymentStatus === 'pending') {
+            if (booking.mediaUrl) {
+              deleteMediaFile(booking.mediaUrl);
+            }
+            booking.paymentStatus = 'failed';
+            await booking.save();
+          }
+        } catch (cleanupErr) {
+          console.error(`[Auto-Polling] Cleanup error for ${bookingId}:`, cleanupErr.message);
+        }
+        clearInterval(interval);
+      }
+    }
+  }, 10000); // Poll every 10 seconds
+};
+
 async function generateBookingId() {
   let bookingId;
   let exists = true;
@@ -73,10 +178,42 @@ class AdController {
     }
 
     try {
-      const outlets = await HostApplication.find(
+      const apps = await HostApplication.find(
         { state, city, status: 'approved' },
-        'outletName outletDescription doorNo street city state zipCode deviceType quantity'
+        'outletName outletDescription doorNo street city state zipCode requestTablet tabletQuantity requestScreen screenQuantity'
       );
+      
+      const outlets = [];
+      for (const app of apps) {
+        if (app.requestTablet && app.tabletQuantity > 0) {
+          outlets.push({
+            _id: app._id,
+            outletName: app.outletName,
+            outletDescription: app.outletDescription,
+            doorNo: app.doorNo,
+            street: app.street,
+            city: app.city,
+            state: app.state,
+            zipCode: app.zipCode,
+            deviceType: 'tablet',
+            quantity: app.tabletQuantity
+          });
+        }
+        if (app.requestScreen && app.screenQuantity > 0) {
+          outlets.push({
+            _id: app._id,
+            outletName: app.outletName,
+            outletDescription: app.outletDescription,
+            doorNo: app.doorNo,
+            street: app.street,
+            city: app.city,
+            state: app.state,
+            zipCode: app.zipCode,
+            deviceType: 'screen',
+            quantity: app.screenQuantity
+          });
+        }
+      }
       return res.status(200).send({ success: true, data: outlets });
     } catch (error) {
       console.error('getOutlets Error:', error.message);
@@ -128,19 +265,30 @@ class AdController {
         return res.status(400).send({ success: false, message: 'Selected outlet is not approved or not found' });
       }
 
-      if (outlet.deviceType !== deviceType) {
-        return res.status(400).send({ 
-          success: false, 
-          message: `Outlet device type mismatch. Outlet supports: ${outlet.deviceType}` 
-        });
-      }
-
       const bookingQty = parseInt(quantity, 10);
-      if (bookingQty > outlet.quantity) {
-        return res.status(400).send({ 
-          success: false, 
-          message: `Requested quantity exceeds outlet availability (${outlet.quantity})` 
-        });
+
+      if (deviceType === 'tablet') {
+        if (!outlet.requestTablet) {
+          return res.status(400).send({ success: false, message: 'Selected outlet does not support Tablet display' });
+        }
+        if (bookingQty > outlet.tabletQuantity) {
+          return res.status(400).send({ 
+            success: false, 
+            message: `Requested quantity exceeds tablet availability (${outlet.tabletQuantity})` 
+          });
+        }
+      } else if (deviceType === 'screen') {
+        if (!outlet.requestScreen) {
+          return res.status(400).send({ success: false, message: 'Selected outlet does not support Screen display' });
+        }
+        if (bookingQty > outlet.screenQuantity) {
+          return res.status(400).send({ 
+            success: false, 
+            message: `Requested quantity exceeds screen availability (${outlet.screenQuantity})` 
+          });
+        }
+      } else {
+        return res.status(400).send({ success: false, message: 'Invalid deviceType requested' });
       }
 
       // Fetch rates
@@ -209,6 +357,9 @@ class AdController {
       });
       await booking.save();
 
+      // Start background status polling
+      pollTransactionStatus(bookingId, transactionId);
+
       return res.status(200).send({
         success: true,
         message: 'Ad booking initiated. Redirect to payment gateway',
@@ -245,12 +396,28 @@ class AdController {
       const decodedPayload = req.body;
       console.log('[PhonePe V2 Webhook Received]:', decodedPayload);
 
-      if (!decodedPayload || !decodedPayload.data) {
-        return res.status(400).send({ success: false, message: 'Invalid callback payload structure' });
+      if (!decodedPayload || (!decodedPayload.data && !decodedPayload.payload)) {
+        return res.status(400).send({ success: false, message: 'Invalid callback payload structure: missing data/payload' });
       }
 
-      const { success, code, data } = decodedPayload;
-      const { merchantTransactionId, amount } = data;
+      let success = decodedPayload.success;
+      let code = decodedPayload.code;
+      let data = decodedPayload.data || decodedPayload.payload;
+
+      if (data === 'WEBHOOK_VALIDATION_SUCCESS') {
+        console.log('[PhonePe Webhook] Received validation ping. Responding with 200 OK.');
+        return res.status(200).send({ success: true, message: 'Webhook registered successfully' });
+      }
+
+      if (decodedPayload.payload) {
+        const state = decodedPayload.payload.state;
+        const responseCode = decodedPayload.payload.responseCode;
+        success = (state === 'COMPLETED' && responseCode === 'SUCCESS');
+        code = state === 'COMPLETED' ? 'PAYMENT_SUCCESS' : (state === 'FAILED' ? 'PAYMENT_ERROR' : 'PAYMENT_PENDING');
+      }
+
+      const merchantTransactionId = data.merchantTransactionId || data.merchantOrderId;
+      const amount = data.amount;
 
       // Find transaction ledger
       const txn = await PhonePeTransaction.findOne({ transactionId: merchantTransactionId });
@@ -271,20 +438,40 @@ class AdController {
         txn.rawCallbackPayload = decodedPayload;
         await txn.save();
 
-        await AdBooking.updateOne({ transactionId: merchantTransactionId }, { paymentStatus: 'failed' });
+        const booking = await AdBooking.findOne({ transactionId: merchantTransactionId });
+        if (booking) {
+          if (booking.mediaUrl) {
+            deleteMediaFile(booking.mediaUrl);
+          }
+          booking.paymentStatus = 'failed';
+          await booking.save();
+        }
         await Order.updateOne({ transactionId: merchantTransactionId }, { paymentStatus: 'failed' });
         
         return res.status(200).send({ success: true, message: 'Amount mismatch handled' });
       }
 
-      if (success && code === 'PAYMENT_SUCCESS') {
+      const stateVal = data.state;
+      const responseCodeVal = data.responseCode;
+      const isCompleted = (success && code === 'PAYMENT_SUCCESS') || (stateVal === 'COMPLETED' && responseCodeVal === 'SUCCESS');
+
+      const isPending = (
+        code === 'PAYMENT_PENDING' ||
+        code === 'PAYMENT_SUBMITTED' ||
+        code === 'PAYMENT_INITIATED' ||
+        code === 'SUBMITTED' ||
+        stateVal === 'PENDING' ||
+        stateVal === 'SUBMITTED'
+      );
+
+      if (isCompleted) {
         txn.status = 'completed';
-        txn.responseCode = code;
+        txn.responseCode = code || responseCodeVal || 'PAYMENT_SUCCESS';
         txn.rawCallbackPayload = decodedPayload;
         await txn.save();
 
         // Extract paymentId from callback payload
-        const paymentId = decodedPayload.data?.transactionId || decodedPayload.data?.providerReferenceId || null;
+        const paymentId = data.transactionId || data.providerReferenceId || null;
 
         // Update corresponding AdBooking
         await AdBooking.updateOne(
@@ -298,13 +485,38 @@ class AdController {
           { paymentStatus: 'completed' }
         );
 
-      } else {
-        txn.status = 'failed';
-        txn.responseCode = code || 'PAYMENT_ERROR';
+      } else if (isPending) {
+        txn.status = 'pending';
+        txn.responseCode = code || responseCodeVal || 'PAYMENT_PENDING';
         txn.rawCallbackPayload = decodedPayload;
         await txn.save();
 
-        await AdBooking.updateOne({ transactionId: merchantTransactionId }, { paymentStatus: 'failed' });
+        // Update corresponding AdBooking (Keep media file)
+        await AdBooking.updateOne(
+          { transactionId: merchantTransactionId },
+          { paymentStatus: 'pending' }
+        );
+
+        // Update corresponding Order (if it was a kiosk customer order)
+        await Order.updateOne(
+          { transactionId: merchantTransactionId },
+          { paymentStatus: 'pending' }
+        );
+
+      } else {
+        txn.status = 'failed';
+        txn.responseCode = code || responseCodeVal || 'PAYMENT_ERROR';
+        txn.rawCallbackPayload = decodedPayload;
+        await txn.save();
+
+        const booking = await AdBooking.findOne({ transactionId: merchantTransactionId });
+        if (booking) {
+          if (booking.mediaUrl) {
+            deleteMediaFile(booking.mediaUrl);
+          }
+          booking.paymentStatus = 'failed';
+          await booking.save();
+        }
         await Order.updateOne({ transactionId: merchantTransactionId }, { paymentStatus: 'failed' });
       }
 
@@ -514,7 +726,9 @@ class AdController {
         console.log(`[PhonePe Status Check for ${booking.bookingId}]:`, checkResult);
 
         // Fallback for local testing or demo mode:
-        if (config.demoMode && (mappedStatus === 'FAILED' || checkResult.code === 'TRANSACTION_NOT_FOUND')) {
+        // Only auto-complete if PhonePe hasn't indexed the transaction yet (sandbox delay).
+        // Do NOT auto-complete explicitly FAILED transactions.
+        if (config.demoMode && checkResult.code === 'TRANSACTION_NOT_FOUND') {
           mappedStatus = 'COMPLETED';
           checkResult.code = 'PAYMENT_SUCCESS';
         }
@@ -559,6 +773,9 @@ class AdController {
           { status: 'failed' }
         );
 
+        if (booking.mediaUrl) {
+          deleteMediaFile(booking.mediaUrl);
+        }
         booking.paymentStatus = 'failed';
         await booking.save();
 

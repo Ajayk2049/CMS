@@ -40,14 +40,35 @@ class AdViewWidget extends StatelessWidget {
   Widget _buildWaitingView() {
     return Container(
       color: Colors.black,
-      child: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.tv_off_rounded, size: 80, color: Colors.blueAccent),
-            SizedBox(height: 20),
-            Text("WAITING FOR AD CONTENT...", style: kAdWaitingTextStyle),
-          ],
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(40),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.tv_off_rounded, size: 80, color: Colors.blueAccent),
+              const SizedBox(height: 20),
+              const Text(
+                "NO AD CAMPAIGNS ACTIVE",
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white70,
+                  letterSpacing: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                "Server returned 0 ads for this outlet.\nBook and approve ad campaigns in the admin portal to see them here.",
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white.withValues(alpha: 0.5),
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );

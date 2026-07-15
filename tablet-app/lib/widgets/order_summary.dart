@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../menu_state.dart';
+import '../menu_image_cache.dart';
 import 'package:fixnum/fixnum.dart';
 import '../generated/menu.pbgrpc.dart';
+import 'cached_menu_image.dart';
 
 class OrderSummaryPanel extends StatelessWidget {
   final CartNotifier cartNotifier;
@@ -10,6 +12,7 @@ class OrderSummaryPanel extends StatelessWidget {
   final bool showHeader;
   final VoidCallback onPlaceOrder;
   final String serverHost;
+  final MenuImageCache imageCache;
 
   const OrderSummaryPanel({
     super.key,
@@ -18,6 +21,7 @@ class OrderSummaryPanel extends StatelessWidget {
     required this.showHeader,
     required this.onPlaceOrder,
     required this.serverHost,
+    required this.imageCache,
   });
 
   @override
@@ -60,12 +64,6 @@ class OrderSummaryPanel extends StatelessWidget {
                       ..price = Int64(0),
                   );
 
-                  final absoluteImageUrl = item.imageUrl.isNotEmpty
-                      ? (item.imageUrl.startsWith('http')
-                          ? item.imageUrl
-                          : 'http://$serverHost:4200${item.imageUrl}')
-                      : '';
-
                   final unitPrice = item.price.toDouble() / 100.0;
                   final lineTotal = unitPrice * quantity;
 
@@ -85,21 +83,20 @@ class OrderSummaryPanel extends StatelessWidget {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        // Food Image
+                        // Food Image — local cache first, network fallback
                         ClipRRect(
                           borderRadius: kImageBorderRadius,
                           child: Container(
                             width: 90,
                             height: 90,
                             color: kScaffoldBg,
-                            child: absoluteImageUrl.isNotEmpty
-                                ? Image.network(
-                                    absoluteImageUrl,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, error, stackTrace) =>
-                                        const Icon(Icons.restaurant_menu, color: kTextGrey),
-                                  )
-                                : const Icon(Icons.restaurant_menu, color: kTextGrey),
+                            child: CachedMenuImage(
+                              cache: imageCache,
+                              itemId: item.itemId,
+                              imageUrl: item.imageUrl,
+                              serverHost: serverHost,
+                              fallback: const Icon(Icons.restaurant_menu, color: kTextGrey),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 16),
@@ -263,7 +260,7 @@ class OrderSummaryPanel extends StatelessWidget {
                   children: [
                     const SizedBox(width: 24), // to center text somewhat
                     const Text(
-                      "Proceed to Payment",
+                      "Place Order",
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
                     ),
                     Container(

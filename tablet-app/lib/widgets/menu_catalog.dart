@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../constants.dart';
 import '../menu_state.dart';
+import '../menu_image_cache.dart';
 import '../generated/menu.pbgrpc.dart';
+import 'cached_menu_image.dart';
 
 class MenuCatalogWidget extends StatefulWidget {
   final MenuNotifier menuNotifier;
@@ -9,6 +11,7 @@ class MenuCatalogWidget extends StatefulWidget {
   final String serverHost;
   final double viewportHeight;
   final String selectedCategory;
+  final MenuImageCache imageCache;
 
   const MenuCatalogWidget({
     super.key,
@@ -17,6 +20,7 @@ class MenuCatalogWidget extends StatefulWidget {
     required this.serverHost,
     required this.viewportHeight,
     required this.selectedCategory,
+    required this.imageCache,
   });
 
   @override
@@ -184,6 +188,7 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
                           item: pagedItems[index],
                           cartNotifier: widget.cartNotifier,
                           serverHost: widget.serverHost,
+                          imageCache: widget.imageCache,
                         );
                       },
                     ),
@@ -283,23 +288,17 @@ class _MenuCard extends StatelessWidget {
   final MenuItem item;
   final CartNotifier cartNotifier;
   final String serverHost;
+  final MenuImageCache imageCache;
 
   const _MenuCard({
     required this.item,
     required this.cartNotifier,
     required this.serverHost,
+    required this.imageCache,
   });
 
   @override
   Widget build(BuildContext context) {
-    final absoluteImageUrl = item.imageUrl.isNotEmpty
-        ? (item.imageUrl.startsWith('http')
-            ? item.imageUrl
-            : 'http://$serverHost:4200${item.imageUrl}')
-        : '';
-
-
-
     return Container(
       decoration: const BoxDecoration(
         color: kCardBg,
@@ -316,17 +315,16 @@ class _MenuCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Image top frame
+          // Image top frame — prefer local cache, fall back to network
           Expanded(
             flex: 5,
-            child: absoluteImageUrl.isNotEmpty
-                ? Image.network(
-                    absoluteImageUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) =>
-                        _buildImagePlaceholder(),
-                  )
-                : _buildImagePlaceholder(),
+            child: CachedMenuImage(
+              cache: imageCache,
+              itemId: item.itemId,
+              imageUrl: item.imageUrl,
+              serverHost: serverHost,
+              fallback: _buildImagePlaceholder(),
+            ),
           ),
           // Content bottom frame
           Padding(

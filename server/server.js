@@ -31,7 +31,7 @@ const merchantSockets = new Map();
 // ----------------------------------------------------
 // Fastify Setup (REST & WebSocket)
 // ----------------------------------------------------
-const fastify = Fastify({ 
+const fastify = Fastify({
   logger: { level: 'error' },
   bodyLimit: 1048576 // 1MB default body limit
 });
@@ -54,8 +54,8 @@ async function startFastify() {
   fastify.addHook('onRequest', (request, reply, done) => {
     const url = request.raw.url || '';
     if (
-      request.method !== 'OPTIONS' && 
-      !url.includes('/auth/device/ads') && 
+      request.method !== 'OPTIONS' &&
+      !url.includes('/auth/device/ads') &&
       !url.includes('/ws')
     ) {
       console.log(`\x1b[36m[API]\x1b[0m ${request.method} ${url}`);
@@ -145,7 +145,7 @@ async function startFastify() {
     else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
     else if (ext === '.png') contentType = 'image/png';
     else if (ext === '.webp') contentType = 'image/webp';
-    
+
     res.header('Content-Type', contentType);
     return res.send(fs.createReadStream(filePath));
   });
@@ -156,6 +156,44 @@ async function startFastify() {
   // DB Connection & Seeding Admin
   await mongoose.connect(config.mongoUri);
   console.log('[Database] Connected to MongoDB');
+
+  // Database migration for dual-device HostApplication schema
+  try {
+    const legacyApps = await HostApplication.find({
+      $or: [
+        { deviceType: { $exists: true } },
+        { quantity: { $exists: true } }
+      ]
+    });
+    if (legacyApps.length > 0) {
+      console.log(`[Migration] Found ${legacyApps.length} legacy host application documents. Migrating...`);
+      for (const app of legacyApps) {
+        const type = app.get('deviceType');
+        const qty = app.get('quantity') || 0;
+
+        if (type === 'tablet') {
+          app.requestTablet = true;
+          app.tabletQuantity = qty;
+          app.requestScreen = false;
+          app.screenQuantity = 0;
+        } else if (type === 'screen') {
+          app.requestScreen = true;
+          app.screenQuantity = qty;
+          app.requestTablet = false;
+          app.tabletQuantity = 0;
+        }
+
+        // Remove legacy fields
+        app.set('deviceType', undefined);
+        app.set('quantity', undefined);
+
+        await app.save();
+      }
+      console.log('[Migration] HostApplication database migration completed successfully.');
+    }
+  } catch (migError) {
+    console.error('[Migration] Failed to run HostApplication migration:', migError.message);
+  }
 
   // Run media logs retention cleanup on boot
   const { cleanupOldMediaLogs } = require('./utils/mediaCleanup');
@@ -300,7 +338,7 @@ const deviceServiceHandlers = {
     try {
       const claims = verifyGrpcToken(call);
       const { deviceId } = claims;
-      
+
       const device = await Device.findOne({ deviceId });
       if (!device) {
         return callback({ code: grpc.status.NOT_FOUND, message: `Device ${deviceId} not found` });
@@ -324,7 +362,7 @@ const deviceServiceHandlers = {
     try {
       const claims = verifyGrpcToken(call);
       const { deviceId } = claims;
-      
+
       const device = await Device.findOne({ deviceId });
       if (!device) {
         return callback({ code: grpc.status.NOT_FOUND, message: `Device ${deviceId} not found` });
@@ -351,7 +389,7 @@ const deviceServiceHandlers = {
       const claims = verifyGrpcToken(call);
       const { deviceId } = claims;
       console.log(`[gRPC telemetry] Device ${deviceId} tracked impression for Booking ${bookingId}: ${durationSeconds}s, Clicks: ${interactiveClicks}`);
-      
+
       callback(null, {
         success: true,
         message: 'Telemetry logged successfully'
@@ -450,7 +488,7 @@ const orderServiceHandlers = {
         wsClient.send(JSON.stringify({
           event: 'new_order',
           data: order
-         }));
+        }));
       }
 
       // Initiate payment link via PhonePe
@@ -480,7 +518,7 @@ const orderServiceHandlers = {
     const { orderId } = call.request;
     try {
       verifyGrpcToken(call);
-      
+
       const order = await Order.findOne({ orderId });
       if (!order) {
         return callback({ code: grpc.status.NOT_FOUND, message: `Order ${orderId} not found` });
@@ -493,7 +531,7 @@ const orderServiceHandlers = {
         try {
           checkResult = await phonePeService.checkTransactionStatus(order.transactionId);
           mappedStatus = checkResult.status; // COMPLETED, FAILED, PENDING
-          
+
           console.log(`[gRPC Order Status Check for ${orderId}]:`, checkResult);
 
           if (config.demoMode && (mappedStatus === 'FAILED' || checkResult.code === 'TRANSACTION_NOT_FOUND')) {
@@ -512,7 +550,7 @@ const orderServiceHandlers = {
           // Update transaction ledger
           await PhonePeTransaction.updateOne(
             { transactionId: order.transactionId },
-            { 
+            {
               status: 'completed',
               responseCode: checkResult.code || 'PAYMENT_SUCCESS',
               rawCallbackPayload: checkResult.raw || { demoMode: true }
@@ -525,7 +563,7 @@ const orderServiceHandlers = {
         } else if (mappedStatus === 'FAILED') {
           await PhonePeTransaction.updateOne(
             { transactionId: order.transactionId },
-            { 
+            {
               status: 'failed',
               responseCode: checkResult.code || 'PAYMENT_ERROR',
               rawCallbackPayload: checkResult.raw || { demoMode: true }
@@ -568,15 +606,89 @@ function startGrpc() {
   );
 }
 
+// Start background heartbeat monitor:
+//  1. Transition stale online devices to offline (35s no ping)
+//  2. Detach devices that have been offline for too long (2 min no ping)
+//     so their deviceId is free for re-activation on another physical machine.
+function startHeartbeatMonitor() {
+  console.log('[Heartbeat Monitor] Started background device check interval (15s)...');
+  setInterval(async () => {
+    try {
+      const offlineThreshold = new Date(Date.now() - 35000); // 35s — mark offline
+      const detachThreshold   = new Date(Date.now() - 120000); // 2 min — auto-detach
+
+      // 1) Mark stale online devices as offline
+      const staleDevices = await Device.find({
+        status: 'online',
+        lastHeartbeat: { $lt: offlineThreshold }
+      });
+
+      for (const device of staleDevices) {
+        device.status = 'offline';
+        await device.save();
+        console.log(`[Heartbeat Monitor] Device ${device.deviceId} is stale (last ping: ${device.lastHeartbeat.toLocaleTimeString()}). Marked OFFLINE.`);
+      }
+
+      // 2) Auto-detach devices that have been offline for the full grace period
+      const detachedDevices = await Device.find({
+        isActivated: true,
+        status: 'offline',
+        lastHeartbeat: { $lt: detachThreshold }
+      });
+
+      for (const device of detachedDevices) {
+        const previousHardware = device.hardwareId;
+        device.isActivated = false;
+        device.hardwareId = null;
+        device.kioskPasswordHash = null;
+        device.status = 'offline';
+        await device.save();
+        console.log(`[Heartbeat Monitor] Device ${device.deviceId} auto-detached after extended offline (was bound to hardware ${previousHardware}). ID is now available for re-activation.`);
+      }
+    } catch (err) {
+      console.error('[Heartbeat Monitor] Error running device check:', err.message);
+    }
+  }, 15000); // Check every 15 seconds
+}
+
 // Start both servers
 async function main() {
   try {
     await startFastify();
     startGrpc();
+    startHeartbeatMonitor();
   } catch (err) {
     console.error('Server Startup Failed:', err.message);
     process.exit(1);
   }
 }
 
-main();
+// localtunnel helper
+const localtunnel = require("localtunnel");
+
+async function startLocalTunnel() {
+  try {
+    const tunnel = await localtunnel({ port: config.port || 4200 });
+    const publicCallbackUrl = `${tunnel.url}/api/v1/payments/callback`;
+
+    // Dynamically override the callback URL in config
+    config.phonePe.callbackUrl = publicCallbackUrl;
+
+    console.log(`\x1b[32m[localtunnel] Tunnel active at: ${tunnel.url}\x1b[0m`);
+    console.log(`\x1b[32m[localtunnel] PhonePe Callback URL set to: ${publicCallbackUrl}\x1b[0m`);
+
+    tunnel.on('close', () => {
+      console.log('[localtunnel] Tunnel closed. Reverting callback to .env value.');
+      config.phonePe.callbackUrl = process.env.PHONEPE_CALLBACK_URL;
+    });
+  } catch (err) {
+    console.error('[localtunnel] Failed to start tunnel:', err.message);
+    console.warn('[localtunnel] Falling back to .env callback URL:', config.phonePe.callbackUrl);
+  }
+}
+
+// Ensure tunnel is ready BEFORE server starts accepting requests
+(async () => {
+  await startLocalTunnel();
+  main();
+})();

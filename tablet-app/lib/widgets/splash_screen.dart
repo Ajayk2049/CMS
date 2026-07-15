@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../screens/kiosk_screen.dart';
 import '../screens/device_setup_screen.dart';
+import '../screens/download_progress_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -22,49 +23,55 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    // ═══ CRITICAL ANR FIX ═══
-    // RunApp() delivers the first frame with this widget immediately (≈16 ms).
-    // Then we bootstrap heavy I/O off the critical rendering path.
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
 
   Future<void> _bootstrap() async {
-    // ── 1. Load persisted state (disk I/O — safe after first frame) ──
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token') ?? '';
     final serverHost = prefs.getString('serverHost') ?? '';
     final deviceId = prefs.getString('deviceId') ?? '';
     final hostApplicationId = prefs.getString('hostApplicationId') ?? '';
     final bypassPassword = prefs.getString('bypassPassword') ?? '';
+    final tableNumber = prefs.getString('tableNumber') ?? '';
     final isActivated = token.isNotEmpty;
 
-    debugPrint('[SPLASH_BOOTSTRAP] token: "$token", serverHost: "$serverHost", deviceId: "$deviceId", hostApplicationId: "$hostApplicationId", bypassPassword: "$bypassPassword", isActivated: $isActivated');
+    debugPrint('[SPLASH_BOOTSTRAP] isActivated: $isActivated, deviceId: $deviceId, table: $tableNumber');
 
     if (!mounted) return;
 
-    // ── 2. Transition to the real screen ──
-    Navigator.of(context).pushReplacement(
+    // Capture the Navigator before the callback fires. After the splash screen
+    // is replaced, its BuildContext is unmounted and using it inside the
+    // DeviceSetupScreen's onActivate callback throws "setState/mounted" errors.
+    final splashNavigator = Navigator.of(context);
+
+    splashNavigator.pushReplacement(
       MaterialPageRoute<void>(
-        builder: (_) => isActivated
+        builder: (setupCtx) => isActivated
             ? KioskScreen(
                 serverHost: serverHost,
                 deviceId: deviceId,
                 token: token,
                 hostApplicationId: hostApplicationId,
                 bypassPassword: bypassPassword,
+                tableNumber: tableNumber,
                 onReset: _rebootToSplash,
               )
             : DeviceSetupScreen(
-                onActivate: (host, dId, tok, hAppId, pass) {
-                  Navigator.of(context).pushReplacement(
+                onActivate: (host, dId, tok, hAppId, pass, tblNum) {
+                  // setupCtx is the DeviceSetupScreen's own context — it is
+                  // mounted while the user is interacting with the setup form.
+                  // Use it (captured fresh from the builder) instead of the
+                  // outer splash context which is already unmounted.
+                  Navigator.of(setupCtx).pushReplacement(
                     MaterialPageRoute<void>(
-                      builder: (_) => KioskScreen(
+                      builder: (_) => DownloadProgressScreen(
                         serverHost: host,
                         deviceId: dId,
                         token: tok,
                         hostApplicationId: hAppId,
                         bypassPassword: pass,
-                        onReset: _rebootToSplash,
+                        tableNumber: tblNum,
                       ),
                     ),
                   );
@@ -138,4 +145,5 @@ Future<void> resetCredentials() async {
   await prefs.remove('deviceId');
   await prefs.remove('hostApplicationId');
   await prefs.remove('bypassPassword');
+  await prefs.remove('tableNumber');
 }

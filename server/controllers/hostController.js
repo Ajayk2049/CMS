@@ -18,8 +18,10 @@ class HostController {
       contactPerson,
       phone,
       email,
-      deviceType,
-      quantity
+      requestTablet,
+      tabletQuantity,
+      requestScreen,
+      screenQuantity
     } = req.body || {};
 
     // Basic validation
@@ -33,20 +35,32 @@ class HostController {
       !zipCode ||
       !contactPerson ||
       !phone ||
-      !email ||
-      !deviceType ||
-      !quantity
+      !email
     ) {
-      return res.status(400).send({ success: false, message: 'All form fields are required' });
+      return res.status(400).send({ success: false, message: 'All venue fields are required' });
     }
 
-    if (!['tablet', 'screen'].includes(deviceType)) {
-      return res.status(400).send({ success: false, message: 'Invalid device type. Must be tablet or screen' });
+    const isRequestingTablet = !!requestTablet;
+    const isRequestingScreen = !!requestScreen;
+
+    if (!isRequestingTablet && !isRequestingScreen) {
+      return res.status(400).send({ success: false, message: 'You must select at least one device type (Tablet or Screen)' });
     }
 
-    const parsedQty = parseInt(quantity, 10);
-    if (isNaN(parsedQty) || parsedQty < 1) {
-      return res.status(400).send({ success: false, message: 'Quantity must be at least 1' });
+    let parsedTabletQty = 0;
+    if (isRequestingTablet) {
+      parsedTabletQty = parseInt(tabletQuantity, 10);
+      if (isNaN(parsedTabletQty) || parsedTabletQty < 1) {
+        return res.status(400).send({ success: false, message: 'Tablet quantity must be at least 1' });
+      }
+    }
+
+    let parsedScreenQty = 0;
+    if (isRequestingScreen) {
+      parsedScreenQty = parseInt(screenQuantity, 10);
+      if (isNaN(parsedScreenQty) || parsedScreenQty < 1) {
+        return res.status(400).send({ success: false, message: 'Screen quantity must be at least 1' });
+      }
     }
 
     try {
@@ -62,8 +76,10 @@ class HostController {
         contactPerson,
         phone,
         email,
-        deviceType,
-        quantity: parsedQty,
+        requestTablet: isRequestingTablet,
+        tabletQuantity: parsedTabletQty,
+        requestScreen: isRequestingScreen,
+        screenQuantity: parsedScreenQty,
         status: 'pending'
       });
 
@@ -111,9 +127,27 @@ class HostController {
       let menu = await Menu.findOne({ hostApplicationId });
       if (!menu) {
         // Return empty menu format if not initialized yet
-        return res.status(200).send({ success: true, data: { items: [], hostApplicationId } });
+        return res.status(200).send({ 
+          success: true, 
+          data: { 
+            items: [], 
+            categories: ['Starters', 'Main Course', 'Dessert', 'Beverages'], 
+            hostApplicationId 
+          } 
+        });
       }
-      return res.status(200).send({ success: true, data: menu });
+      return res.status(200).send({ 
+        success: true, 
+        data: {
+          _id: menu._id,
+          hostApplicationId: menu.hostApplicationId,
+          merchantId: menu.merchantId,
+          items: menu.items,
+          categories: menu.categories && menu.categories.length > 0 ? menu.categories : ['Starters', 'Main Course', 'Dessert', 'Beverages'],
+          createdAt: menu.createdAt,
+          updatedAt: menu.updatedAt
+        }
+      });
     } catch (error) {
       console.error('getMenu Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to fetch menu' });
@@ -124,7 +158,7 @@ class HostController {
    * Create or Update restaurant menu
    */
   async updateMenu(req, res) {
-    const { hostApplicationId, items } = req.body || {};
+    const { hostApplicationId, items, categories } = req.body || {};
 
     if (!hostApplicationId) {
       return res.status(400).send({ success: false, message: 'hostApplicationId is required' });
@@ -155,7 +189,7 @@ class HostController {
 
       const menu = await Menu.findOneAndUpdate(
         { hostApplicationId },
-        { merchantId: req.user.uid, items, updatedAt: Date.now() },
+        { merchantId: req.user.uid, items, categories, updatedAt: Date.now() },
         { upsert: true, new: true }
       );
 

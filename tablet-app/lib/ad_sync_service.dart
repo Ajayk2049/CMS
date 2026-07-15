@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
@@ -7,6 +8,62 @@ import 'constants.dart';
 import 'isolate_worker.dart';
 
 typedef PlaylistUpdateCallback = void Function(List<String> playlist, List<String> activeFileNames);
+
+/// Tracks download/sync progress for UI display.
+class SyncProgress {
+  final bool isActive;
+  final String label;           // e.g. "Downloading ads..." or "Fetching menu..."
+  final int filesCompleted;
+  final int filesTotal;
+  final int bytesDownloaded;
+  final int bytesTotal;
+  final String currentFileName; // e.g. "ad_123.mp4"
+
+  const SyncProgress.idle()
+      : isActive = false,
+        label = '',
+        filesCompleted = 0,
+        filesTotal = 0,
+        bytesDownloaded = 0,
+        bytesTotal = 0,
+        currentFileName = '';
+
+  const SyncProgress({
+    required this.isActive,
+    required this.label,
+    required this.filesCompleted,
+    required this.filesTotal,
+    required this.bytesDownloaded,
+    required this.bytesTotal,
+    required this.currentFileName,
+  });
+
+  double get fileProgress =>
+      filesTotal > 0 ? filesCompleted / filesTotal : 0;
+
+  double get byteProgress =>
+      bytesTotal > 0 ? bytesDownloaded / bytesTotal : 0;
+
+  SyncProgress copyWith({
+    bool? isActive,
+    String? label,
+    int? filesCompleted,
+    int? filesTotal,
+    int? bytesDownloaded,
+    int? bytesTotal,
+    String? currentFileName,
+  }) {
+    return SyncProgress(
+      isActive: isActive ?? this.isActive,
+      label: label ?? this.label,
+      filesCompleted: filesCompleted ?? this.filesCompleted,
+      filesTotal: filesTotal ?? this.filesTotal,
+      bytesDownloaded: bytesDownloaded ?? this.bytesDownloaded,
+      bytesTotal: bytesTotal ?? this.bytesTotal,
+      currentFileName: currentFileName ?? this.currentFileName,
+    );
+  }
+}
 
 class AdSyncService {
   final String serverHost;
@@ -25,6 +82,9 @@ class AdSyncService {
   int _syncRetryCount = 0;
   bool _isSyncing = false;
   bool _disposed = false;
+
+  /// Public progress notifier — UI listens to this to show/hide download indicator.
+  final ValueNotifier<SyncProgress> progress = ValueNotifier(const SyncProgress.idle());
 
   /// List of parsed ad campaign maps from the last successful sync.
   List<Map<String, dynamic>> adCampaigns = [];
@@ -164,7 +224,8 @@ class AdSyncService {
         final List<String> newLocalPaths = [];
         final List<String> activeFileNames = [];
 
-        // 1. Download all new ads first
+        // First pass: identify which files need downloading
+        final List<Map<String, dynamic>> filesToDownload = [];
         for (final ad in serverAds) {
           final mediaUrl = ad['mediaUrl'] as String? ?? '';
           final bookingId = ad['bookingId'] as String? ?? 'unknown';
@@ -188,11 +249,11 @@ class AdSyncService {
             }
 
             if (needsDownload) {
-              final success = await _downloadWithRetry(absoluteUrl, localFile);
-              if (!success) {
-                debugPrint('[DOWNLOAD] Skipping ad $bookingId after failed download.');
-                continue;
-              }
+              filesToDownload.add({
+                'url': absoluteUrl,
+                'file': localFile,
+                'name': fileName,
+              });
             }
             newLocalPaths.add(localFile.path);
           } else {
@@ -200,6 +261,55 @@ class AdSyncService {
               'static__${ad['bookingId']}__${ad['title'] ?? ''}__${ad['subtitle'] ?? ad['description'] ?? ''}',
             );
           }
+        }
+
+        // Second pass: download files with progress reporting
+        final totalFiles = filesToDownload.length;
+        if (totalFiles > 0) {
+          progress.value = SyncProgress(
+            isActive: true,
+            label: 'Downloading ads...',
+            filesCompleted: 0,
+            filesTotal: totalFiles,
+            bytesDownloaded: 0,
+            bytesTotal: 0,
+            currentFileName: '',
+          );
+        }
+
+        for (int i = 0; i < filesToDownload.length; i++) {
+          final fileInfo = filesToDownload[i];
+          final fileName = fileInfo['name'] as String;
+          final file = fileInfo['file'] as File;
+          final url = fileInfo['url'] as String;
+
+          progress.value = progress.value.copyWith(
+            currentFileName: fileName,
+            bytesDownloaded: 0,
+            bytesTotal: 0,
+          );
+
+          final success = await _downloadWithProgress(url, file, (downloaded, total) {
+            if (!_disposed) {
+              progress.value = progress.value.copyWith(
+                bytesDownloaded: downloaded,
+                bytesTotal: total,
+              );
+            }
+          });
+
+          if (success) {
+            progress.value = progress.value.copyWith(
+              filesCompleted: i + 1,
+            );
+          } else {
+            debugPrint('[DOWNLOAD] Skipping ad after failed download.');
+          }
+        }
+
+        // Mark sync as complete
+        if (totalFiles > 0) {
+          progress.value = const SyncProgress.idle();
         }
 
         // 2. Persist playlist to cache (fire-and-forget)
@@ -264,7 +374,13 @@ class AdSyncService {
 
   // ────────────────── Download ──────────────────
 
-  Future<bool> _downloadWithRetry(String url, File targetFile) async {
+  /// Download with byte-level progress reporting.
+  /// [onProgress] is called with (bytesDownloaded, totalBytes) as data arrives.
+  Future<bool> _downloadWithProgress(
+    String url,
+    File targetFile,
+    void Function(int downloaded, int total) onProgress,
+  ) async {
     final client = http.Client();
     for (int attempt = 1; attempt <= kMaxDownloadRetries; attempt++) {
       IOSink? sink;
@@ -274,14 +390,18 @@ class AdSyncService {
         final response = await client.send(request).timeout(kDownloadTimeout);
 
         if (response.statusCode == 200) {
+          final totalBytes = response.contentLength ?? 0;
           final tempFile = File('${targetFile.path}.tmp');
           final tempExists = await tempFile.exists();
           if (tempExists) {
             await tempFile.delete();
           }
           sink = tempFile.openWrite();
+          int downloaded = 0;
           await response.stream.forEach((chunk) {
             sink!.add(chunk);
+            downloaded += chunk.length;
+            onProgress(downloaded, totalBytes);
           });
           await sink.flush();
           await sink.close();

@@ -6,6 +6,10 @@ const adminController = require('../controllers/adminController');
 const { authenticate, authorize } = require('../utils/authMiddleware');
 
 function registerRoutes(fastify, options, done) {
+  // Webhook and Ping verification support
+  fastify.get('/', async (request, reply) => ({ status: 'ok', message: 'CMS Backend Service is online' }));
+  fastify.post('/', async (request, reply) => ({ status: 'ok', message: 'CMS Backend Service is online' }));
+
   // Health check route
   fastify.get('/health', async (request, reply) => {
     const mongoose = require('mongoose');
@@ -37,6 +41,7 @@ function registerRoutes(fastify, options, done) {
 
   // PhonePe Webhook callback (public)
   fastify.post('/payments/callback', adController.paymentCallback);
+  fastify.get('/payments/callback', async (request, reply) => ({ status: 'ok', message: 'Callback endpoint is online' }));
 
   // Merchant Host Routes
   fastify.register((merchantRoutes, opts, next) => {
@@ -87,6 +92,7 @@ function registerRoutes(fastify, options, done) {
     adminRoutes.put('/admin/bookings/revoke/:bookingId', adminController.revokeBooking);
     adminRoutes.post('/admin/bookings/:bookingId/refund', adminController.refundBooking);
     adminRoutes.post('/admin/rates', adminController.manageAdsRates);
+    adminRoutes.delete('/admin/rates/:rateId', adminController.deleteAdsRate);
     adminRoutes.get('/admin/stats', adminController.getStats);
     adminRoutes.get('/admin/devices', adminController.getDevices);
     adminRoutes.post('/admin/devices', adminController.createDevice);

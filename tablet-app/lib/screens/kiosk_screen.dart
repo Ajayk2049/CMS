@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:grpc/grpc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fixnum/fixnum.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../generated/device.pbgrpc.dart';
 import '../generated/menu.pbgrpc.dart';
@@ -18,6 +20,9 @@ import '../widgets/ad_view.dart';
 import '../widgets/menu_catalog.dart';
 import '../widgets/order_summary.dart';
 import '../widgets/checkout_modal.dart';
+import '../widgets/download_progress_indicator.dart';
+import '../menu_image_cache.dart';
+import 'settings_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════
 //  KIOSK SCREEN — Main kiosk orchestrator (ANR-safe startup)
@@ -29,6 +34,7 @@ class KioskScreen extends StatefulWidget {
   final String token;
   final String hostApplicationId;
   final String bypassPassword;
+  final String tableNumber;
   final VoidCallback onReset;
 
   const KioskScreen({
@@ -38,6 +44,7 @@ class KioskScreen extends StatefulWidget {
     required this.token,
     required this.hostApplicationId,
     required this.bypassPassword,
+    required this.tableNumber,
     required this.onReset,
   });
 
@@ -51,8 +58,9 @@ class _KioskScreenState extends State<KioskScreen> {
   bool _showCart = false;
   bool _kioskReady = false;
   bool _isOnline = true;
-  String _outletName = 'Aster & Ice';
+  String _outletName = '';
   String _selectedCategory = '';
+  late String _tableNumber;
 
   // ── gRPC ──
   ClientChannel? _channel;
@@ -62,13 +70,20 @@ class _KioskScreenState extends State<KioskScreen> {
   CallOptions? _callOptions;
   Timer? _heartbeatTimer;
   int _heartbeatFailCount = 0;
+  int _heartbeatSuccessCount = 0;
   static const int _maxHeartbeatFailsBeforeOffline = 2;
+  static const int _minHeartbeatSuccessesBeforeOnline = 2;
 
   // ── Decoupled services ──
   late final AdPlayerService _adPlayer;
   late final AdSyncService _adSync;
+  late final MenuImageCache _imageCache;
   final CartNotifier _cart = CartNotifier();
   final MenuNotifier _menu = MenuNotifier();
+
+  // ── Back-online banner ──
+  bool _backOnlineVisible = false;
+  Timer? _backOnlineTimer;
 
   // ── Timers ──
   Timer? _inactivityTimer;
@@ -80,6 +95,7 @@ class _KioskScreenState extends State<KioskScreen> {
   void initState() {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _tableNumber = widget.tableNumber;
 
     _adPlayer = AdPlayerService(onImpression: _trackAdImpression);
     _adSync = AdSyncService(
@@ -88,6 +104,7 @@ class _KioskScreenState extends State<KioskScreen> {
       adsDirectory: kAdsDirectoryPath,
       onPlaylistUpdated: _onPlaylistUpdated,
     );
+    _imageCache = MenuImageCache(serverHost: widget.serverHost);
 
     // ═══ CRITICAL ANR FIX ═══
     WidgetsBinding.instance.addPostFrameCallback((_) => _deferredBootstrap());
@@ -146,9 +163,13 @@ class _KioskScreenState extends State<KioskScreen> {
             HeartbeatRequest()..deviceId = widget.deviceId,
             options: _callOptions);
         if (_heartbeatFailCount > 0) _heartbeatFailCount = 0;
-        if (!_isOnline) _markOnline();
+        _heartbeatSuccessCount++;
+        if (!_isOnline && _heartbeatSuccessCount >= _minHeartbeatSuccessesBeforeOnline) {
+          _markOnline();
+        }
       } catch (e) {
         _heartbeatFailCount++;
+        _heartbeatSuccessCount = 0;
         debugPrint('gRPC Heartbeat failed ($_heartbeatFailCount): $e');
         if (_heartbeatFailCount >= _maxHeartbeatFailsBeforeOffline) {
           _markOffline();
@@ -160,7 +181,7 @@ class _KioskScreenState extends State<KioskScreen> {
   void _markOnline() {
     if (!_isOnline && mounted) {
       setState(() => _isOnline = true);
-      _showBackOnlinePopup();
+      _showBackOnlineBanner();
     }
   }
 
@@ -170,39 +191,36 @@ class _KioskScreenState extends State<KioskScreen> {
     }
   }
 
-  void _showBackOnlinePopup() {
+  /// Show a non-blocking, auto-dismissing top-right banner instead of a
+  /// modal dialog. Auto-dismisses after 3 seconds, OR instantly on any
+  /// tap anywhere on the screen.
+  void _showBackOnlineBanner() {
     if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: true,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: kCardBg,
-        shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
-        title: const Row(
-          children: [
-            Icon(Icons.cloud_done_rounded, color: Colors.green, size: 28),
-            SizedBox(width: 12),
-            Text('Back Online!',
-                style: TextStyle(fontWeight: FontWeight.bold, color: kTextDark)),
-          ],
-        ),
-        content: const Text(
-          'Connection restored. Ordering and menu are now fully available.',
-          style: TextStyle(color: kTextGrey),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Got it',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
+    setState(() => _backOnlineVisible = true);
+    _backOnlineTimer?.cancel();
+    _backOnlineTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      setState(() => _backOnlineVisible = false);
+    });
+  }
+
+  void _dismissBackOnlineBanner() {
+    if (!_backOnlineVisible) return;
+    _backOnlineTimer?.cancel();
+    setState(() => _backOnlineVisible = false);
   }
 
   Future<void> _fetchMenu() async {
     _menu.setLoading();
+    _adSync.progress.value = const SyncProgress(
+      isActive: true,
+      label: 'Fetching menu...',
+      filesCompleted: 0,
+      filesTotal: 0,
+      bytesDownloaded: 0,
+      bytesTotal: 0,
+      currentFileName: '',
+    );
     try {
       final req = GetMenuRequest()
         ..deviceId = widget.deviceId
@@ -210,57 +228,101 @@ class _KioskScreenState extends State<KioskScreen> {
       final response = await _menuClient!.getMenu(req, options: _callOptions);
       if (mounted) {
         setState(() {
-          _outletName =
-              response.message.isNotEmpty ? response.message : 'Aster & Ice';
+          _outletName = response.message; // server's outlet name; may be empty
           if (_selectedCategory.isEmpty && response.items.isNotEmpty) {
             _selectedCategory = response.items.first.category;
           }
         });
         _menu.setItems(response.items);
+        // Cache menu + outletName to SharedPreferences for offline use
+        await _cacheMenu(response.items, response.message);
       }
+      // Prime the image cache in the background — UI stays responsive.
+      // The download_progress_indicator widget (if mounted) will show this.
+      unawaited(_imageCache.primeFromMenu(response.items));
     } catch (e) {
+      debugPrint('Menu fetch failed: $e');
       if (mounted) {
         _menu.setError();
-        _loadMockFallbackMenu();
+        // Load cached menu instead of mock data
+        await _loadCachedMenu();
       }
+    } finally {
+      _adSync.progress.value = const SyncProgress.idle();
     }
   }
 
-  void _loadMockFallbackMenu() {
-    final mockItems = [
-      MenuItem()
-        ..itemId = 'item_fallback_1'
-        ..name = 'Pepperoni Pizza Grande'
-        ..description = 'Extra cheese, fresh basil on a wood-fired crust'
-        ..price = Int64(44900)
-        ..category = 'Main Course'
-        ..isAvailable = true,
-      MenuItem()
-        ..itemId = 'item_fallback_2'
-        ..name = 'Crispy French Fries'
-        ..description = 'With parmesan & garlic rosemary mayo dip'
-        ..price = Int64(22900)
-        ..category = 'Starters'
-        ..isAvailable = true,
-      MenuItem()
-        ..itemId = 'item_fallback_3'
-        ..name = 'Cheeseburger Deluxe'
-        ..description = 'Flame grilled double beef patty, brioche bun'
-        ..price = Int64(29900)
-        ..category = 'Main Course'
-        ..isAvailable = true,
-      MenuItem()
-        ..itemId = 'item_fallback_4'
-        ..name = 'Iced Hazelnut Latte'
-        ..description = 'Double fresh espresso shot, cold micro foam'
-        ..price = Int64(17900)
-        ..category = 'Beverages'
-        ..isAvailable = true,
-    ];
-    setState(() {
-      if (_selectedCategory.isEmpty) _selectedCategory = 'Starters';
-    });
-    _menu.setItems(mockItems);
+  Future<void> _cacheMenu(List<MenuItem> items, String outletName) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final menuJson = {
+        'outletName': outletName,
+        'items': items.map((item) => {
+          'itemId': item.itemId,
+          'name': item.name,
+          'description': item.description,
+          'price': item.price.toInt(),
+          'category': item.category,
+          'imageUrl': item.imageUrl,
+          'isAvailable': item.isAvailable,
+        }).toList(),
+      };
+      await prefs.setString('cachedMenu', jsonEncode(menuJson));
+    } catch (e) {
+      debugPrint('Failed to cache menu: $e');
+    }
+  }
+
+  Future<void> _loadCachedMenu() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedMenuJson = prefs.getString('cachedMenu');
+      if (cachedMenuJson == null || cachedMenuJson.isEmpty) return;
+
+      final dynamic decoded = jsonDecode(cachedMenuJson);
+      // Support both new shape ({outletName, items}) and the old shape
+      // (bare list) for backwards compatibility with previously installed
+      // devices.
+      List<dynamic> menuData;
+      String? cachedOutletName;
+      if (decoded is Map<String, dynamic>) {
+        cachedOutletName = decoded['outletName'] as String?;
+        menuData = decoded['items'] as List<dynamic>? ?? const [];
+      } else if (decoded is List) {
+        menuData = decoded;
+      } else {
+        return;
+      }
+
+      final items = menuData.map((data) {
+        return MenuItem()
+          ..itemId = data['itemId'] as String
+          ..name = data['name'] as String
+          ..description = data['description'] as String? ?? ''
+          ..price = Int64(data['price'] as int)
+          ..category = data['category'] as String
+          ..imageUrl = data['imageUrl'] as String? ?? ''
+          ..isAvailable = data['isAvailable'] as bool? ?? true;
+      }).toList();
+
+      if (items.isEmpty) return;
+      _menu.setItems(items);
+      if (mounted) {
+        setState(() {
+          // Only adopt the cached outletName if we don't already have a
+          // fresh one from the server response this session.
+          if (_outletName.isEmpty && cachedOutletName != null) {
+            _outletName = cachedOutletName;
+          }
+          if (_selectedCategory.isEmpty) {
+            _selectedCategory = items.first.category;
+          }
+        });
+      }
+      debugPrint('Loaded ${items.length} items from cache');
+    } catch (e) {
+      debugPrint('Failed to load cached menu: $e');
+    }
   }
 
   // ────────────────── Ad lifecycle ──────────────────
@@ -376,6 +438,7 @@ class _KioskScreenState extends State<KioskScreen> {
         orderClient: _orderClient!,
         callOptions: _callOptions!,
         deviceId: widget.deviceId,
+        tableNumber: _tableNumber,
         menuItems: menuItems,
         cart: snapshot.toMap(),
         totalAmountPaise: (snapshot.totalPrice(menuItems) * 100).toInt(),
@@ -389,7 +452,7 @@ class _KioskScreenState extends State<KioskScreen> {
           _cancelIdleTimer();
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text("Payment Completed! Order sent to kitchen."),
+              content: Text("Order placed successfully! Sent to kitchen."),
               backgroundColor: Colors.green,
             ),
           );
@@ -404,28 +467,40 @@ class _KioskScreenState extends State<KioskScreen> {
     _passwordController.clear();
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
         title: const Text("Enter Exit Password"),
         content: TextField(
           controller: _passwordController,
           obscureText: true,
+          autofocus: true,
           decoration: const InputDecoration(hintText: "Enter password to exit kiosk"),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogCtx),
             child: const Text("Cancel"),
           ),
           ElevatedButton(
             onPressed: () {
               if (_passwordController.text == widget.bypassPassword) {
-                Navigator.pop(context);
-                widget.onReset();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Kiosk mode unlocked successfully")),
+                Navigator.pop(dialogCtx); // close the dialog
+                final kioskCtx = context;
+                Navigator.of(kioskCtx).push(
+                  MaterialPageRoute<void>(
+                    builder: (settingsCtx) => SettingsScreen(
+                      serverHost: widget.serverHost,
+                      deviceId: widget.deviceId,
+                      token: widget.token,
+                      hostApplicationId: widget.hostApplicationId,
+                      bypassPassword: widget.bypassPassword,
+                      tableNumber: _tableNumber,
+                      onBackToKiosk: () => Navigator.of(settingsCtx).pop(),
+                    ),
+                  ),
                 );
               } else {
-                ScaffoldMessenger.of(context).showSnackBar(
+                ScaffoldMessenger.of(dialogCtx).showSnackBar(
                   const SnackBar(content: Text("Incorrect password")),
                 );
               }
@@ -443,9 +518,11 @@ class _KioskScreenState extends State<KioskScreen> {
   void dispose() {
     _heartbeatTimer?.cancel();
     _inactivityTimer?.cancel();
+    _backOnlineTimer?.cancel();
     _passwordController.dispose();
     _adPlayer.dispose();
     _adSync.dispose();
+    _imageCache.dispose();
     _cart.dispose();
     _menu.dispose();
     _channel?.shutdown();
@@ -493,6 +570,8 @@ class _KioskScreenState extends State<KioskScreen> {
                 ],
               ),
             ),
+            // Show download progress during initial sync
+            DownloadProgressIndicator(progress: _adSync.progress),
           ],
         ),
       );
@@ -500,9 +579,12 @@ class _KioskScreenState extends State<KioskScreen> {
 
     if (_isIdle) {
       return Scaffold(
-        body: GestureDetector(
+        body: Listener(
           behavior: HitTestBehavior.opaque,
-          onTap: _enterMenuMode,
+          onPointerDown: (_) {
+            _dismissBackOnlineBanner();
+            _enterMenuMode();
+          },
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -521,6 +603,10 @@ class _KioskScreenState extends State<KioskScreen> {
                   tooltip: "Exit Kiosk",
                 ),
               ),
+              // Show download progress during background sync
+              DownloadProgressIndicator(progress: _adSync.progress),
+              // Non-blocking back-online banner (auto-dismisses in 3s, tap anywhere)
+              if (_backOnlineVisible) _buildBackOnlineBanner(),
             ],
           ),
         ),
@@ -528,23 +614,77 @@ class _KioskScreenState extends State<KioskScreen> {
     }
 
     return Listener(
-      onPointerDown: (_) => _resetIdleTimer(),
+      onPointerDown: (_) {
+        if (_backOnlineVisible) _dismissBackOnlineBanner();
+        _resetIdleTimer();
+      },
       child: Scaffold(
         backgroundColor: kScaffoldBg,
         body: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          child: Stack(
             children: [
-              if (!_isOnline) _buildOfflineBanner(),
-              _buildHeader(),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 24),
-                child: Divider(color: kDividerColor, height: 1),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (!_isOnline) _buildOfflineBanner(),
+                  _buildHeader(),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24),
+                    child: Divider(color: kDividerColor, height: 1),
+                  ),
+                  Expanded(
+                    child: _showCart ? _buildCartBody() : _buildMenuBody(),
+                  ),
+                ],
               ),
-              Expanded(
-                child: _showCart ? _buildCartBody() : _buildMenuBody(),
-              ),
+              // Show download progress during background sync
+              DownloadProgressIndicator(progress: _adSync.progress),
+              // Non-blocking back-online banner (auto-dismisses in 3s, tap anywhere)
+              if (_backOnlineVisible) _buildBackOnlineBanner(),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBackOnlineBanner() {
+    return Positioned(
+      top: 16,
+      right: 16,
+      child: Material(
+        color: Colors.transparent,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 250),
+          child: Container(
+            key: const ValueKey('back-online-banner'),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.green.shade600,
+              borderRadius: BorderRadius.circular(24),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.2),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cloud_done_rounded, color: Colors.white, size: 18),
+                SizedBox(width: 8),
+                Text(
+                  'Back Online',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -586,6 +726,7 @@ class _KioskScreenState extends State<KioskScreen> {
               showHeader: false,
               onPlaceOrder: _isOnline ? _placeOrder : () {},
               serverHost: widget.serverHost,
+              imageCache: _imageCache,
             ),
           ),
           if (!_isOnline)
@@ -633,6 +774,7 @@ class _KioskScreenState extends State<KioskScreen> {
                 serverHost: widget.serverHost,
                 viewportHeight: MediaQuery.of(context).size.height,
                 selectedCategory: _selectedCategory,
+                imageCache: _imageCache,
               ),
             ),
           ],
@@ -825,77 +967,77 @@ class _KioskScreenState extends State<KioskScreen> {
           bottom: 24,
           left: 144,
           right: 24,
-          child: Container(
-            height: 72,
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: kFloatingCartBorderRadius,
-              boxShadow: [
-                BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, 4)),
-              ],
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
+          child: GestureDetector(
+            onTap: _isOnline ? () => setState(() => _showCart = true) : null,
+            child: Container(
+              height: 72,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: kFloatingCartBorderRadius,
+                boxShadow: [
+                  BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, 4)),
+                ],
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        decoration: const BoxDecoration(color: kAccentBlue, shape: BoxShape.circle),
+                        padding: const EdgeInsets.all(10),
+                        child: Badge(
+                          isLabelVisible: cart.isNotEmpty,
+                          label: Text('${cart.totalItemCount}', style: const TextStyle(color: Colors.white)),
+                          child: const Icon(Icons.shopping_cart_outlined, color: Colors.white, size: 20),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text("${cart.totalItemCount} items in cart",
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: kTextDark)),
+                          Text("Total value: Rs. ${cart.totalPrice(_menu.value.items).toStringAsFixed(2)}",
+                              style: const TextStyle(fontSize: 12, color: kTextGrey)),
+                        ],
+                      ),
+                    ],
+                  ),
+                  if (_isOnline)
                     Container(
-                      decoration: const BoxDecoration(color: kAccentBlue, shape: BoxShape.circle),
-                      padding: const EdgeInsets.all(10),
-                      child: Badge(
-                        isLabelVisible: cart.isNotEmpty,
-                        label: Text('${cart.totalItemCount}', style: const TextStyle(color: Colors.white)),
-                        child: const Icon(Icons.shopping_cart_outlined, color: Colors.white, size: 20),
+                      decoration: BoxDecoration(
+                        color: kAccentBlue,
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      child: const Row(
+                        children: [
+                          Text("View Cart", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white)),
+                          SizedBox(width: 8),
+                          Icon(Icons.arrow_forward_rounded, size: 16, color: Colors.white),
+                        ],
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.cloud_off_rounded, size: 16, color: Colors.grey),
+                          SizedBox(width: 6),
+                          Text('Offline', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 16),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text("${cart.totalItemCount} items in cart",
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: kTextDark)),
-                        Text("Total value: Rs. ${cart.totalPrice(_menu.value.items).toStringAsFixed(2)}",
-                            style: const TextStyle(fontSize: 12, color: kTextGrey)),
-                      ],
-                    ),
-                  ],
-                ),
-                if (_isOnline)
-                  ElevatedButton(
-                    onPressed: () => setState(() => _showCart = true),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: kAccentBlue,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                      elevation: 2,
-                    ),
-                    child: const Row(
-                      children: [
-                        Text("View Cart", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                        SizedBox(width: 8),
-                        Icon(Icons.arrow_forward_rounded, size: 16),
-                      ],
-                    ),
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.cloud_off_rounded, size: 16, color: Colors.grey),
-                        SizedBox(width: 6),
-                        Text('Offline', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.grey)),
-                      ],
-                    ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         );

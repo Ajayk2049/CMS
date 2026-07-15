@@ -130,11 +130,11 @@ export default function LandingPage() {
               transition={{ duration: 0.5 }}
               className="flex items-center space-x-2"
             >
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
+              <div className="w-7 h-7 rounded-lg bg-[#0069a8] flex items-center justify-center shadow-md shadow-[#0069a8]/20 shrink-0">
                 <Tv className="w-3.5 h-3.5 text-white" />
               </div>
               <span className="font-outfit text-lg font-bold tracking-tight text-foreground leading-none brandLogo">
-                Digi<span className="text-blue-500">Ads</span>
+                Digi<span className="text-[#0069a8]">Ads</span>
               </span>
             </motion.div>
 
@@ -165,8 +165,8 @@ export default function LandingPage() {
       {/* Hero Section */}
       <section className="relative pt-36 pb-24 px-6 overflow-hidden">
         {/* Decorative Gradients */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-blue-600/5 dark:bg-blue-600/10 rounded-full blur-[120px] pointer-events-none" />
-        <div className="absolute top-1/3 left-1/3 w-[350px] h-[350px] bg-indigo-600/10 dark:bg-indigo-600/15 rounded-full blur-[100px] pointer-events-none" />
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-[#0069a8]/5 dark:bg-[#0069a8]/10 rounded-full blur-[120px] pointer-events-none" />
+        <div className="absolute top-1/3 left-1/3 w-[350px] h-[350px] bg-[#0069a8]/10 dark:bg-[#0069a8]/15 rounded-full blur-[100px] pointer-events-none" />
 
         <motion.div
           initial="hidden"
@@ -179,7 +179,7 @@ export default function LandingPage() {
             className="font-outfit text-5xl md:text-7xl font-extrabold tracking-tight text-foreground mb-6 leading-tight"
           >
             Transform Tables Into <br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-500 dark:from-blue-400 dark:via-indigo-400 dark:to-cyan-400">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#0069a8] via-[#005182] to-[#0089d7]">
               Interactive Ad Channels
             </span>
           </motion.h1>
@@ -188,7 +188,7 @@ export default function LandingPage() {
             variants={fadeInUp}
             className="max-w-2xl mx-auto text-lg text-muted-foreground mb-10 leading-relaxed"
           >
-            DigiAds helps merchants earn device rental revenue by hosting smart tabletop kiosks, while advertisers book high-ROI campaigns directly inside local target venues.
+            DigiAds enables venues to digitize, manage, and stream interactive food catalogs directly on tabletop kiosks, while providing advertisers with a high-ROI targeted ad delivery network.
           </motion.p>
 
           <motion.div
@@ -315,7 +315,7 @@ export default function LandingPage() {
                     transition={{ duration: 0.3 }}
                     className="space-y-6"
                   >
-                    <span className="text-xs font-bold text-blue-500 uppercase tracking-widest bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
+                    <span className="text-xs font-bold text-[#0069a8] uppercase tracking-widest bg-[#0069a8]/10 px-3 py-1 rounded-full border border-[#0069a8]/20">
                       Tabletop Device
                     </span>
                     <h3 className="font-outfit text-3xl font-bold text-foreground">
@@ -332,7 +332,7 @@ export default function LandingPage() {
                         "Timing-safe secure checkouts with PhonePe integration"
                       ].map((item, i) => (
                         <li key={i} className="flex items-start text-xs font-medium text-muted-foreground">
-                          <CheckCircle2 className="w-4.5 h-4.5 text-blue-500 mr-2.5 shrink-0" />
+                          <CheckCircle2 className="w-4.5 h-4.5 text-[#0069a8] mr-2.5 shrink-0" />
                           <span>{item}</span>
                         </li>
                       ))}
@@ -506,12 +506,12 @@ export default function LandingPage() {
               transition={{ duration: 0.6 }}
               className="md:col-span-5 flex justify-center"
             >
-              <div className="relative group p-8 bg-background/50 dark:bg-card/30 backdrop-blur-md rounded-3xl border border-border/80 shadow-2xl hover:border-blue-500/30 transition-all duration-500 max-w-[320px] w-full aspect-square flex items-center justify-center">
-                <div className="absolute inset-0 bg-gradient-to-tr from-blue-500/10 to-indigo-500/10 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+              <div className="relative group p-8 bg-background/50 dark:bg-card/30 backdrop-blur-md rounded-3xl border border-border/80 shadow-2xl hover:border-[#0069a8]/30 transition-all duration-500 max-w-[320px] w-full aspect-square flex items-center justify-center">
+                <div className="absolute inset-0 bg-[#0069a8]/5 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
                 <img
                   src={imgAibotLogo.src}
                   alt="Aibot Ink Logo"
-                  className="w-full h-full object-contain max-h-[160px] filter drop-shadow-[0_8px_24px_rgba(59,130,246,0.15)] group-hover:scale-105 transition-transform duration-500 select-none"
+                  className="w-full h-full object-contain max-h-[160px] filter drop-shadow-[0_8px_24px_rgba(0,105,168,0.15)] group-hover:scale-105 transition-transform duration-500 select-none"
                 />
               </div>
             </motion.div>
@@ -525,12 +525,12 @@ export default function LandingPage() {
               className="md:col-span-7 space-y-6 text-left"
             >
               <div className="space-y-2">
-                <span className="text-xs font-bold text-blue-500 uppercase tracking-widest bg-blue-500/10 px-3 py-1 rounded-full border border-blue-500/20">
+                <span className="text-xs font-bold text-[#0069a8] uppercase tracking-widest bg-[#0069a8]/10 px-3 py-1 rounded-full border border-[#0069a8]/20">
                   About Us
                 </span>
                 <h2 className="font-outfit text-3xl md:text-4xl font-extrabold tracking-tight text-foreground leading-tight">
                   Driving Innovation <br />
-                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-indigo-500">
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#0069a8] to-[#005182]">
                     To Serve Society
                   </span>
                 </h2>
@@ -552,7 +552,7 @@ export default function LandingPage() {
       <footer className="border-t border-border bg-card py-12 px-6">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-sm text-muted-foreground">
           <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20">
+            <div className="w-8 h-8 rounded-lg bg-[#0069a8] flex items-center justify-center shadow-md shadow-[#0069a8]/20">
               <Tv className="w-4 h-4 text-white" />
             </div>
             <span className="font-outfit font-bold text-foreground brandLogo">DigiAds</span>

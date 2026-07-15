@@ -5,6 +5,7 @@ import axios from 'axios';
 import { useRouter } from 'next/navigation';
 import {
   Building,
+  Form,
   UtensilsCrossed,
   Send,
   Plus,
@@ -19,11 +20,23 @@ import {
   Megaphone,
   RefreshCw,
   X,
-  Pencil
+  Pencil,
+  ChevronDown,
+  ChevronUp,
+  Settings,
+  MonitorSmartphone,
+  Salad
 } from 'lucide-react';
 import { config } from '@/config';
 
 const API_BASE = config.apiUrl;
+
+const resolveMediaUrl = (url) => {
+  if (!url) return '';
+  if (url.startsWith('http')) return url;
+  const base = API_BASE.split('/api/v1')[0];
+  return `${base}${url}`;
+};
 
 const INDIAN_STATES = [
   "Andaman and Nicobar Islands",
@@ -131,6 +144,19 @@ export default function MerchantDashboard() {
   const [zipError, setZipError] = useState('');
   const [roleActionLoading, setRoleActionLoading] = useState(false);
   const [showBecomeAdvertiserModal, setShowBecomeAdvertiserModal] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [deviceFilterType, setDeviceFilterType] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('deviceFilterType') || 'tablet';
+    }
+    return 'tablet';
+  });
+  const [deviceFilterVenue, setDeviceFilterVenue] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('deviceFilterVenue') || '';
+    }
+    return '';
+  });
 
   // Applications tab states
   const [applications, setApplications] = useState([]);
@@ -153,8 +179,13 @@ export default function MerchantDashboard() {
 
   // Menu tab states
   const [menuItems, setMenuItems] = useState([]);
-  const [selectedOutletId, setSelectedOutletId] = useState('');
-  const approvedOutlets = applications.filter(app => app.status === 'approved' && app.deviceType === 'tablet');
+  const [selectedOutletId, setSelectedOutletId] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('selectedOutletId') || '';
+    }
+    return '';
+  });
+  const approvedOutlets = applications.filter(app => app.status === 'approved' && app.requestTablet);
   const [devices, setDevices] = useState([]);
 
   // Menu Modal and editing states
@@ -171,8 +202,19 @@ export default function MerchantDashboard() {
   const [zoomFactor, setZoomFactor] = useState(100);
   const [imageTab, setImageTab] = useState('upload');
   const fileInputRef = useRef(null);
+  const userMenuRef = useRef(null);
 
-  const MENU_CATEGORIES = ['Starters', 'Main Course', 'Dessert', 'Beverages'];
+  const [menuCategories, setMenuCategories] = useState(['Starters', 'Main Course', 'Dessert', 'Beverages']);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [activeOrderVenueTab, setActiveOrderVenueTab] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('activeOrderVenueTab') || '';
+    }
+    return '';
+  });
+  const [unreadOrderVenues, setUnreadOrderVenues] = useState(new Set());
+  const activeOrderVenueTabRef = useRef(activeOrderVenueTab);
 
   const getCategoryDotColor = (category) => {
     const cat = category.toLowerCase();
@@ -208,6 +250,50 @@ export default function MerchantDashboard() {
     }
     localStorage.setItem('theme', nextTheme);
   };
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('deviceFilterType', deviceFilterType);
+    }
+  }, [deviceFilterType]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('deviceFilterVenue', deviceFilterVenue);
+    }
+  }, [deviceFilterVenue]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('selectedOutletId', selectedOutletId);
+    }
+  }, [selectedOutletId]);
+
+  useEffect(() => {
+    activeOrderVenueTabRef.current = activeOrderVenueTab;
+  }, [activeOrderVenueTab]);
+
+  useEffect(() => {
+    if (approvedOutlets.length > 0 && !activeOrderVenueTab) {
+      setActiveOrderVenueTab(approvedOutlets[0]._id);
+    }
+  }, [approvedOutlets, activeOrderVenueTab]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('activeOrderVenueTab', activeOrderVenueTab);
+    }
+  }, [activeOrderVenueTab]);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (userMenuOpen && userMenuRef.current && !userMenuRef.current.contains(e.target)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [userMenuOpen]);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('token');
@@ -314,6 +400,7 @@ export default function MerchantDashboard() {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       setMenuItems(res.data.data.items || []);
+      setMenuCategories(res.data.data.categories || ['Starters', 'Main Course', 'Dessert', 'Beverages']);
     } catch (err) {
       console.error(err);
       setMenuItems([]);
@@ -335,8 +422,16 @@ export default function MerchantDashboard() {
       ws.onmessage = (event) => {
         const payload = JSON.parse(event.data);
         if (payload.event === 'new_order') {
-          setOrders(prev => [payload.data, ...prev]);
-          alert(`New Order placed at Table ${payload.data.tableNumber}!`);
+          const newOrder = payload.data;
+          setOrders(prev => [newOrder, ...prev]);
+          alert(`New Order placed at Table ${newOrder.tableNumber}!`);
+          if (newOrder.hostApplicationId && newOrder.hostApplicationId !== activeOrderVenueTabRef.current) {
+            setUnreadOrderVenues(prev => {
+              const next = new Set(prev);
+              next.add(newOrder.hostApplicationId);
+              return next;
+            });
+          }
         }
       };
 
@@ -434,50 +529,27 @@ export default function MerchantDashboard() {
 
     setLoading(true);
     try {
-      const promises = [];
+      const payload = {
+        outletName: form.outletName,
+        outletDescription: form.outletDescription,
+        doorNo: form.doorNo,
+        street: form.street,
+        city: form.city,
+        state: form.state,
+        zipCode: form.zipCode,
+        contactPerson: form.contactPerson,
+        phone: form.phone,
+        email: form.email,
+        requestTablet: !!form.requestTablet,
+        tabletQuantity: form.requestTablet ? parseInt(form.tabletQuantity, 10) : 0,
+        requestScreen: !!form.requestScreen,
+        screenQuantity: form.requestScreen ? parseInt(form.screenQuantity, 10) : 0
+      };
 
-      if (form.requestTablet) {
-        const payload = {
-          outletName: form.outletName,
-          outletDescription: form.outletDescription,
-          doorNo: form.doorNo,
-          street: form.street,
-          city: form.city,
-          state: form.state,
-          zipCode: form.zipCode,
-          contactPerson: form.contactPerson,
-          phone: form.phone,
-          email: form.email,
-          deviceType: 'tablet',
-          quantity: parseInt(form.tabletQuantity, 10)
-        };
-        promises.push(axios.post(`${API_BASE}/host/apply`, payload, {
-          headers: { Authorization: `Bearer ${token}` }
-        }));
-      }
-
-      if (form.requestScreen) {
-        const payload = {
-          outletName: form.outletName,
-          outletDescription: form.outletDescription,
-          doorNo: form.doorNo,
-          street: form.street,
-          city: form.city,
-          state: form.state,
-          zipCode: form.zipCode,
-          contactPerson: form.contactPerson,
-          phone: form.phone,
-          email: form.email,
-          deviceType: 'screen',
-          quantity: parseInt(form.screenQuantity, 10)
-        };
-        promises.push(axios.post(`${API_BASE}/host/apply`, payload, {
-          headers: { Authorization: `Bearer ${token}` }
-        }));
-      }
-
-      await Promise.all(promises);
-      setInfo('Host applications submitted successfully! Pending admin approval.');
+      await axios.post(`${API_BASE}/host/apply`, payload, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setInfo('Host application submitted successfully! Pending admin approval.');
       fetchApplications(token);
       fetchDevices(token);
 
@@ -518,13 +590,36 @@ export default function MerchantDashboard() {
     try {
       await axios.post(`${API_BASE}/host/menu`, {
         hostApplicationId: selectedOutletId,
-        items: menuItems
+        items: menuItems,
+        categories: menuCategories
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setInfo('Menu saved successfully!');
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to save menu.');
+    }
+  };
+
+  const handleSaveCategories = async (updatedCategories) => {
+    setError('');
+    setInfo('');
+    if (!selectedOutletId) {
+      setError('Please select an approved outlet first.');
+      return;
+    }
+    try {
+      await axios.post(`${API_BASE}/host/menu`, {
+        hostApplicationId: selectedOutletId,
+        items: menuItems,
+        categories: updatedCategories
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setMenuCategories(updatedCategories);
+      setInfo('Menu categories updated successfully!');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to save menu categories.');
     }
   };
 
@@ -749,8 +844,8 @@ export default function MerchantDashboard() {
       {/* Top Header Navbar - Universal styled shadcn preset */}
       <header className="border-b border-border/40 bg-card px-5 sm:px-6 py-3.5 flex items-center justify-between shadow-sm sticky top-0 z-30">
         <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
-            <Tv className="w-5 h-5 text-white" />
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
+            <Tv className="w-5 h-5 text-white " />
           </div>
           <span className="font-outfit text-md font-bold text-foreground brandLogo">Merchant Portal</span>
         </div>
@@ -763,8 +858,18 @@ export default function MerchantDashboard() {
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
               }`}
           >
-            <Building className="w-3.5 h-3.5" />
+            <Form className={`w-4 h-4  ${activeTab === 'applications' ? 'text-primary-foreground' : 'text-primary'}`} />
             <span className="hidden sm:inline">Host Applications</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('devices')}
+            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'devices'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              }`}
+          >
+            <MonitorSmartphone className={`w-4 h-4  ${activeTab === 'devices' ? 'text-primary-foreground' : 'text-primary'}`} />
+            <span className="hidden sm:inline">Devices</span>
           </button>
           <button
             onClick={() => setActiveTab('menu')}
@@ -773,7 +878,7 @@ export default function MerchantDashboard() {
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
               }`}
           >
-            <UtensilsCrossed className="w-3.5 h-3.5" />
+            <UtensilsCrossed className={`w-4 h-4  ${activeTab === 'menu' ? 'text-primary-foreground' : 'text-primary'}`} />
             <span className="hidden sm:inline">Menu Manager</span>
           </button>
           <button
@@ -783,7 +888,7 @@ export default function MerchantDashboard() {
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
               }`}
           >
-            <Clock className="w-3.5 h-3.5" />
+            <Salad className={`w-4 h-4 ${activeTab === 'orders' ? 'text-primary-foreground' : 'text-primary'}`} />
             <span className="hidden sm:inline">Live Orders</span>
             {orders.length > 0 && (
               <span className="absolute -top-0.5 -right-0.5 bg-destructive text-destructive-foreground text-[8px] px-1.5 py-0.5 rounded-full font-bold">
@@ -794,11 +899,6 @@ export default function MerchantDashboard() {
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
-          <div className="hidden lg:block text-right pr-2">
-            <p className="text-[10px] text-muted-foreground font-semibold leading-none">Logged in as</p>
-            <p className="text-xs font-bold text-foreground mt-1">{name || phone}</p>
-          </div>
-
           {/* Role Actions */}
           {roles.includes('advertiser') ? (
             <button
@@ -806,7 +906,7 @@ export default function MerchantDashboard() {
               disabled={roleActionLoading}
               className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 hover:border-indigo-500 text-indigo-400 hover:text-indigo-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${roleActionLoading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${roleActionLoading ? 'animate-spin' : ''}`} />
               <span className="hidden md:inline">Switch to Advertiser</span>
             </button>
           ) : (
@@ -815,7 +915,7 @@ export default function MerchantDashboard() {
               disabled={roleActionLoading}
               className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border border-blue-500/30 hover:border-blue-500 text-blue-400 hover:text-blue-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
             >
-              <Megaphone className="w-3.5 h-3.5" />
+              <Megaphone className="w-4 h-4 " />
               <span className="hidden md:inline">Become Advertiser</span>
             </button>
           )}
@@ -825,16 +925,57 @@ export default function MerchantDashboard() {
             className="p-2 bg-card hover:bg-muted border border-border rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer flex items-center justify-center shadow-sm"
             aria-label="Toggle theme"
           >
-            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-500" />}
+            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500 " /> : <Moon className="w-4 h-4 text-indigo-500 " />}
           </button>
 
-          <button
-            onClick={handleLogout}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-card hover:bg-muted border border-border text-muted-foreground hover:text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Sign Out</span>
-          </button>
+          {/* User profile dropdown on the rightmost side */}
+          <div className="relative" ref={userMenuRef}>
+            <button
+              onClick={() => setUserMenuOpen(!userMenuOpen)}
+              className="flex items-center space-x-2 px-3 py-1.5 bg-card hover:bg-muted border border-border rounded-xl transition-all cursor-pointer shadow-sm select-none"
+            >
+              <div className="w-6 h-6 rounded-full bg-amber-500 flex items-center justify-center text-white text-[10px] font-black">
+                {(name || phone || 'U')[0].toUpperCase()}
+              </div>
+              <span className="text-xs font-bold text-foreground max-w-[120px] truncate">{name || phone}</span>
+              {userMenuOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+            </button>
+
+            {userMenuOpen && (
+              <div className="absolute right-0 mt-2 w-52 rounded-xl bg-card border border-border/40 shadow-lg py-1.5 z-40 animate-fade-in text-xs font-semibold">
+                <div className="px-3 py-2 border-b border-border/40">
+                  <p className="text-[10px] text-muted-foreground leading-none">Logged in as</p>
+                  <p className="text-xs font-bold text-foreground mt-1 truncate">{name || phone}</p>
+                </div>
+
+                <div className="p-1.5 space-y-1 border-b border-border/40">
+                  <button
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      setActiveTab('my-applications');
+                    }}
+                    className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                  >
+                    <Form className="w-4 h-4 text-[#0069a8]" />
+                    <span>Your Applications</span>
+                  </button>
+                </div>
+
+                <div className="p-1.5">
+                  <button
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      handleLogout();
+                    }}
+                    className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-destructive font-bold"
+                  >
+                    <LogOut className="w-4 h-4 " />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -854,257 +995,398 @@ export default function MerchantDashboard() {
 
         {/* 1. Host Applications Tab */}
         {activeTab === 'applications' && (
-          <div className="animate-fade-in">
+          <div className="animate-fade-in max-w-3xl mx-auto">
             <h1 className="font-outfit text-2xl font-black text-foreground mb-2">Host Applications</h1>
             <p className="text-muted-foreground text-xs font-semibold mb-8">Submit forms to host new tablet or screen devices at your restaurant.</p>
 
-            <div className="grid lg:grid-cols-3 gap-8">
-              {/* Submission Form */}
-              <div className="lg:col-span-2 p-6 rounded-2xl bg-card/10 border border-border/40">
-                <h3 className="font-outfit text-md font-bold text-foreground mb-6">Device Application Form</h3>
-                <form onSubmit={handleHostApply} className="space-y-4">
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Outlet Name"
-                        value={form.outletName}
-                        onChange={(e) => setForm({ ...form, outletName: e.target.value })}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                      />
-                    </div>
-                    <div>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Contact Person Name"
-                        value={form.contactPerson}
-                        onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                      />
-                    </div>
-                  </div>
-
+            {/* Submission Form */}
+            <div className="p-6 rounded-2xl bg-card border border-[#0069a8]/80 shadow-[0_0_20px_rgba(0,105,168,0.3)] dark:shadow-[0_0_35px_rgba(0,105,168,0.55)]">
+              <h3 className="font-outfit text-md font-bold text-foreground mb-6">Device Application Form</h3>
+              <form onSubmit={handleHostApply} className="space-y-4">
+                <div className="grid md:grid-cols-2 gap-4">
                   <div>
-                    <textarea
+                    <input
+                      type="text"
                       required
-                      placeholder="Outlet Description"
-                      value={form.outletDescription}
-                      onChange={(e) => setForm({ ...form, outletDescription: e.target.value })}
-                      className="w-full h-24 bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                      placeholder="Outlet Name"
+                      value={form.outletName}
+                      onChange={(e) => setForm({ ...form, outletName: e.target.value })}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
                     />
                   </div>
-
-                  <div className="grid md:grid-cols-3 gap-4">
-                    <div>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Door / Shop No"
-                        value={form.doorNo}
-                        onChange={(e) => setForm({ ...form, doorNo: e.target.value })}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                      />
-                    </div>
-                    <div className="md:col-span-2">
-                      <input
-                        type="text"
-                        required
-                        placeholder="Street / Location"
-                        value={form.street}
-                        onChange={(e) => setForm({ ...form, street: e.target.value })}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                      />
-                    </div>
+                  <div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Contact Person Name"
+                      value={form.contactPerson}
+                      onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
                   </div>
+                </div>
 
-                  <div className="grid md:grid-cols-3 gap-4">
-                    <div>
-                      <input
-                        type="text"
-                        required
-                        placeholder="ZIP Code"
-                        value={form.zipCode}
-                        onChange={(e) => handleZipCodeChange(e.target.value)}
-                        className={`w-full bg-background border ${zipError ? 'border-destructive focus:ring-destructive' : 'border-input focus:ring-primary'} rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:border-transparent transition-all`}
-                      />
-                      {zipError && (
-                        <p className="text-[10px] text-destructive font-semibold mt-1.5 ml-1">{zipError}</p>
-                      )}
-                    </div>
-                    <div>
-                      <input
-                        type="text"
-                        required
-                        placeholder="City"
-                        value={form.city}
-                        onChange={(e) => setForm({ ...form, city: e.target.value })}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                      />
-                    </div>
-                    <div>
-                      <select
-                        required
-                        value={form.state}
-                        onChange={(e) => setForm({ ...form, state: e.target.value })}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all cursor-pointer"
-                      >
-                        <option value="" disabled>Select State</option>
-                        {INDIAN_STATES.map((state) => (
-                          <option key={state} value={state} className="bg-background text-foreground">
-                            {state}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                <div>
+                  <textarea
+                    required
+                    placeholder="Outlet Description"
+                    value={form.outletDescription}
+                    onChange={(e) => setForm({ ...form, outletDescription: e.target.value })}
+                    className="w-full h-24 bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                </div>
+
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Door / Shop No"
+                      value={form.doorNo}
+                      onChange={(e) => setForm({ ...form, doorNo: e.target.value })}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
                   </div>
+                  <div className="md:col-span-2">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Street / Location"
+                      value={form.street}
+                      onChange={(e) => setForm({ ...form, street: e.target.value })}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="ZIP Code"
+                      value={form.zipCode}
+                      onChange={(e) => handleZipCodeChange(e.target.value)}
+                      className={`w-full bg-background border ${zipError ? 'border-destructive focus:ring-destructive' : 'border-input focus:ring-primary'} rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:border-transparent transition-all`}
+                    />
+                    {zipError && (
+                      <p className="text-[10px] text-destructive font-semibold mt-1.5 ml-1">{zipError}</p>
+                    )}
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="City"
+                      value={form.city}
+                      onChange={(e) => setForm({ ...form, city: e.target.value })}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                  </div>
+                  <div>
+                    <select
+                      required
+                      value={form.state}
+                      onChange={(e) => setForm({ ...form, state: e.target.value })}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all cursor-pointer"
+                    >
+                      <option value="" disabled>Select State</option>
+                      {INDIAN_STATES.map((state) => (
+                        <option key={state} value={state} className="bg-background text-foreground">
+                          {state}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <input
+                      type="tel"
+                      required
+                      placeholder="Phone"
+                      value={form.phone}
+                      onChange={(e) => handlePhoneChange(e.target.value)}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                  </div>
+                  <div>
+                    <input
+                      type="email"
+                      required
+                      placeholder="Email Address"
+                      value={form.email}
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Multi-Device selection space */}
+                <div className="space-y-3 border-t border-border/60 pt-4">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Select Devices to Host</span>
 
                   <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <input
-                        type="tel"
-                        required
-                        placeholder="Phone"
-                        value={form.phone}
-                        onChange={(e) => handlePhoneChange(e.target.value)}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                      />
+                    {/* Tablet Checkbox and qty */}
+                    <div className="p-4 bg-background/50 rounded-2xl border border-border/40 space-y-3">
+                      <label className="flex items-center space-x-2.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={form.requestTablet}
+                          onChange={(e) => setForm({ ...form, requestTablet: e.target.checked })}
+                          className="w-4 h-4 rounded accent-primary cursor-pointer"
+                        />
+                        <span className="text-xs font-bold text-foreground">Tabletop Ordering Tablet</span>
+                      </label>
+                      {form.requestTablet && (
+                        <input
+                          type="text"
+                          required
+                          placeholder="Quantity of Tablets"
+                          value={form.tabletQuantity}
+                          onChange={(e) => handleQuantityChange('tabletQuantity', e.target.value)}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold"
+                        />
+                      )}
                     </div>
-                    <div>
-                      <input
-                        type="email"
-                        required
-                        placeholder="Email Address"
-                        value={form.email}
-                        onChange={(e) => setForm({ ...form, email: e.target.value })}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                      />
-                    </div>
-                  </div>
 
-                  {/* Multi-Device selection space */}
-                  <div className="space-y-3 border-t border-border/60 pt-4">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Select Devices to Host</span>
-
-                    <div className="grid md:grid-cols-2 gap-4">
-                      {/* Tablet Checkbox and qty */}
-                      <div className="p-4 bg-background/50 rounded-2xl border border-border/40 space-y-3">
-                        <label className="flex items-center space-x-2.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={form.requestTablet}
-                            onChange={(e) => setForm({ ...form, requestTablet: e.target.checked })}
-                            className="w-4 h-4 rounded accent-primary cursor-pointer"
-                          />
-                          <span className="text-xs font-bold text-foreground">Tabletop Ordering Tablet</span>
-                        </label>
-                        {form.requestTablet && (
-                          <input
-                            type="text"
-                            required
-                            placeholder="Quantity of Tablets"
-                            value={form.tabletQuantity}
-                            onChange={(e) => handleQuantityChange('tabletQuantity', e.target.value)}
-                            className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold"
-                          />
-                        )}
-                      </div>
-
-                      {/* Screen Checkbox and qty */}
-                      <div className="p-4 bg-background/50 rounded-2xl border border-border/40 space-y-3">
-                        <label className="flex items-center space-x-2.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={form.requestScreen}
-                            onChange={(e) => setForm({ ...form, requestScreen: e.target.checked })}
-                            className="w-4 h-4 rounded accent-primary cursor-pointer"
-                          />
-                          <span className="text-xs font-bold text-foreground">Large Wall Display Screen</span>
-                        </label>
-                        {form.requestScreen && (
-                          <input
-                            type="text"
-                            required
-                            placeholder="Quantity of Screens"
-                            value={form.screenQuantity}
-                            onChange={(e) => handleQuantityChange('screenQuantity', e.target.value)}
-                            className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold"
-                          />
-                        )}
-                      </div>
+                    {/* Screen Checkbox and qty */}
+                    <div className="p-4 bg-background/50 rounded-2xl border border-border/40 space-y-3">
+                      <label className="flex items-center space-x-2.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={form.requestScreen}
+                          onChange={(e) => setForm({ ...form, requestScreen: e.target.checked })}
+                          className="w-4 h-4 rounded accent-primary cursor-pointer"
+                        />
+                        <span className="text-xs font-bold text-foreground">Large Wall Display Screen</span>
+                      </label>
+                      {form.requestScreen && (
+                        <input
+                          type="text"
+                          required
+                          placeholder="Quantity of Screens"
+                          value={form.screenQuantity}
+                          onChange={(e) => handleQuantityChange('screenQuantity', e.target.value)}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold"
+                        />
+                      )}
                     </div>
                   </div>
+                </div>
 
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg glow-hover cursor-pointer mt-4"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>{loading ? 'Submitting...' : 'Submit Host Application'}</span>
-                  </button>
-                </form>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg glow-hover cursor-pointer mt-4"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>{loading ? 'Submitting...' : 'Submit Host Application'}</span>
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* 1.2 My Applications Tab [NEW] */}
+        {activeTab === 'my-applications' && (
+          <div className="animate-fade-in">
+            <h1 className="font-outfit text-2xl font-black text-foreground mb-2">My Applications</h1>
+            <p className="text-muted-foreground text-xs font-semibold mb-8">View and monitor the status of all your submitted host applications.</p>
+
+            {applications.length === 0 ? (
+              <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
+                <Building className="w-12 h-12 text-[#0069a8] fill-[#0069a8] mx-auto mb-4 opacity-50" />
+                <p className="text-sm font-bold text-foreground">No Applications Submitted</p>
+                <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">You haven't submitted any host applications yet. Go to the "Host Applications" tab to request devices.</p>
               </div>
-
-              {/* Applications List */}
-              <div className="space-y-6">
-                <h3 className="font-outfit text-lg font-bold text-foreground">Your Applications</h3>
-                {applications.length === 0 ? (
-                  <div className="text-center p-8 border border-border/40 bg-card/5 rounded-2xl text-xs text-muted-foreground font-semibold">
-                    No applications submitted yet.
-                  </div>
-                ) : (
-                  applications.map((app) => (
-                    <div key={app._id} className="p-4 rounded-xl bg-card/10 border border-border/40 space-y-4">
-                      <div className="flex justify-between items-start">
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {applications.map((app) => (
+                  <div key={app._id} className="p-5 rounded-2xl bg-card/10 border border-border/40 flex flex-col justify-between space-y-4 hover:-translate-y-1 hover:border-primary/50 transition-all duration-300 animate-fade-in">
+                    <div>
+                      <div className="flex justify-between items-start border-b border-border/40 pb-3 mb-3">
                         <div>
-                          <h4 className="font-bold text-foreground text-sm">{app.outletName}</h4>
-                          <p className="text-[10px] text-muted-foreground mt-0.5">{app.city}, {app.state}</p>
+                          <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Venue / Outlet</span>
+                          <h4 className="font-bold text-foreground text-sm tracking-wide mt-0.5">{app.outletName}</h4>
                         </div>
-                        <span className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-full ${app.status === 'approved'
+                        <span className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-full flex items-center ${app.status === 'approved'
                           ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                           : app.status === 'rejected'
                             ? 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20'
                             : 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20'
                           }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${app.status === 'approved' ? 'bg-emerald-500' : app.status === 'rejected' ? 'bg-red-500' : 'bg-orange-500'}`} />
                           {app.status}
                         </span>
                       </div>
 
-                      {/* Display Device ID codes for approved application */}
-                      {app.status === 'approved' && (
-                        <div className="bg-background/40 border border-border/40 rounded-xl p-3 space-y-2">
-                          <span className="text-[9px] font-black uppercase tracking-wider text-muted-foreground">Provisioned Activation Codes</span>
-                          <div className="space-y-1.5 mt-1">
-                            {devices.filter(d => d.hostApplicationId === app._id).length === 0 ? (
-                              <p className="text-[10px] text-muted-foreground font-semibold">Generating credentials...</p>
-                            ) : (
-                              devices.filter(d => d.hostApplicationId === app._id).map((device) => (
-                                <div key={device._id} className="flex justify-between items-center text-[11px] font-mono bg-card/5 px-2 py-1 rounded border border-border/20">
-                                  <span className="text-foreground font-bold">{device.deviceId}</span>
-                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${device.status === 'online' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-muted-foreground/10 text-muted-foreground'}`}>
-                                    {device.status}
-                                  </span>
-                                </div>
-                              ))
-                            )}
+                      <div className="space-y-3 text-xs">
+                        {app.requestTablet && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground font-semibold flex items-center">
+                              <Tablet className="w-4 h-4 mr-1 text-[#0069a8] fill-[#0069a8]" />
+                              Tablets Requested
+                            </span>
+                            <span className="text-foreground font-bold">{app.tabletQuantity}</span>
                           </div>
+                        )}
+                        {app.requestScreen && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground font-semibold flex items-center">
+                              <Tv className="w-4 h-4 mr-1 text-[#0069a8] fill-[#0069a8]" />
+                              Screens Requested
+                            </span>
+                            <span className="text-foreground font-bold">{app.screenQuantity}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground font-semibold">Location</span>
+                          <span className="text-foreground font-semibold text-right">{app.city}, {app.state}</span>
                         </div>
-                      )}
-
-                      <div className="flex justify-between items-center text-xs border-t border-border pt-4">
-                        <span className="text-muted-foreground flex items-center font-semibold capitalize">
-                          <Tablet className="w-3.5 h-3.5 mr-1 text-muted-foreground" />
-                          {app.deviceType}
-                        </span>
-                        <span className="font-bold text-foreground">Qty: {app.quantity}</span>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground font-semibold">Contact Person</span>
+                          <span className="text-foreground font-semibold">{app.contactPerson}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground font-semibold">Submitted On</span>
+                          <span className="text-foreground font-semibold">{app.createdAt ? new Date(app.createdAt).toLocaleDateString() : 'N/A'}</span>
+                        </div>
                       </div>
                     </div>
-                  ))
-                )}
+
+                    {app.status === 'approved' && (
+                      <div className="border-t border-border/40 pt-3 text-[10px] text-muted-foreground font-semibold space-y-1">
+                        <p className="uppercase text-[9px] tracking-wider font-bold">Approved Status</p>
+                        <p className="text-foreground/80 leading-relaxed font-semibold">This application is approved. Device credentials have been generated under the "Devices" tab.</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 1.5 Devices Tab [NEW] */}
+        {activeTab === 'devices' && (
+          <div className="animate-fade-in">
+            <div className="flex justify-between items-center mb-8 flex-wrap gap-4 border-b border-border/40 pb-4">
+              <div className="space-y-3">
+                <div>
+                  <h1 className="font-outfit text-2xl font-black text-foreground">My Devices</h1>
+                  <p className="text-muted-foreground text-xs font-semibold">View and monitor the active tabletop kiosks and wall advertising screens provisioned for your venues.</p>
+                </div>
+                {/* Highlighted Instruction Banner */}
+                <div className="bg-[#0069a8]/10 border border-[#0069a8]/20 rounded-xl px-4 py-3 text-xs max-w-xl text-left shadow-sm">
+                  <p className="text-[#0069a8] font-black uppercase tracking-wider text-[9px] mb-1">Activation Guidelines</p>
+                  <p className="text-muted-foreground font-semibold leading-relaxed text-[11px]">
+                    To link your physical Android kiosks, start the client app on your hardware and enter the unique <strong className="text-foreground">Device ID</strong> code displayed on any of the cards below.
+                  </p>
+                </div>
+              </div>
+
+              {/* Filtering Controls */}
+              <div className="flex items-center space-x-3 flex-wrap gap-2">
+                {/* Venue Dropdown Selector */}
+                <select
+                  value={deviceFilterVenue}
+                  onChange={(e) => setDeviceFilterVenue(e.target.value)}
+                  className="bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-48 cursor-pointer"
+                >
+                  <option value="">All Venues</option>
+                  {applications.filter(app => app.status === 'approved').map(app => (
+                    <option key={app._id} value={app._id}>{app.outletName}</option>
+                  ))}
+                </select>
+
+                {/* Device Type Tabs */}
+                <div className="flex bg-muted p-1 rounded-xl border border-border/40 text-[10px] font-bold">
+                  <button
+                    onClick={() => setDeviceFilterType('tablet')}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${deviceFilterType === 'tablet'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                  >
+                    Tablets
+                  </button>
+                  <button
+                    onClick={() => setDeviceFilterType('screen')}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${deviceFilterType === 'screen'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                  >
+                    Screens
+                  </button>
+                </div>
               </div>
             </div>
+
+            {(() => {
+              const filteredDevices = devices.filter(device => {
+                const matchesType = device.deviceType === deviceFilterType;
+                const matchesVenue = !deviceFilterVenue || device.hostApplicationId === deviceFilterVenue;
+                return matchesType && matchesVenue;
+              });
+
+              return filteredDevices.length === 0 ? (
+                <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
+                  <Tablet className="w-12 h-12 text-[#0069a8] fill-[#0069a8] mx-auto mb-4 opacity-50" />
+                  <p className="text-sm font-bold text-foreground">No Provisioned Devices Found</p>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">No active {deviceFilterType === 'tablet' ? 'tablets' : 'screens'} match the selected venue criteria.</p>
+                </div>
+              ) : (
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredDevices.map((device) => {
+                    const associatedApp = applications.find(app => app._id === device.hostApplicationId);
+                    return (
+                      <div key={device._id} className="p-5 rounded-2xl bg-card/10 border border-border/40 flex flex-col justify-between space-y-4 hover:-translate-y-1 hover:border-primary/50 transition-all duration-300">
+                        <div>
+                          <div className="flex justify-between items-start border-b border-border/40 pb-3 mb-3">
+                            <div>
+                              <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Device ID</span>
+                              <h4 className="font-mono font-bold text-foreground text-sm tracking-wide mt-0.5">{device.deviceId}</h4>
+                            </div>
+                            <span className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-full flex items-center ${device.status === 'online'
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                              : 'bg-muted-foreground/10 text-muted-foreground border border-border/20'
+                              }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${device.status === 'online' ? 'bg-emerald-500' : 'bg-muted-foreground'}`} />
+                              {device.status}
+                            </span>
+                          </div>
+
+                          <div className="space-y-3 text-xs">
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground font-semibold">Device Type</span>
+                              <span className="text-foreground font-bold capitalize flex items-center">
+                                {device.deviceType === 'tablet' ? (
+                                  <Tablet className="w-4 h-4 mr-1 text-[#0069a8] fill-[#0069a8]" />
+                                ) : (
+                                  <Tv className="w-4 h-4 mr-1 text-[#0069a8] fill-[#0069a8]" />
+                                )}
+                                {device.deviceType}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground font-semibold">Target Venue</span>
+                              <span className="text-foreground font-bold">{associatedApp?.outletName || 'Host Outlet'}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground font-semibold">Location</span>
+                              <span className="text-foreground font-semibold text-right">{associatedApp ? `${associatedApp.city}, ${associatedApp.state}` : 'N/A'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -1118,6 +1400,13 @@ export default function MerchantDashboard() {
               </div>
               {approvedOutlets.length > 0 && (
                 <div className="flex space-x-4">
+                  <button
+                    onClick={() => setIsCategoryModalOpen(true)}
+                    className="bg-card hover:bg-muted border border-border/40 text-foreground font-semibold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center space-x-1.5 cursor-pointer shadow-sm"
+                  >
+                    <Settings className="w-4 h-4" />
+                    <span>Manage Categories</span>
+                  </button>
                   <button
                     onClick={addMenuItem}
                     className="bg-card hover:bg-muted border border-border/40 text-foreground font-semibold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center space-x-1.5 cursor-pointer shadow-sm"
@@ -1150,14 +1439,14 @@ export default function MerchantDashboard() {
                   >
                     {approvedOutlets.map((app) => (
                       <option key={app._id} value={app._id}>
-                        {app.outletName} ({app.city}) - {app.deviceType}
+                        {app.outletName} ({app.city}) - Tablets: {app.tabletQuantity || 0}, Screens: {app.screenQuantity || 0}
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div className="space-y-12">
-                  {MENU_CATEGORIES.map((category) => {
+                  {menuCategories.map((category) => {
                     const items = menuItems.filter(item => (item.category || '').toLowerCase() === category.toLowerCase());
                     return (
                       <div key={category} className="space-y-4">
@@ -1165,7 +1454,7 @@ export default function MerchantDashboard() {
                           <span className={`w-2.5 h-2.5 rounded-full ${getCategoryDotColor(category)}`} />
                           <h3 className="font-outfit text-sm font-bold text-foreground tracking-wider">{category.toUpperCase()}</h3>
                         </div>
-                        
+
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
                           {/* CREATE NEW Card */}
                           <div
@@ -1198,7 +1487,7 @@ export default function MerchantDashboard() {
                                     }}
                                     className="p-1.5 bg-card/95 hover:bg-muted border border-border/40 rounded-lg text-foreground transition-all cursor-pointer shadow-sm"
                                   >
-                                    <Pencil className="w-3.5 h-3.5" />
+                                    <Pencil className="w-4 h-4" />
                                   </button>
                                   <button
                                     onClick={(e) => {
@@ -1207,7 +1496,7 @@ export default function MerchantDashboard() {
                                     }}
                                     className="p-1.5 bg-destructive/95 hover:bg-destructive border border-destructive/20 rounded-lg text-white transition-all cursor-pointer shadow-sm"
                                   >
-                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <Trash2 className="w-4 h-4" />
                                   </button>
                                 </div>
 
@@ -1218,7 +1507,7 @@ export default function MerchantDashboard() {
                                   <div className="relative w-full h-40 overflow-hidden rounded-xl bg-muted/10 mb-4 shrink-0 border border-border/20">
                                     {item.imageUrl ? (
                                       <img
-                                        src={item.imageUrl}
+                                        src={resolveMediaUrl(item.imageUrl)}
                                         alt={item.name}
                                         className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                                       />
@@ -1268,47 +1557,97 @@ export default function MerchantDashboard() {
               Connected to active tabletop devices. Orders update in real-time.
             </p>
 
-            {orders.length === 0 ? (
+            {approvedOutlets.length === 0 ? (
               <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
-                <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                <p className="text-sm font-bold text-foreground">Waiting for live orders...</p>
-                <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">When customers place orders at dining tables, they will pop up here instantly.</p>
+                <Building className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+                <p className="text-sm font-bold text-foreground">No Approved Venue Outlets</p>
+                <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">Approved host application venues supporting tablet devices will appear here automatically.</p>
               </div>
             ) : (
-              <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
-                {orders.map((ord) => (
-                  <div key={ord.orderId} className="p-4 rounded-xl bg-card/10 border border-border/40 flex flex-col justify-between space-y-4">
-                    <div>
-                      <div className="flex justify-between items-start border-b border-border/40 pb-3 mb-3">
-                        <div>
-                          <span className="text-[10px] text-primary font-bold uppercase tracking-wider">Table {ord.tableNumber}</span>
-                          <h4 className="font-bold text-foreground text-xs">{ord.orderId}</h4>
+              <>
+                {/* Tabbed Approach for Venues */}
+                <div className="flex space-x-2 border-b border-border/40 pb-3 mb-6 overflow-x-auto">
+                  {approvedOutlets.map((app) => {
+                    const hasUnread = unreadOrderVenues.has(app._id);
+                    const isActive = activeOrderVenueTab === app._id;
+                    return (
+                      <button
+                        key={app._id}
+                        onClick={() => {
+                          setActiveOrderVenueTab(app._id);
+                          setUnreadOrderVenues(prev => {
+                            const next = new Set(prev);
+                            next.delete(app._id);
+                            return next;
+                          });
+                        }}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all relative flex items-center space-x-2 cursor-pointer shrink-0 ${isActive
+                          ? 'bg-[#0069a8] text-white shadow-md'
+                          : 'bg-card text-foreground hover:bg-muted border border-border/40'
+                          }`}
+                      >
+                        <span>{app.outletName}</span>
+                        {hasUnread && !isActive && (
+                          <span className="w-2 h-2 rounded-full bg-[#0069a8] animate-pulse" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {(() => {
+                  const filteredOrders = orders.filter(ord => ord.hostApplicationId === activeOrderVenueTab);
+                  return filteredOrders.length === 0 ? (
+                    <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
+                      <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+                      <p className="text-sm font-bold text-foreground">Waiting for live orders...</p>
+                      <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">When customers place orders at dining tables in this venue, they will pop up here instantly.</p>
+                    </div>
+                  ) : (
+                    <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
+                      {filteredOrders.map((ord) => (
+                        <div key={ord.orderId} className="p-4 rounded-xl bg-card/10 border border-border/40 flex flex-col justify-between space-y-4">
+                          <div>
+                            <div className="flex justify-between items-start border-b border-border/40 pb-3 mb-3">
+                              <div>
+                                <span className="text-[10px] text-primary font-bold uppercase tracking-wider">Table {ord.tableNumber}</span>
+                                <h4 className="font-bold text-foreground text-xs">{ord.orderId}</h4>
+                              </div>
+                              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${ord.paymentStatus === 'completed'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                : 'bg-destructive/10 text-destructive border border-destructive/20'
+                                }`}>
+                                {ord.paymentStatus === 'completed' ? 'Paid' : 'Unpaid'}
+                              </span>
+                            </div>
+
+                            <ul className="space-y-2 text-xs">
+                              {ord.items.map((item, idx) => (
+                                <li key={idx} className="flex justify-between font-semibold">
+                                  <span className="text-muted-foreground">{item.name} x {item.quantity}</span>
+                                  <span className="text-foreground">₹{(item.price * item.quantity / 100).toFixed(2)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+
+                          <div className="flex justify-between items-center border-t border-border/40 pt-3">
+                            <span className="text-xs font-bold text-foreground">Total: ₹{(ord.totalAmount / 100).toFixed(2)}</span>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${ord.orderStatus === 'placed'
+                              ? 'bg-amber-500/10 text-amber-600'
+                              : ord.orderStatus === 'cooking'
+                                ? 'bg-blue-500/10 text-blue-600'
+                                : 'bg-emerald-500/10 text-emerald-600'
+                              }`}>
+                              {ord.orderStatus}
+                            </span>
+                          </div>
                         </div>
-                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${ord.paymentStatus === 'completed'
-                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                          : 'bg-destructive/10 text-destructive border border-destructive/20'
-                          }`}>
-                          {ord.paymentStatus === 'completed' ? 'Paid' : 'Unpaid'}
-                        </span>
-                      </div>
-
-                      <ul className="space-y-2 text-xs">
-                        {ord.items.map((it, i) => (
-                          <li key={i} className="flex justify-between">
-                            <span className="text-muted-foreground font-semibold">{it.name} <span className="text-muted-foreground/60 font-normal">x{it.quantity}</span></span>
-                            <span className="text-foreground font-semibold">₹{(it.price * it.quantity) / 100}</span>
-                          </li>
-                        ))}
-                      </ul>
+                      ))}
                     </div>
-
-                    <div className="border-t border-border/40 pt-3 flex justify-between items-center text-xs">
-                      <span className="text-muted-foreground font-semibold">Total Amount</span>
-                      <span className="font-extrabold text-primary text-sm">₹{ord.totalAmount / 100}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  );
+                })()}
+              </>
             )}
           </div>
         )}
@@ -1373,7 +1712,7 @@ export default function MerchantDashboard() {
                     onChange={(e) => setModalForm(prev => ({ ...prev, category: e.target.value }))}
                     className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer"
                   >
-                    {MENU_CATEGORIES.map(cat => (
+                    {menuCategories.map(cat => (
                       <option key={cat} value={cat} className="bg-card text-foreground">
                         {cat}
                       </option>
@@ -1401,7 +1740,7 @@ export default function MerchantDashboard() {
                   {modalForm.imageUrl ? (
                     <div className="w-full h-full overflow-hidden">
                       <img
-                        src={modalForm.imageUrl}
+                        src={resolveMediaUrl(modalForm.imageUrl)}
                         alt="Preview"
                         style={{ transform: `scale(${zoomFactor / 100})` }}
                         className="w-full h-full object-cover transition-transform"
@@ -1422,7 +1761,7 @@ export default function MerchantDashboard() {
                       className="p-1 hover:text-primary text-white transition-colors"
                       title="Edit Image"
                     >
-                      <Pencil className="w-3.5 h-3.5" />
+                      <Pencil className="w-4 h-4" />
                     </button>
                     {modalForm.imageUrl && (
                       <button
@@ -1431,7 +1770,7 @@ export default function MerchantDashboard() {
                         className="p-1 hover:text-destructive text-white transition-colors"
                         title="Delete Image"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     )}
                   </div>
@@ -1526,6 +1865,94 @@ export default function MerchantDashboard() {
                 className="px-6 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground font-bold rounded-xl transition-all text-xs cursor-pointer uppercase shadow-md"
               >
                 Save Item
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Category Management Modal */}
+      {isCategoryModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="w-full max-w-md bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative space-y-6">
+            <button
+              onClick={() => {
+                setIsCategoryModalOpen(false);
+                setNewCategoryName('');
+              }}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center space-x-3 border-b border-border/40 pb-4">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0 text-primary">
+                <Settings className="w-5 h-5" />
+              </div>
+              <div className="text-left">
+                <h3 className="font-outfit text-md font-bold tracking-tight">Manage Menu Categories</h3>
+                <p className="text-[10px] text-muted-foreground font-semibold mt-0.5">Customize food categories for your digital ordering tablet.</p>
+              </div>
+            </div>
+
+            {/* List of categories */}
+            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+              {menuCategories.map((cat) => (
+                <div key={cat} className="flex justify-between items-center p-2 rounded-xl bg-muted/20 border border-border/20 text-xs font-bold">
+                  <span className="text-foreground">{cat}</span>
+                  <button
+                    onClick={() => {
+                      const updated = menuCategories.filter(c => c !== cat);
+                      handleSaveCategories(updated);
+                    }}
+                    className="p-1 text-destructive hover:bg-destructive/10 rounded-lg transition-all cursor-pointer"
+                    title={`Delete category ${cat}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Add new category form */}
+            <div className="space-y-3 pt-2 border-t border-border/40">
+              <span className="text-[10px] font-black uppercase text-muted-foreground">Add New Category</span>
+              <div className="flex space-x-2">
+                <input
+                  type="text"
+                  placeholder="Category Name (e.g. Soup)"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  className="flex-1 bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                />
+                <button
+                  onClick={() => {
+                    const trimmed = newCategoryName.trim();
+                    if (!trimmed) return;
+                    if (menuCategories.some(c => c.toLowerCase() === trimmed.toLowerCase())) {
+                      setError('Category already exists!');
+                      return;
+                    }
+                    const updated = [...menuCategories, trimmed];
+                    handleSaveCategories(updated);
+                    setNewCategoryName('');
+                  }}
+                  className="bg-primary hover:bg-primary/95 text-primary-foreground font-bold px-4 rounded-xl text-xs flex items-center justify-center cursor-pointer transition-all shadow-sm"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => {
+                  setIsCategoryModalOpen(false);
+                  setNewCategoryName('');
+                }}
+                className="px-5 py-2 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>

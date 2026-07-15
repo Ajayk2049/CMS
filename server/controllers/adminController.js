@@ -90,18 +90,33 @@ class AdminController {
 
         // Automatically provision Device records for connection mapping
         const devices = [];
-        const prefix = app.deviceType === 'tablet' ? 'TAB' : 'SCR';
         
-        for (let i = 0; i < app.quantity; i++) {
-          const deviceId = await generateDeviceId(prefix);
-          const device = new Device({
-            deviceId,
-            deviceType: app.deviceType,
-            hostApplicationId: app._id,
-            status: 'offline'
-          });
-          await device.save();
-          devices.push(device);
+        if (app.requestTablet && app.tabletQuantity > 0) {
+          for (let i = 0; i < app.tabletQuantity; i++) {
+            const deviceId = await generateDeviceId('TAB');
+            const device = new Device({
+              deviceId,
+              deviceType: 'tablet',
+              hostApplicationId: app._id,
+              status: 'offline'
+            });
+            await device.save();
+            devices.push(device);
+          }
+        }
+
+        if (app.requestScreen && app.screenQuantity > 0) {
+          for (let i = 0; i < app.screenQuantity; i++) {
+            const deviceId = await generateDeviceId('SCR');
+            const device = new Device({
+              deviceId,
+              deviceType: 'screen',
+              hostApplicationId: app._id,
+              status: 'offline'
+            });
+            await device.save();
+            devices.push(device);
+          }
         }
 
         return res.status(200).send({
@@ -238,6 +253,33 @@ class AdminController {
   }
 
   /**
+   * Delete a pricing plan
+   */
+  async deleteAdsRate(req, res) {
+    const { rateId } = req.params;
+
+    if (!rateId) {
+      return res.status(400).send({ success: false, message: 'rateId is required' });
+    }
+
+    try {
+      const rate = await AdsRates.findOneAndDelete({ rateId });
+
+      if (!rate) {
+        return res.status(404).send({ success: false, message: 'Pricing plan not found' });
+      }
+
+      return res.status(200).send({
+        success: true,
+        message: 'Pricing plan deleted successfully'
+      });
+    } catch (error) {
+      console.error('deleteAdsRate Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to delete pricing plan' });
+    }
+  }
+
+  /**
    * Get stats for admin KPI summary widgets
    */
   async getStats(req, res) {
@@ -295,7 +337,7 @@ class AdminController {
       const devices = await Device.find({})
         .populate({
           path: 'hostApplicationId',
-          select: 'outletName contactPerson phone city state quantity deviceType'
+          select: 'outletName contactPerson phone city state requestTablet tabletQuantity requestScreen screenQuantity'
         })
         .sort({ createdAt: -1 });
       return res.status(200).send({ success: true, data: devices });
@@ -338,7 +380,13 @@ class AdminController {
       await device.save();
 
       // We can also increment quantity of the application if manually deployed
-      app.quantity += 1;
+      if (deviceType === 'tablet') {
+        app.requestTablet = true;
+        app.tabletQuantity = (app.tabletQuantity || 0) + 1;
+      } else {
+        app.requestScreen = true;
+        app.screenQuantity = (app.screenQuantity || 0) + 1;
+      }
       await app.save();
 
       return res.status(201).send({

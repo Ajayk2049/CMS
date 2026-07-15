@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useRouter } from 'next/navigation';
 import {
@@ -22,7 +22,17 @@ import {
   RefreshCw,
   Play,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Tablet,
+  Clock,
+  Calendar,
+  AlertCircle,
+  XCircle,
+  Trash2,
+  X,
+  createIcons,
+  ListVideo,
+  IndianRupee
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -45,12 +55,26 @@ export default function AdvertiserDashboard() {
   const [roles, setRoles] = useState([]);
   const [activeTab, setActiveTab] = useState('bookings');
 
-  const [error, setError] = useState('');
-  const [info, setInfo] = useState('');
+  // Toast notification system
+  const [toasts, setToasts] = useState([]);
+
+  const showToast = (type, message) => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  };
+
+  const dismissToast = (id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
   const [roleActionLoading, setRoleActionLoading] = useState(false);
   const [showBecomeHostModal, setShowBecomeHostModal] = useState(false);
   const [expandedCampaigns, setExpandedCampaigns] = useState({});
   const [previewVideoUrl, setPreviewVideoUrl] = useState('');
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef(null);
 
   // Dropdown options loaded from server
   const [states, setStates] = useState([]);
@@ -73,6 +97,8 @@ export default function AdvertiserDashboard() {
   const [frequency, setFrequency] = useState('hourly');
   const [computedAmount, setComputedAmount] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [rateTab, setRateTab] = useState('tablet');
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Bookings list
   const [bookings, setBookings] = useState([]);
@@ -87,6 +113,16 @@ export default function AdvertiserDashboard() {
       document.documentElement.classList.remove('dark');
     }
   }, []);
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (userMenuOpen && userMenuRef.current && !userMenuRef.current.contains(e.target)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [userMenuOpen]);
 
   const toggleTheme = () => {
     const nextTheme = theme === 'dark' ? 'light' : 'dark';
@@ -155,7 +191,7 @@ export default function AdvertiserDashboard() {
       const urlParams = new URLSearchParams(window.location.search);
       const verifyBookingId = urlParams.get('verifyBookingId');
       if (verifyBookingId) {
-        handleVerifyPayment(verifyBookingId, storedToken);
+        handleVerifyPayment(verifyBookingId, storedToken, true);
         // Clear query parameters from URL
         const newUrl = window.location.pathname;
         window.history.replaceState({}, '', newUrl);
@@ -253,19 +289,18 @@ export default function AdvertiserDashboard() {
     if (!file) return;
 
     if (!selectedDeviceType) {
-      setError('Please select a Display Type (Tablet or Screen) before uploading.');
+      showToast('error', 'Please select a Display Type (Tablet or Screen) before uploading.');
       return;
     }
 
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
     if (!['.mp4', '.webm'].includes(ext)) {
-      setError('Unsupported file type. Only MP4 and WEBM are allowed.');
+      showToast('error', 'Unsupported file type. Only MP4 and WEBM are allowed.');
       return;
     }
 
     setUploading(true);
-    setError('');
-    setInfo('');
+    setUploadProgress(0);
 
     try {
       const response = await axios.post(`${API_BASE}/ads/upload${selectedDeviceType ? '?deviceType=' + selectedDeviceType : ''}`, file, {
@@ -273,19 +308,27 @@ export default function AdvertiserDashboard() {
           'Content-Type': file.type || 'application/octet-stream',
           'X-Filename': file.name,
           'Authorization': `Bearer ${token}`
+        },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadProgress(percentCompleted);
         }
       });
 
       if (response.data.success && response.data.data.url) {
         setMediaUrl(response.data.data.url);
-        setInfo('Video uploaded successfully!');
+        showToast('success', 'Video uploaded successfully!');
       } else {
-        setError(response.data.message || 'Upload failed');
+        showToast('error', response.data.message || 'Upload failed.');
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to upload video file.');
+      showToast('error', err.response?.data?.message || 'Failed to upload video file.');
     } finally {
       setUploading(false);
+      setUploadProgress(0);
+      if (e && e.target) {
+        e.target.value = '';
+      }
     }
   };
 
@@ -316,27 +359,26 @@ export default function AdvertiserDashboard() {
   // Handle Ad booking initiation
   const handleInitiateBooking = async (e) => {
     e.preventDefault();
-    setError('');
-    setInfo('');
+
 
     if (!selectedOutlet) {
-      setError('Please select a target venue and display type');
+      showToast('error', 'Please select a target venue and display type.');
       return;
     }
 
     if (!mediaUrl || !mediaUrl.trim()) {
-      setError('Please upload a video file or provide a video URL before proceeding.');
+      showToast('error', 'Please upload a video file or provide a video URL before proceeding.');
       return;
     }
 
     const bookingQty = parseInt(quantity, 10);
     if (isNaN(bookingQty) || bookingQty < 1) {
-      setError('Quantity must be a number of 1 or more');
+      showToast('error', 'Quantity must be a number of 1 or more.');
       return;
     }
 
     if (bookingQty > selectedOutlet.quantity) {
-      setError(`Requested quantity exceeds outlet availability (${selectedOutlet.quantity})`);
+      showToast('error', `Requested quantity exceeds outlet availability (${selectedOutlet.quantity}).`);
       return;
     }
 
@@ -358,14 +400,14 @@ export default function AdvertiserDashboard() {
         }
       );
 
-      setInfo('Ad booking initiated successfully! Redirecting you to payment...');
+      showToast('success', 'Ad booking initiated! Redirecting you to the payment gateway...');
 
       // Simulate/Open Checkout Redirect
       if (response.data.data.paymentUrl) {
         window.location.href = response.data.data.paymentUrl;
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to initiate campaign booking.');
+      showToast('error', err.response?.data?.message || 'Failed to initiate campaign booking.');
     }
   };
 
@@ -375,8 +417,6 @@ export default function AdvertiserDashboard() {
   };
 
   const handleSwitchRole = async (targetRole) => {
-    setError('');
-    setInfo('');
     setRoleActionLoading(true);
     try {
       const res = await axios.post(`${API_BASE}/auth/switch-role`, { role: targetRole }, {
@@ -387,15 +427,13 @@ export default function AdvertiserDashboard() {
       localStorage.setItem('roles', JSON.stringify(res.data.data.user.roles));
       router.push(targetRole === 'merchant' ? '/merchant' : '/advertiser');
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to switch role.');
+      showToast('error', err.response?.data?.message || 'Failed to switch role.');
     } finally {
       setRoleActionLoading(false);
     }
   };
 
   const handleBecomeHost = async () => {
-    setError('');
-    setInfo('');
     setRoleActionLoading(true);
     setShowBecomeHostModal(false);
     try {
@@ -407,29 +445,36 @@ export default function AdvertiserDashboard() {
       localStorage.setItem('roles', JSON.stringify(res.data.data.user.roles));
       router.push('/merchant');
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to register as host.');
+      showToast('error', err.response?.data?.message || 'Failed to register as host.');
     } finally {
       setRoleActionLoading(false);
     }
   };
 
-  const handleVerifyPayment = async (bookingId, explicitToken = null) => {
-    setError('');
-    setInfo('');
+  const handleVerifyPayment = async (bookingId, explicitToken = null, isAutoVerify = false) => {
     const activeToken = explicitToken || token;
     if (!activeToken) return;
     try {
       const res = await axios.post(`${API_BASE}/ads/verify-payment/${bookingId}`, {}, {
         headers: { Authorization: `Bearer ${activeToken}` }
       });
-      if (res.data.success) {
-        setInfo(res.data.message);
-        fetchBookings(activeToken); // reload campaigns
+      const paymentStatus = res.data.data?.paymentStatus;
+
+      if (paymentStatus === 'completed') {
+        showToast('success', 'Payment verified successfully! Your campaign is under review.');
+        fetchBookings(activeToken);
+        if (isAutoVerify) setActiveTab('bookings');
+      } else if (paymentStatus === 'failed') {
+        showToast('error', 'Payment failed or was declined. Please try booking again.');
+        if (isAutoVerify) setActiveTab('new-booking');
       } else {
-        setError(res.data.message);
+        // pending or unknown
+        showToast('info', res.data.message || 'Payment is still being verified. Check back shortly.');
+        fetchBookings(activeToken);
+        if (isAutoVerify) setActiveTab('bookings');
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to verify payment status.');
+      showToast('error', err.response?.data?.message || 'Failed to verify payment status.');
     }
   };
 
@@ -439,7 +484,7 @@ export default function AdvertiserDashboard() {
       {/* Top Header Navbar - Universal styled shadcn preset */}
       <header className="border-b border-border/40 bg-card px-5 sm:px-6 py-3.5 flex items-center justify-between shadow-sm sticky top-0 z-30">
         <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
             <Tv className="w-5 h-5 text-white" />
           </div>
           <span className="font-outfit text-md font-bold text-foreground brandLogo">Advertiser Portal</span>
@@ -449,31 +494,36 @@ export default function AdvertiserDashboard() {
           <button
             onClick={() => setActiveTab('bookings')}
             className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'bookings'
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
               }`}
           >
-            <Layers className="w-3.5 h-3.5" />
+            <ListVideo className={`w-3.5 h-3.5 fill-current ${activeTab === 'bookings' ? 'text-primary-foreground' : 'text-primary'}`} />
             <span className="hidden sm:inline">My Campaigns</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('rates')}
+            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'rates'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              }`}
+          >
+            <IndianRupee className={`w-3.5 h-3.5 fill-current ${activeTab === 'rates' ? 'text-primary-foreground' : 'text-primary'}`} />
+            <span className="hidden sm:inline">Ad Rates</span>
           </button>
           <button
             onClick={() => setActiveTab('new-booking')}
             className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'new-booking'
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              ? 'bg-primary text-primary-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
               }`}
           >
-            <Plus className="w-3.5 h-3.5" />
+            <Plus className={`w-3.5 h-3.5 fill-current ${activeTab === 'new-booking' ? 'text-primary-foreground' : 'text-primary'}`} />
             <span className="hidden sm:inline">Book Ad Spot</span>
           </button>
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
-          <div className="hidden lg:block text-right pr-2">
-            <p className="text-[10px] text-muted-foreground font-semibold leading-none">Logged in as</p>
-            <p className="text-xs font-bold text-foreground mt-1">{name || phone}</p>
-          </div>
-
           {/* Role Actions */}
           {roles.includes('merchant') ? (
             <button
@@ -490,7 +540,7 @@ export default function AdvertiserDashboard() {
               disabled={roleActionLoading}
               className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-emerald-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
             >
-              <Building className="w-3.5 h-3.5" />
+              <Megaphone className="w-3.5 h-3.5 fill-current" />
               <span className="hidden md:inline">Become Host</span>
             </button>
           )}
@@ -500,39 +550,83 @@ export default function AdvertiserDashboard() {
             className="p-2 bg-card hover:bg-muted border border-border rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer flex items-center justify-center shadow-sm"
             aria-label="Toggle theme"
           >
-            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-500" />}
+            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-500 fill-current" /> : <Moon className="w-4 h-4 text-indigo-500 fill-current" />}
           </button>
 
-          <button
-            onClick={handleLogout}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-card hover:bg-muted border border-border text-muted-foreground hover:text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Sign Out</span>
-          </button>
+          {/* User profile dropdown on the rightmost side */}
+          <div className="relative" ref={userMenuRef}>
+            <button
+              onClick={() => setUserMenuOpen(!userMenuOpen)}
+              className="flex items-center space-x-2 px-3 py-1.5 bg-card hover:bg-muted border border-border rounded-xl transition-all cursor-pointer shadow-sm select-none"
+            >
+              <div className="w-6 h-6 rounded-full bg-amber-500 flex items-center justify-center text-white text-[10px] font-black">
+                {(name || phone || 'U')[0].toUpperCase()}
+              </div>
+              <span className="text-xs font-bold text-foreground max-w-[120px] truncate">{name || phone}</span>
+              {userMenuOpen ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+            </button>
+
+            {userMenuOpen && (
+              <div className="absolute right-0 mt-2 w-48 rounded-xl bg-card border border-border/40 shadow-lg py-1.5 z-40 animate-fade-in text-xs font-semibold">
+                <div className="px-3 py-2 border-b border-border/40">
+                  <p className="text-[10px] text-muted-foreground leading-none">Logged in as</p>
+                  <p className="text-xs font-bold text-foreground mt-1 truncate">{name || phone}</p>
+                </div>
+                <div className="p-1.5 space-y-1">
+                  <button
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      handleLogout();
+                    }}
+                    className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-destructive font-bold"
+                  >
+                    <LogOut className="w-3.5 h-3.5 fill-current" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* Main Content Pane */}
-      <main className="flex-1 p-5 sm:p-6 overflow-y-auto max-w-7xl mx-auto w-full">
-        {error && (
-          <div className="mb-8 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-xs font-semibold">
-            {error}
+      {/* Toast Notification Container */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col space-y-2 w-80 max-w-[calc(100vw-2rem)]">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`flex items-start space-x-3 p-3.5 rounded-xl border animate-fade-in text-xs font-semibold select-none ${toast.type === 'error'
+              ? 'bg-rose-600 dark:bg-rose-500 border-rose-400/40 text-white shadow-[0_6px_20px_rgba(244,63,94,0.3)] dark:shadow-[0_8px_30px_rgba(244,63,94,0.5)]'
+              : toast.type === 'success'
+                ? 'bg-emerald-600 dark:bg-emerald-500 border-emerald-400/40 text-white shadow-[0_6px_20px_rgba(16,185,129,0.3)] dark:shadow-[0_8px_30px_rgba(16,185,129,0.5)]'
+                : 'bg-[#0069a8] border-blue-400/40 text-white shadow-[0_6px_20px_rgba(0,105,168,0.3)] dark:shadow-[0_8px_30px_rgba(0,105,168,0.5)]'
+              }`}
+          >
+            <div className="shrink-0 mt-0.5">
+              {toast.type === 'error' && <XCircle className="w-4 h-4 text-white" />}
+              {toast.type === 'success' && <CheckCircle className="w-4 h-4 text-white" />}
+              {toast.type === 'info' && <AlertCircle className="w-4 h-4 text-white" />}
+            </div>
+            <p className="flex-1 leading-relaxed text-white font-bold">{toast.message}</p>
+            <button
+              onClick={() => dismissToast(toast.id)}
+              className="shrink-0 text-white/80 hover:text-white transition-colors cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
-        )}
+        ))}
+      </div>
 
-        {info && (
-          <div className="mb-8 p-4 rounded-xl bg-primary/10 border border-primary/20 text-primary text-xs font-semibold">
-            {info}
-          </div>
-        )}
+      {/* Main Content Pane */}
+      <main className="flex-1 p-2 sm:p-3 overflow-y-auto max-w-7xl mx-auto w-full">
 
         {/* 1. Campaigns List Tab */}
         {activeTab === 'bookings' && (
-          <div className="animate-fade-in">
+          <div className="animate-fade-in w-full max-w-7xl mx-auto p-4 bg-transparent">
             <h1 className="font-outfit text-2xl font-black text-foreground mb-2">My Ad Campaigns</h1>
             <p className="text-muted-foreground text-xs font-semibold mb-8">Review the payment and delivery status of your local campaigns.</p>
- 
+
             {bookings.length === 0 ? (
               <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
                 <Megaphone className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
@@ -540,7 +634,7 @@ export default function AdvertiserDashboard() {
                 <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">Click &ldquo;Book Ad Spot&rdquo; in the navigation to launch your first location-based ad.</p>
               </div>
             ) : (
-              <div className="p-5 rounded-2xl overflow-x-auto bg-card/10 border border-border/40">
+              <div className="overflow-x-auto m-0 p-0 bg-transparent border-none">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
@@ -559,43 +653,89 @@ export default function AdvertiserDashboard() {
                       return (
                         <React.Fragment key={booking.bookingId}>
                           <tr className="hover:bg-muted/10">
-                            <td className="py-4 pr-4 font-bold text-primary uppercase tracking-wider">
-                              {booking.bookingId}
+                            <td className="py-4 pr-4">
+                              <div className="flex items-center space-x-1.5 font-bold text-primary uppercase tracking-wider">
+                                <Megaphone className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                                <span>{booking.bookingId}</span>
+                              </div>
                             </td>
                             <td className="py-4 pr-4">
-                              <div className="font-bold text-foreground text-xs">{booking.outletId?.outletName || 'Host Outlet'}</div>
-                              <div className="text-[10px] text-muted-foreground mt-0.5">{booking.city}, {booking.state}</div>
+                              <div className="flex items-start space-x-2">
+                                <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                                <div>
+                                  <div className="font-bold text-foreground text-xs">{booking.outletId?.outletName || 'Host Outlet'}</div>
+                                  <div className="text-[10px] text-muted-foreground mt-0.5">{booking.city}, {booking.state}</div>
+                                </div>
+                              </div>
                             </td>
-                            <td className="py-4 pr-4 capitalize font-semibold text-foreground">
-                              {booking.deviceType}s (Qty: {booking.quantity})
+                            <td className="py-4 pr-4">
+                              <div className="flex items-center space-x-1.5 capitalize font-semibold text-foreground">
+                                {booking.deviceType === 'tablet' ? (
+                                  <Tablet className="w-3.5 h-3.5 text-cyan-500 shrink-0" />
+                                ) : (
+                                  <Tv className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                                )}
+                                <span>{booking.deviceType}s (Qty: {booking.quantity})</span>
+                              </div>
                             </td>
-                            <td className="py-4 pr-4 font-semibold text-foreground">
-                              {booking.adDurationDays} Days / {booking.frequency}
+                            <td className="py-4 pr-4">
+                              <div className="flex items-center space-x-1.5 font-semibold text-foreground">
+                                <Calendar className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                <span>{booking.adDurationDays} Days / {booking.frequency}</span>
+                              </div>
                             </td>
-                            <td className="py-4 pr-4 font-extrabold text-foreground">
-                              ₹{booking.amount / 100}
+                            <td className="py-4 pr-4">
+                              <div className="flex items-center space-x-1 font-extrabold text-foreground">
+                                <span className="text-emerald-500 font-bold">₹</span>
+                                <span>{booking.amount / 100}</span>
+                              </div>
                             </td>
                             <td className="py-4 pr-4">
                               <div className="flex flex-col space-y-1">
-                                <span className={`w-fit text-[9px] font-bold uppercase px-2 py-0.5 rounded ${booking.paymentStatus === 'completed'
-                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                <span className={`w-fit text-[9px] font-bold uppercase px-2 py-0.5 rounded flex items-center ${booking.paymentStatus === 'completed'
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                  : booking.paymentStatus === 'failed'
+                                    ? 'bg-destructive/10 text-destructive border border-destructive/20'
                                     : 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20'
                                   }`}>
-                                  {booking.paymentStatus === 'completed' ? 'Paid' : 'Unpaid'}
+                                  {booking.paymentStatus === 'completed' ? (
+                                    <>
+                                      <CheckCircle className="w-2.5 h-2.5 text-emerald-500 shrink-0 mr-1" />
+                                      <span>Paid</span>
+                                    </>
+                                  ) : booking.paymentStatus === 'failed' ? (
+                                    <>
+                                      <XCircle className="w-2.5 h-2.5 text-destructive shrink-0 mr-1" />
+                                      <span>Failed</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Clock className="w-2.5 h-2.5 text-orange-500 shrink-0 mr-1 animate-pulse" />
+                                      <span>Processing</span>
+                                    </>
+                                  )}
                                 </span>
-                                <span className={`w-fit text-[9px] font-bold uppercase px-2 py-0.5 rounded ${booking.approvalStatus === 'approved'
-                                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                                    : booking.approvalStatus === 'rejected'
-                                      ? 'bg-destructive/10 text-destructive border border-destructive/20'
-                                      : 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20'
-                                  }`}>
-                                  {booking.approvalStatus === 'approved' ? 'Approved' : booking.approvalStatus === 'rejected' ? 'Rejected' : 'Reviewing'}
-                                </span>
+                                {booking.approvalStatus === 'approved' ? (
+                                  <span className="w-fit text-[9px] font-bold uppercase px-2 py-0.5 rounded flex items-center bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
+                                    <CheckCircle className="w-2.5 h-2.5 text-sky-500 shrink-0 mr-1" />
+                                    <span>Approved</span>
+                                  </span>
+                                ) : booking.approvalStatus === 'rejected' ? (
+                                  <span className="w-fit text-[9px] font-bold uppercase px-2 py-0.5 rounded flex items-center bg-destructive/10 text-destructive border border-destructive/20">
+                                    <XCircle className="w-2.5 h-2.5 text-destructive shrink-0 mr-1" />
+                                    <span>Rejected</span>
+                                  </span>
+                                ) : booking.paymentStatus === 'completed' ? (
+                                  <span className="w-fit text-[9px] font-bold uppercase px-2 py-0.5 rounded flex items-center bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20">
+                                    <Clock className="w-2.5 h-2.5 text-orange-500 shrink-0 mr-1" />
+                                    <span>Reviewing</span>
+                                  </span>
+                                ) : null}
                               </div>
                             </td>
                             <td className="py-4 text-right">
                               <div className="flex items-center justify-end space-x-2">
-                                {booking.paymentStatus !== 'completed' && (
+                                {booking.paymentStatus === 'pending' && (
                                   <button
                                     onClick={() => handleVerifyPayment(booking.bookingId)}
                                     className="flex items-center space-x-1 px-2.5 py-1.5 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border border-blue-500/30 hover:border-blue-500 text-blue-400 hover:text-blue-300 font-bold rounded-xl transition-all text-[10px] cursor-pointer shadow-sm"
@@ -605,13 +745,6 @@ export default function AdvertiserDashboard() {
                                     <span className="hidden md:inline">Verify</span>
                                   </button>
                                 )}
-                                <button
-                                  onClick={() => setPreviewVideoUrl(resolveMediaUrl(booking.mediaUrl))}
-                                  className="p-1.5 bg-primary/10 hover:bg-primary/20 border border-primary/20 rounded-xl text-primary transition-all cursor-pointer flex items-center justify-center"
-                                  title="Play Video Asset"
-                                >
-                                  <Play className="w-3.5 h-3.5 fill-current" />
-                                </button>
                                 <button
                                   onClick={() => setExpandedCampaigns(prev => ({
                                     ...prev,
@@ -655,7 +788,7 @@ export default function AdvertiserDashboard() {
                                       </div>
                                     )}
                                   </div>
- 
+
                                   {/* Right Panel Video Preview */}
                                   <div className="flex flex-col space-y-2">
                                     <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Video Asset Preview</span>
@@ -689,269 +822,337 @@ export default function AdvertiserDashboard() {
           </div>
         )}
 
-        {/* 2. New Booking Flow Tab */}
+        {/* 2. Configured Ad Rates Tab */}
+        {activeTab === 'rates' && (
+          <div className="animate-fade-in max-w-2xl mx-auto p-4 rounded-xl bg-card border border-[#0069a8]/80 shadow-[0_0_20px_rgba(0,105,168,0.3)] dark:shadow-[0_0_35px_rgba(0,105,168,0.55)] space-y-6">
+            <div className="flex items-center justify-between border-b border-border/40 pb-4">
+              <div className="space-y-1">
+                <h1 className="font-outfit text-2xl font-black text-foreground">Configured Ad Rates</h1>
+                <p className="text-muted-foreground text-xs font-semibold">Standard package prices set by platform administrators.</p>
+              </div>
+
+              {/* Device Tabs for Tablet vs Screen */}
+              <div className="flex bg-muted p-1 rounded-xl border border-border/40 text-[10px] font-bold">
+                <button
+                  onClick={() => setRateTab('tablet')}
+                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${rateTab === 'tablet'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                >
+                  Tablets
+                </button>
+                <button
+                  onClick={() => setRateTab('screen')}
+                  className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${rateTab === 'screen'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                >
+                  Screens
+                </button>
+              </div>
+            </div>
+
+            {(() => {
+              const filteredRates = rates.filter(r => r.deviceType === rateTab);
+              return filteredRates.length === 0 ? (
+                <div className="py-8 text-center text-xs text-muted-foreground font-medium italic border border-dashed border-border/40 rounded-xl">
+                  No rate configurations found for {rateTab === 'tablet' ? 'tablets' : 'screens'}.
+                </div>
+              ) : (
+                <div className="overflow-x-auto m-0 p-0 bg-transparent border-none">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
+                        <th className="pb-3 pr-2">Duration</th>
+                        <th className="pb-3 pr-2">Frequency</th>
+                        <th className="pb-3 text-right">Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/40">
+                      {filteredRates.map((rate, index) => (
+                        <tr key={index} className="hover:bg-muted/10">
+                          <td className="py-3 pr-2">
+                            <div className="flex items-center space-x-1.5 font-semibold text-foreground">
+                              <Calendar className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              <span>{rate.durationDays} Days</span>
+                            </div>
+                          </td>
+                          <td className="py-3 pr-2 font-semibold capitalize text-foreground">
+                            {rate.frequency}
+                          </td>
+                          <td className="py-3 font-extrabold text-foreground text-right">
+                            ₹{rate.amount / 100}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* 3. New Booking Flow Tab */}
         {activeTab === 'new-booking' && (
-          <div className="animate-fade-in">
+          <div className="animate-fade-in max-w-4xl mx-auto p-4 rounded-xl bg-card border border-[#0069a8]/80 shadow-[0_0_20px_rgba(0,105,168,0.3)] dark:shadow-[0_0_35px_rgba(0,105,168,0.55)] space-y-6">
             <h1 className="font-outfit text-2xl font-black text-foreground mb-2">Book Advertising Spot</h1>
             <p className="text-muted-foreground text-xs font-semibold mb-8">Target specific local dining tables or digital display screens in three simple steps.</p>
 
-            <div className="grid lg:grid-cols-3 gap-8">
-              {/* Selector and Settings */}
-              <div className="lg:col-span-2 space-y-6">
-                {/* Step 1: Location selection */}
-                <div className="p-6 rounded-2xl bg-card/10 border border-border/40 space-y-6">
-                  <h3 className="font-outfit text-lg font-bold text-foreground flex items-center">
-                    <MapPin className="w-5 h-5 mr-2 text-primary shrink-0" />
-                    <span>Select Target Venue</span>
-                  </h3>
+            {/* Step 1: Location selection - Flushed and Borderless */}
+            <div className="space-y-4 m-0 p-0 border-none bg-transparent">
+              <h3 className="font-outfit text-lg font-black text-foreground flex items-center">
+                <MapPin className="w-5 h-5 mr-2 text-primary shrink-0" />
+                <span>Select Target Venue</span>
+              </h3>
 
-                  <div className="grid md:grid-cols-4 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select State</label>
-                      <select
-                        value={selectedState}
-                        onChange={(e) => {
-                          setSelectedState(e.target.value);
-                          fetchCities(e.target.value);
-                        }}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
-                      >
-                        <option value="">-- State --</option>
-                        {states.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </div>
+              <div className="space-y-4">
+                {/* Row 1: State & City */}
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select State</label>
+                    <select
+                      value={selectedState}
+                      onChange={(e) => {
+                        setSelectedState(e.target.value);
+                        fetchCities(e.target.value);
+                      }}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
+                    >
+                      <option value="">-- State --</option>
+                      {states.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
 
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select City</label>
-                      <select
-                        value={selectedCity}
-                        disabled={!selectedState}
-                        onChange={(e) => {
-                          setSelectedCity(e.target.value);
-                          fetchOutlets(e.target.value);
-                        }}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
-                      >
-                        <option value="">-- City --</option>
-                        {cities.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select Outlet Name</label>
-                      <select
-                        value={selectedOutletName}
-                        disabled={!selectedCity}
-                        onChange={(e) => {
-                          const name = e.target.value;
-                          setSelectedOutletName(name);
-
-                          // Find matching outlets
-                          const matches = outlets.filter(o => o.outletName === name);
-                          const devices = matches.map(o => o.deviceType);
-                          setAvailableDeviceTypes(devices);
-
-                          // Reset device type and selectedOutlet
-                          setSelectedDeviceType('');
-                          setSelectedOutlet(null);
-                        }}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
-                      >
-                        <option value="">-- Outlet --</option>
-                        {Array.from(new Set(outlets.map(o => o.outletName))).map(name => (
-                          <option key={name} value={name}>{name}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select Display Type</label>
-                      <select
-                        value={selectedDeviceType}
-                        disabled={!selectedOutletName}
-                        onChange={(e) => {
-                          const devType = e.target.value;
-                          setSelectedDeviceType(devType);
-
-                          // Find specific outlet matching name and device type
-                          const matched = outlets.find(o => o.outletName === selectedOutletName && o.deviceType === devType);
-                          setSelectedOutlet(matched || null);
-                          setQuantity('1');
-                        }}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
-                      >
-                        <option value="">-- Display Type --</option>
-                        {availableDeviceTypes.map(type => (
-                          <option key={type} value={type}>
-                            {type === 'tablet' ? 'Tabletop Tablet' : 'Wall Screen'}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select City</label>
+                    <select
+                      value={selectedCity}
+                      disabled={!selectedState}
+                      onChange={(e) => {
+                        setSelectedCity(e.target.value);
+                        fetchOutlets(e.target.value);
+                      }}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
+                    >
+                      <option value="">-- City --</option>
+                      {cities.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
                   </div>
                 </div>
 
-                {/* Step 2: Campaign Settings */}
-                <div className="p-6 rounded-2xl bg-card/10 border border-border/40 space-y-6">
-                  <h3 className="font-outfit text-lg font-bold text-foreground flex items-center">
-                    <Video className="w-5 h-5 mr-2 text-primary shrink-0" />
-                    <span>Ad Details & Schedule</span>
-                  </h3>
+                {/* Row 2: Outlet Name & Display Type */}
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select Outlet Name</label>
+                    <select
+                      value={selectedOutletName}
+                      disabled={!selectedCity}
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        setSelectedOutletName(name);
 
-                  <form onSubmit={handleInitiateBooking} className="space-y-6">
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Media File Asset</label>
+                        // Find matching outlets
+                        const matches = outlets.filter(o => o.outletName === name);
+                        const devices = matches.map(o => o.deviceType);
+                        setAvailableDeviceTypes(devices);
 
-                      <div className="space-y-4">
-                        {/* File Upload Box — disabled until device type is selected */}
-                        <div className="flex items-center space-x-3">
-                          {!selectedDeviceType ? (
-                            <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-border/40 rounded-xl py-6 opacity-50 cursor-not-allowed">
-                              <Upload className="w-5 h-5 text-muted-foreground mb-2" />
-                              <span className="text-xs font-bold text-foreground">
-                                Select a Display Type first to upload
-                              </span>
-                              <span className="text-[10px] text-muted-foreground mt-1">Tablet: 800×1280 portrait · Screen: 1920×1080 landscape</span>
-                            </div>
-                          ) : (
-                            <label className="flex-1 flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-6 cursor-pointer transition-all">
-                              <Upload className="w-5 h-5 text-muted-foreground mb-2" />
-                              <span className="text-xs font-bold text-foreground">
-                                {uploading ? 'Uploading Video...' : 'Upload Video File (.mp4, .webm)'}
-                              </span>
-                              <span className="text-[10px] text-muted-foreground mt-1">
-                                Will be transcoded to {selectedDeviceType === 'tablet' ? '800×1280 portrait' : '1920×1080 landscape'}
-                              </span>
-                              <input
-                                type="file"
-                                accept="video/mp4,video/webm"
-                                onChange={handleFileUpload}
-                                disabled={uploading}
-                                className="hidden"
+                        // Reset device type and selectedOutlet
+                        setSelectedDeviceType('');
+                        setSelectedOutlet(null);
+                      }}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
+                    >
+                      <option value="">-- Outlet --</option>
+                      {Array.from(new Set(outlets.map(o => o.outletName))).map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select Display Type</label>
+                    <select
+                      value={selectedDeviceType}
+                      disabled={!selectedOutletName}
+                      onChange={(e) => {
+                        const devType = e.target.value;
+                        setSelectedDeviceType(devType);
+
+                        // Find specific outlet matching name and device type
+                        const matched = outlets.find(o => o.outletName === selectedOutletName && o.deviceType === devType);
+                        setSelectedOutlet(matched || null);
+                        setQuantity('1');
+                      }}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
+                    >
+                      <option value="">-- Display Type --</option>
+                      {availableDeviceTypes.map(type => (
+                        <option key={type} value={type}>
+                          {type === 'tablet' ? 'Tabletop Tablet' : 'Wall Screen'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 2: Campaign Settings - Flushed and Borderless */}
+            <div className="space-y-4 m-0 p-0 border-none bg-transparent pt-4">
+              <h3 className="font-outfit text-lg font-black text-foreground flex items-center">
+                <Video className="w-5 h-5 mr-2 text-primary shrink-0" />
+                <span>Ad Details & Schedule</span>
+              </h3>
+
+              <form onSubmit={handleInitiateBooking} className="grid md:grid-cols-12 gap-8 items-start">
+                {/* Left Column: Stacked settings inputs (col-span-5) */}
+                <div className="md:col-span-5 space-y-4">
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Quantity of Devices</label>
+                    <input
+                      type="text"
+                      required
+                      value={quantity}
+                      onChange={(e) => handleQuantityChange(e.target.value)}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                    {selectedOutlet && (
+                      <p className="text-[10px] text-muted-foreground mt-1.5 font-semibold">
+                        Max available: {selectedOutlet.quantity}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Duration (Days)</label>
+                    <select
+                      value={adDurationDays}
+                      onChange={(e) => setAdDurationDays(parseInt(e.target.value, 10))}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
+                    >
+                      <option value={7}>7 Days Plan</option>
+                      <option value={30}>30 Days Plan</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Frequency</label>
+                    <select
+                      value={frequency}
+                      onChange={(e) => setFrequency(e.target.value)}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
+                    >
+                      <option value="hourly">Once Every Hour</option>
+                      <option value="continuous">Continuous Loop</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Right Column: Video Upload, URL input, and Aspect-Ratio Preview (col-span-7) */}
+                <div className="md:col-span-7 space-y-4">
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Media File Asset</label>
+                    <div className="space-y-3">
+                      {/* Compact upload box */}
+                      {!selectedDeviceType ? (
+                        <div className="flex flex-col items-center justify-center border border-dashed border-border/40 rounded-xl py-4 opacity-50 cursor-not-allowed text-center bg-card/5">
+                          <Upload className="w-4 h-4 text-muted-foreground mb-1" />
+                          <span className="text-[10px] font-bold text-foreground">Select Display Type first to upload</span>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <label className="flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-4 cursor-pointer transition-all text-center bg-card/5">
+                            <Upload className="w-4 h-4 text-muted-foreground mb-1" />
+                            <span className="text-[10px] font-bold text-foreground">
+                              {uploading ? (
+                                uploadProgress < 100
+                                  ? `Uploading (${uploadProgress}%)...`
+                                  : 'Processing Video...'
+                              ) : (
+                                'Upload Video File (.mp4, .webm)'
+                              )}
+                            </span>
+                            <input
+                              type="file"
+                              accept="video/mp4,video/webm"
+                              onChange={handleFileUpload}
+                              disabled={uploading}
+                              className="hidden"
+                            />
+                          </label>
+                          {uploading && (
+                            <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className={`h-1.5 rounded-full transition-all duration-300 ${uploadProgress === 100
+                                  ? 'bg-primary animate-pulse w-full'
+                                  : 'bg-primary'
+                                  }`}
+                                style={{ width: uploadProgress === 100 ? '100%' : `${uploadProgress}%` }}
                               />
-                            </label>
+                            </div>
                           )}
                         </div>
+                      )}
 
-                        {/* Or URL input */}
-                        <div className="relative">
-                          <input
-                            type="text"
-                            placeholder="Or, paste video URL (e.g. https://mybucket.com/ads/commercial.mp4)"
-                            value={mediaUrl}
-                            onChange={(e) => setMediaUrl(e.target.value)}
-                            className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                          />
-                        </div>
+                      {/* URL input */}
+                      <input
+                        type="text"
+                        placeholder="Or, paste video URL"
+                        value={mediaUrl}
+                        onChange={(e) => setMediaUrl(e.target.value)}
+                        className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                      />
 
-                        {/* Video preview */}
-                        {mediaUrl && (
-                          <div className="p-3 bg-muted/40 rounded-xl border border-border/40">
-                            <p className="text-[10px] font-bold text-muted-foreground mb-2 uppercase">Video Preview</p>
+                      {/* Video preview with device responsive aspect ratio */}
+                      {mediaUrl && (
+                        <div className="space-y-1.5 animate-fade-in">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[9px] font-bold text-muted-foreground uppercase">Aspect-Ratio Preview</p>
+                            <button
+                              type="button"
+                              onClick={() => setMediaUrl('')}
+                              className="text-[9px] font-bold text-destructive hover:underline cursor-pointer flex items-center space-x-1"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Remove Video</span>
+                            </button>
+                          </div>
+                          <div className={`mx-auto w-full max-w-[200px] rounded-xl border border-border/40 bg-black overflow-hidden relative shadow-md ${selectedDeviceType === 'tablet'
+                            ? 'aspect-[3/4]'
+                            : 'aspect-[16/9]'
+                            }`}>
                             <video
                               src={resolveMediaUrl(mediaUrl)}
                               controls
-                              className="w-full max-h-40 rounded-lg bg-black"
+                              className="w-full h-full object-contain"
                             />
-                            <p className="text-[9px] text-primary font-semibold truncate mt-2">{mediaUrl}</p>
                           </div>
-                        )}
-                      </div>
+                          <p className="text-[8px] text-primary font-semibold truncate text-center mt-1">{mediaUrl}</p>
+                        </div>
+                      )}
                     </div>
-
-                    <div className="grid md:grid-cols-3 gap-6">
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Quantity of Devices</label>
-                        <input
-                          type="text"
-                          required
-                          value={quantity}
-                          onChange={(e) => handleQuantityChange(e.target.value)}
-                          className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                        />
-                        {selectedOutlet && (
-                          <p className="text-[10px] text-muted-foreground mt-1.5 font-semibold">
-                            Max available: {selectedOutlet.quantity}
-                          </p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Duration (Days)</label>
-                        <select
-                          value={adDurationDays}
-                          onChange={(e) => setAdDurationDays(parseInt(e.target.value, 10))}
-                          className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
-                        >
-                          <option value={7}>7 Days Plan</option>
-                          <option value={30}>30 Days Plan</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Frequency</label>
-                        <select
-                          value={frequency}
-                          onChange={(e) => setFrequency(e.target.value)}
-                          className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
-                        >
-                          <option value="hourly">Once Every Hour</option>
-                          <option value="continuous">Continuous Loop</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={computedAmount === 0 || uploading}
-                      className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground font-bold py-4 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg glow-hover cursor-pointer"
-                    >
-                      <CreditCard className="w-4 h-4" />
-                      <span>Pay via PhonePe Payment Gateway</span>
-                    </button>
-                  </form>
+                  </div>
                 </div>
-              </div>
 
-              {/* Checkout Summary Card */}
-              <div className="p-6 rounded-2xl bg-card/10 border border-border/40 h-fit space-y-6">
-                <h3 className="font-outfit text-lg font-bold text-foreground border-b border-border/40 pb-3">Checkout Summary</h3>
-
-                {selectedOutlet ? (
-                  <div className="space-y-4 text-xs animate-fade-in">
-                    <div>
-                      <p className="text-muted-foreground font-bold uppercase">Target Outlet</p>
-                      <p className="font-bold text-foreground text-sm mt-0.5">{selectedOutlet.outletName}</p>
-                      <p className="text-[10px] text-muted-foreground font-semibold">{selectedOutlet.doorNo}, {selectedOutlet.street}, {selectedOutlet.city}</p>
-                    </div>
-
-                    <div>
-                      <p className="text-muted-foreground font-bold uppercase">Hardware Type</p>
-                      <p className="font-bold text-foreground capitalize mt-0.5">{selectedOutlet.deviceType} display</p>
-                      <p className="text-[10px] text-muted-foreground font-semibold">Configured qty: {quantity} out of {selectedOutlet.quantity} available</p>
-                    </div>
-
-                    <div className="border-t border-border/40 pt-4 space-y-2">
-                      <div className="flex justify-between font-semibold">
-                        <span className="text-muted-foreground">Plan Rate</span>
-                        <span className="text-foreground">₹{(computedAmount / (parseInt(quantity, 10) || 1)) / 100}</span>
-                      </div>
-                      <div className="flex justify-between font-semibold">
-                        <span className="text-muted-foreground">Multiplier</span>
-                        <span className="text-foreground">x{parseInt(quantity, 10) || 0}</span>
-                      </div>
-                      <div className="flex justify-between border-t border-border/40 pt-3 text-sm font-bold">
-                        <span className="text-muted-foreground">Total Cost</span>
-                        <span className="text-primary">₹{computedAmount / 100}</span>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-xs text-muted-foreground font-semibold leading-relaxed">
-                    Select a target outlet and schedule criteria to compute payment summary.
-                  </div>
-                )}
-              </div>
+                {/* Submit Pay button */}
+                <div className="col-span-full pt-2">
+                  <button
+                    type="submit"
+                    disabled={computedAmount === 0 || uploading}
+                    className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground font-bold py-4 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg glow-hover cursor-pointer"
+                  >
+                    <CreditCard className="w-4 h-4" />
+                    <span>
+                      {computedAmount > 0
+                        ? `Pay ₹${computedAmount / 100} via PhonePe Payment Gateway`
+                        : 'Pay via PhonePe Payment Gateway'}
+                    </span>
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}
@@ -960,7 +1161,7 @@ export default function AdvertiserDashboard() {
       {/* Become Host Modal */}
       {showBecomeHostModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="w-full max-w-md bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative space-y-6">
+          <div className="w-full max-w-md bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative">
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20 shrink-0">
                 <Building className="w-5 h-5 text-white" />
@@ -970,13 +1171,13 @@ export default function AdvertiserDashboard() {
                 <p className="text-[10px] text-muted-foreground font-semibold mt-0.5">Apply for tabletop devices/screens at your outlet</p>
               </div>
             </div>
- 
+
             <p className="text-xs text-muted-foreground font-medium leading-relaxed">
               By activating the Host profile, you can apply to host tablet ordering kiosks and wall display screens at your physical venue, manage your digital restaurant menu catalogs, and monitor live customer orders.
               <br /><br />
               This will use your same phone number and credentials, allowing you to seamlessly switch between your Advertiser and Host dashboards.
             </p>
- 
+
             <div className="flex space-x-3 pt-2">
               <button
                 onClick={handleBecomeHost}
@@ -996,7 +1197,7 @@ export default function AdvertiserDashboard() {
           </div>
         </div>
       )}
- 
+
       {/* Video Preview Modal */}
       {previewVideoUrl && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
