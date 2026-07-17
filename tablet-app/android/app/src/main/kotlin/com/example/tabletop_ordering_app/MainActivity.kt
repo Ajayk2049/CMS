@@ -177,7 +177,7 @@ class NativeVideoView(
         activePlayer.setVideoURI(uri)
 
         activePlayer.setOnPreparedListener { mp ->
-            mp.isLooping = (playlist.size == 1)
+            mp.isLooping = false
             if (isPlaying) {
                 activePlayer.start()
                 preloadNext()
@@ -185,15 +185,15 @@ class NativeVideoView(
         }
 
         activePlayer.setOnCompletionListener {
-            methodChannel?.invokeMethod("onVideoComplete", mapOf("path" to path))
-            if (playlist.size > 1 && isPlaying) {
+            methodChannel?.invokeMethod("onVideoComplete", mapOf("path" to playlist[currentIndex]))
+            if (isPlaying) {
                 swapPlayers()
             }
         }
 
         activePlayer.setOnErrorListener { _, what, extra ->
             methodChannel?.invokeMethod("onVideoError", mapOf("path" to path, "error" to "what=$what extra=$extra"))
-            if (playlist.size > 1 && isPlaying) {
+            if (isPlaying) {
                 advanceIndex()
                 playCurrent()
             }
@@ -207,12 +207,12 @@ class NativeVideoView(
         val activePlayer = getActivePlayer()
         activePlayer.setVideoURI(Uri.parse(path))
         activePlayer.setOnPreparedListener { mp ->
-            mp.isLooping = (playlist.size == 1)
+            mp.isLooping = false
         }
     }
 
     private fun preloadNext() {
-        if (playlist.size <= 1) return
+        if (playlist.isEmpty()) return
         val nextIndex = (currentIndex + 1) % playlist.size
         val nextPath = playlist[nextIndex]
         val bgPlayer = getBackgroundPlayer()
@@ -238,13 +238,13 @@ class NativeVideoView(
         val currentPath = playlist[currentIndex]
         bgPlayer.setOnCompletionListener {
             methodChannel?.invokeMethod("onVideoComplete", mapOf("path" to currentPath))
-            if (playlist.size > 1 && isPlaying) {
+            if (isPlaying) {
                 swapPlayers()
             }
         }
         bgPlayer.setOnErrorListener { _, what, extra ->
             methodChannel?.invokeMethod("onVideoError", mapOf("path" to currentPath, "error" to "what=$what extra=$extra"))
-            if (playlist.size > 1 && isPlaying) {
+            if (isPlaying) {
                 advanceIndex()
                 playCurrent()
             }

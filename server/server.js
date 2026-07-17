@@ -27,6 +27,8 @@ const HostApplication = require('./models/HostApplication');
 
 // WebSocket client sockets map (merchantId -> ws socket)
 const merchantSockets = new Map();
+global.merchantSockets = merchantSockets;
+global.deviceSockets = new Map();
 
 // ----------------------------------------------------
 // Fastify Setup (REST & WebSocket)
@@ -77,7 +79,7 @@ async function startFastify() {
     })
   });
 
-  // WebSocket route for Merchant Live Orders
+  // WebSocket routes for Merchant & Device
   fastify.register(async function (fastifyInstance) {
     fastifyInstance.get('/ws/orders', { websocket: true }, (connection, req) => {
       const token = req.query.token;
@@ -115,6 +117,47 @@ async function startFastify() {
             socket.close();
           } catch (wsErr) {
             console.error('[WS] Failed to send error or close socket:', wsErr);
+          }
+        }
+      }
+    });
+
+    fastifyInstance.get('/ws/device', { websocket: true }, (connection, req) => {
+      const token = req.query.token;
+      const socket = connection.socket || connection;
+      if (!token) {
+        socket.send(JSON.stringify({ error: 'Authentication token is required' }));
+        socket.close();
+        return;
+      }
+
+      try {
+        const decoded = jwt.verify(token, config.jwtSecret);
+        const { deviceId } = decoded;
+        if (!deviceId) {
+          socket.send(JSON.stringify({ error: 'Invalid token: deviceId required' }));
+          socket.close();
+          return;
+        }
+
+        global.deviceSockets.set(deviceId, socket);
+        console.log(`[WS] Device connected: ${deviceId}`);
+
+        socket.send(JSON.stringify({ event: 'connected', message: 'Connected to device update feed' }));
+
+        socket.on('close', () => {
+          global.deviceSockets.delete(deviceId);
+          console.log(`[WS] Device disconnected: ${deviceId}`);
+        });
+
+      } catch (err) {
+        console.error('[WS] Device connection error:', err);
+        if (socket) {
+          try {
+            socket.send(JSON.stringify({ error: 'Invalid authentication token' }));
+            socket.close();
+          } catch (wsErr) {
+            console.error('[WS] Failed to close device socket:', wsErr);
           }
         }
       }
@@ -372,10 +415,55 @@ const deviceServiceHandlers = {
       device.lastHeartbeat = new Date();
       await device.save();
 
-      // Return status check command
+      // Check for active table session state
+      let tableSessionJson = '';
+      const activeOrder = await Order.findOne({
+        deviceId,
+        tableStatus: { $in: ['active', 'close_table'] }
+      }).sort({ createdAt: -1 });
+      if (activeOrder) {
+        const app = await HostApplication.findById(activeOrder.hostApplicationId);
+        const upiId = app?.upiId || '';
+        const payeeName = app?.payeeName || '';
+        const amountRs = (activeOrder.totalAmount / 100).toFixed(2);
+        let upiUrl = '';
+        if (upiId) {
+          upiUrl = `upi://pay?pa=${upiId}`;
+          if (payeeName) {
+            upiUrl += `&pn=${encodeURIComponent(payeeName)}`;
+          }
+          upiUrl += `&am=${amountRs}&cu=INR`;
+        }
+        tableSessionJson = JSON.stringify({
+          status: activeOrder.tableStatus,
+          orderId: activeOrder.orderId,
+          amount: activeOrder.totalAmount,
+          upiUrl,
+          orderStatus: activeOrder.orderStatus,
+          tableNumber: activeOrder.tableNumber
+        });
+      } else {
+        // Check if order was completed (payment received)
+        const completedOrder = await Order.findOne({
+          deviceId,
+          tableStatus: 'completed',
+          updatedAt: { $gt: new Date(Date.now() - 30000) } // within last 30s
+        }).sort({ updatedAt: -1 });
+        if (completedOrder) {
+          tableSessionJson = JSON.stringify({
+            status: 'completed',
+            orderId: completedOrder.orderId
+          });
+          // Mark as handled so it doesn't repeat
+          completedOrder.tableStatus = 'completed_acked';
+          await completedOrder.save();
+        }
+      }
+
       callback(null, {
         success: true,
-        command: 'normal'
+        command: 'normal',
+        tableSessionJson
       });
     } catch (err) {
       const code = err.code || grpc.status.INTERNAL;
@@ -448,41 +536,58 @@ const orderServiceHandlers = {
       }
       const merchantId = device.hostApplicationId.userId;
 
-      const orderId = `ORD_K_${uuidv4().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
-      const transactionId = `TXN_ORD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
-
-      // Save order
-      const order = new Order({
-        orderId,
-        merchantId,
-        hostApplicationId,
+      // Check if there is already an active order session on this table device
+      let order = await Order.findOne({
         deviceId,
-        tableNumber,
-        items: items.map(item => ({
-          itemId: item.itemId,
-          name: item.name,
-          quantity: item.quantity,
-          price: item.price
-        })),
-        totalAmount,
-        paymentStatus: 'pending',
-        orderStatus: 'placed',
-        transactionId
+        tableStatus: 'active'
       });
-      await order.save();
 
-      // Log transaction ledger entry
-      const txn = new PhonePeTransaction({
-        transactionId,
-        orderId,
-        userId: merchantId,
-        amount: totalAmount,
-        transactionType: 'payment',
-        status: 'pending'
-      });
-      await txn.save();
+      if (order) {
+        // Merge items into existing active order
+        items.forEach(newItem => {
+          const existingItem = order.items.find(i => i.itemId === newItem.itemId);
+          if (existingItem) {
+            existingItem.quantity += newItem.quantity;
+          } else {
+            order.items.push({
+              itemId: newItem.itemId,
+              name: newItem.name,
+              quantity: newItem.quantity,
+              price: newItem.price
+            });
+          }
+        });
+        // Add new items amount to totalAmount
+        order.totalAmount += Number(totalAmount);
+        // Reset orderStatus to 'placed' so the kitchen knows new items are added to prepare
+        order.orderStatus = 'placed';
+        
+        await order.save();
+      } else {
+        // Create a new order if no active session exists
+        const orderId = `ORD_K_${uuidv4().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
 
-      // Trigger Webhook/WebSocket notification to merchant dashboard
+        order = new Order({
+          orderId,
+          merchantId,
+          hostApplicationId,
+          deviceId,
+          tableNumber,
+          items: items.map(item => ({
+            itemId: item.itemId,
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price
+          })),
+          totalAmount: Number(totalAmount),
+          paymentStatus: 'pending',
+          orderStatus: 'placed',
+          tableStatus: 'active'
+        });
+        await order.save();
+      }
+
+      // Notify merchant dashboard via WebSocket
       const wsClient = merchantSockets.get(merchantId.toString());
       if (wsClient) {
         wsClient.send(JSON.stringify({
@@ -491,21 +596,11 @@ const orderServiceHandlers = {
         }));
       }
 
-      // Initiate payment link via PhonePe
-      const redirectUrl = `${config.merchantRedirectUrl}?orderId=${orderId}`;
-      const paymentResult = await phonePeService.initiatePayment({
-        transactionId,
-        userId: merchantId,
-        amount: totalAmount,
-        redirectUrl,
-        phone: null
-      });
-
       callback(null, {
         success: true,
-        message: 'Order created, payment initialized',
-        orderId,
-        paymentUrl: paymentResult.paymentUrl
+        message: 'Order placed',
+        orderId: order.orderId,
+        paymentUrl: ''
       });
     } catch (err) {
       console.error('gRPC CreateOrder Error:', err.message);
@@ -522,57 +617,6 @@ const orderServiceHandlers = {
       const order = await Order.findOne({ orderId });
       if (!order) {
         return callback({ code: grpc.status.NOT_FOUND, message: `Order ${orderId} not found` });
-      }
-
-      // If payment is pending, query PhonePe status check
-      if (order.paymentStatus === 'pending') {
-        let mappedStatus = 'PENDING';
-        let checkResult = { status: 'PENDING', code: 'PAYMENT_PENDING', raw: null };
-        try {
-          checkResult = await phonePeService.checkTransactionStatus(order.transactionId);
-          mappedStatus = checkResult.status; // COMPLETED, FAILED, PENDING
-
-          console.log(`[gRPC Order Status Check for ${orderId}]:`, checkResult);
-
-          if (config.demoMode && (mappedStatus === 'FAILED' || checkResult.code === 'TRANSACTION_NOT_FOUND')) {
-            mappedStatus = 'COMPLETED';
-            checkResult.code = 'PAYMENT_SUCCESS';
-          }
-        } catch (err) {
-          console.error('[gRPC Order Status Check Error]:', err.message);
-          if (config.demoMode) {
-            mappedStatus = 'COMPLETED';
-            checkResult.code = 'PAYMENT_SUCCESS';
-          }
-        }
-
-        if (mappedStatus === 'COMPLETED') {
-          // Update transaction ledger
-          await PhonePeTransaction.updateOne(
-            { transactionId: order.transactionId },
-            {
-              status: 'completed',
-              responseCode: checkResult.code || 'PAYMENT_SUCCESS',
-              rawCallbackPayload: checkResult.raw || { demoMode: true }
-            }
-          );
-
-          // Update order status
-          order.paymentStatus = 'completed';
-          await order.save();
-        } else if (mappedStatus === 'FAILED') {
-          await PhonePeTransaction.updateOne(
-            { transactionId: order.transactionId },
-            {
-              status: 'failed',
-              responseCode: checkResult.code || 'PAYMENT_ERROR',
-              rawCallbackPayload: checkResult.raw || { demoMode: true }
-            }
-          );
-
-          order.paymentStatus = 'failed';
-          await order.save();
-        }
       }
 
       callback(null, {

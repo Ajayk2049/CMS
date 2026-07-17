@@ -59,37 +59,7 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
           return item.category.toLowerCase() == widget.selectedCategory.toLowerCase();
         }).toList();
 
-        // Subcategory filters for Beverages/Drinks
-        final hasSubcategories = widget.selectedCategory.toLowerCase() == 'beverages' || 
-                                 widget.selectedCategory.toLowerCase() == 'drinks';
-
-        List<MenuItem> filteredItems = categoryItems;
-        if (hasSubcategories) {
-          filteredItems = categoryItems.where((item) {
-            final name = item.name.toLowerCase();
-            if (_activeSubcategory == 'Hot Drinks') {
-              return name.contains('latte') || name.contains('coffee') || name.contains('tea') || 
-                     name.contains('espresso') || name.contains('cappuccino') || name.contains('hot');
-            } else if (_activeSubcategory == 'Cold Drinks') {
-              return name.contains('iced') || name.contains('cold') || name.contains('shake') || 
-                     name.contains('soda') || name.contains('juice') || name.contains('smoothie') || 
-                     name.contains('mojito') || name.contains('lemonade') || name.contains('beer');
-            }
-            return true; // 'All'
-          }).toList();
-        }
-
-        final totalItems = filteredItems.length;
-        const itemsPerPage = 6;
-        final totalPages = (totalItems / itemsPerPage).ceil();
-
-        // Reset page if out of bounds
-        if (_currentPage >= totalPages && totalPages > 0) {
-          _currentPage = totalPages - 1;
-        }
-
-        // Paginate items (max 6)
-        final pagedItems = filteredItems.skip(_currentPage * itemsPerPage).take(itemsPerPage).toList();
+        final totalItems = categoryItems.length;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -100,92 +70,59 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        "${widget.selectedCategory} Picks",
-                        style: kCategoryHeaderStyle,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _getCategorySubtitle(widget.selectedCategory),
-                        style: kCardDescriptionStyle.copyWith(fontSize: 13),
-                      ),
-                    ],
-                  ),
-                  // Subcategories (Hot / Cold Drinks)
-                  if (hasSubcategories)
-                    Row(
-                      children: ['All', 'Hot Drinks', 'Cold Drinks'].map((sub) {
-                        final isSelected = _activeSubcategory == sub;
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _activeSubcategory = sub;
-                              _currentPage = 0;
-                            });
-                          },
-                          child: Container(
-                            margin: const EdgeInsets.only(left: 8),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: isSelected ? kAccentBlue : kCardBg,
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Colors.black12,
-                                  blurRadius: 4,
-                                  offset: Offset(0, 2),
-                                )
-                              ],
-                            ),
-                            child: Text(
-                              sub,
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: isSelected ? Colors.white : kTextDark,
-                              ),
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                    )
-                  else
-                    // Item Count Pill
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: kSidebarBg,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Text(
-                        "$totalItems items",
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: kTextDark),
-                      ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "${widget.selectedCategory} Picks",
+                          style: kCategoryHeaderStyle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _getCategorySubtitle(widget.selectedCategory),
+                          style: kCardDescriptionStyle.copyWith(fontSize: 13),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
                     ),
+                  ),
+                  // Item Count Pill
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: kSidebarBg,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(
+                      "$totalItems items",
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: kTextDark),
+                    ),
+                  ),
                 ],
               ),
             ),
 
             // Grid items
             Expanded(
-              child: pagedItems.isEmpty
+              child: categoryItems.isEmpty
                   ? const Center(
                       child: Text(
-                        "No items match the selected subcategory.",
+                        "No items match the selected category.",
                         style: TextStyle(color: kTextGrey, fontSize: 16),
                       ),
                     )
                   : GridView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      padding: const EdgeInsets.only(left: 24, right: 24, bottom: 120),
                       gridDelegate: kMenuGridDelegate,
-                      itemCount: pagedItems.length,
-                      physics: const NeverScrollableScrollPhysics(), // Grid fits perfectly inside expanded
+                      itemCount: categoryItems.length,
+                      physics: const BouncingScrollPhysics(),
                       itemBuilder: (context, index) {
                         return _MenuCard(
-                          item: pagedItems[index],
+                          item: categoryItems[index],
                           cartNotifier: widget.cartNotifier,
                           serverHost: widget.serverHost,
                           imageCache: widget.imageCache,
@@ -193,73 +130,6 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
                       },
                     ),
             ),
-
-            // Pagination Controls at the bottom
-            if (totalPages > 1)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 24, top: 12),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Back button
-                    GestureDetector(
-                      onTap: _currentPage > 0
-                          ? () {
-                              setState(() {
-                                _currentPage--;
-                              });
-                            }
-                          : null,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _currentPage > 0 ? kCardBg : Colors.white24,
-                          boxShadow: _currentPage > 0
-                              ? const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))]
-                              : null,
-                        ),
-                        padding: const EdgeInsets.all(12),
-                        child: Icon(
-                          Icons.arrow_back_ios_new,
-                          color: _currentPage > 0 ? kAccentBlue : Colors.grey,
-                          size: 16,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 24),
-                    Text(
-                      "Page ${_currentPage + 1} of $totalPages",
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: kTextDark),
-                    ),
-                    const SizedBox(width: 24),
-                    // Next button
-                    GestureDetector(
-                      onTap: _currentPage < totalPages - 1
-                          ? () {
-                              setState(() {
-                                _currentPage++;
-                              });
-                            }
-                          : null,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: _currentPage < totalPages - 1 ? kCardBg : Colors.white24,
-                          boxShadow: _currentPage < totalPages - 1
-                              ? const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))]
-                              : null,
-                        ),
-                        padding: const EdgeInsets.all(12),
-                        child: Icon(
-                          Icons.arrow_forward_ios,
-                          color: _currentPage < totalPages - 1 ? kAccentBlue : Colors.grey,
-                          size: 16,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
           ],
         );
       },

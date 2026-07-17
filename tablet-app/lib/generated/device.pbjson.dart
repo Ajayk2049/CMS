@@ -71,13 +71,14 @@ const HeartbeatResponse$json = {
   '2': [
     {'1': 'success', '3': 1, '4': 1, '5': 8, '10': 'success'},
     {'1': 'command', '3': 2, '4': 1, '5': 9, '10': 'command'},
+    {'1': 'tableSessionJson', '3': 3, '4': 1, '5': 9, '10': 'tableSessionJson'},
   ],
 };
 
 /// Descriptor for `HeartbeatResponse`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List heartbeatResponseDescriptor = $convert.base64Decode(
     'ChFIZWFydGJlYXRSZXNwb25zZRIYCgdzdWNjZXNzGAEgASgIUgdzdWNjZXNzEhgKB2NvbW1hbm'
-    'QYAiABKAlSB2NvbW1hbmQ=');
+    'QYAiABKAlSB2NvbW1hbmQSKAoQdGFibGVTZXNzaW9uSnNvbhgDIAEoCVIOdGFibGVTZXNzaW9uSnNvbg==');
 
 @$core.Deprecated('Use adImpressionRequestDescriptor instead')
 const AdImpressionRequest$json = {

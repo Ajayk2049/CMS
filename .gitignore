@@ -45,6 +45,7 @@ sms_api.md
 user.md
 issues.md
 architecture.md
+.commandcode/
 
 # Flutter / Dart caches and generated files
 .dart_tool/
@@ -82,4 +83,6 @@ server/delete_dummies.js
 # Flow diagrams
 flow_diagram/
 Flow_Diagrams/
+
+
 

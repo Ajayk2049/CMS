@@ -5,6 +5,7 @@ import axios from 'axios';
 import { useRouter } from 'next/navigation';
 import {
   Building,
+  CreditCard,
   Form,
   UtensilsCrossed,
   Send,
@@ -25,7 +26,10 @@ import {
   ChevronUp,
   Settings,
   MonitorSmartphone,
-  Salad
+  Salad,
+  QrCode,
+  CheckCircle,
+  AlertCircle
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -140,7 +144,15 @@ export default function MerchantDashboard() {
   const [activeTab, setActiveTab] = useState('applications');
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast(null);
+    }, 4000);
+  };
   const [zipError, setZipError] = useState('');
   const [roleActionLoading, setRoleActionLoading] = useState(false);
   const [showBecomeAdvertiserModal, setShowBecomeAdvertiserModal] = useState(false);
@@ -186,6 +198,7 @@ export default function MerchantDashboard() {
     return '';
   });
   const approvedOutlets = applications.filter(app => app.status === 'approved' && app.requestTablet);
+  const hasApprovedVenue = applications.some(app => app.status === 'approved');
   const [devices, setDevices] = useState([]);
 
   // Menu Modal and editing states
@@ -228,6 +241,23 @@ export default function MerchantDashboard() {
   // Orders tab states (WebSocket)
   const [orders, setOrders] = useState([]);
   const wsRef = useRef(null);
+
+  // Payment tab states
+  const [paymentConfig, setPaymentConfig] = useState({ hasUpiId: false, upiId: '' });
+  const [paymentUpiInput, setPaymentUpiInput] = useState('');
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentOrders, setPaymentOrders] = useState([]);
+  const [paymentTab, setPaymentTab] = useState('config'); // 'config' or 'history'
+  const [showUpiModal, setShowUpiModal] = useState(false);
+  const [tempUpiInput, setTempUpiInput] = useState('');
+  const [isUpiVerified, setIsUpiVerified] = useState(false);
+  const [isVerifyingUpi, setIsVerifyingUpi] = useState(false);
+  const [savedUpiList, setSavedUpiList] = useState([]);
+  const [isUploadingQr, setIsUploadingQr] = useState(false);
+  const [tempPayeeName, setTempPayeeName] = useState('');
+  const [modalError, setModalError] = useState('');
+  const [modalInfo, setModalInfo] = useState('');
+  const [confirmingPaymentOrderId, setConfirmingPaymentOrderId] = useState(null);
 
   // Handle Theme
   useEffect(() => {
@@ -284,6 +314,29 @@ export default function MerchantDashboard() {
       localStorage.setItem('activeOrderVenueTab', activeOrderVenueTab);
     }
   }, [activeOrderVenueTab]);
+
+  useEffect(() => {
+    if (approvedOutlets.length > 0 && !selectedOutletId) {
+      setSelectedOutletId(approvedOutlets[0]._id);
+    }
+  }, [approvedOutlets, selectedOutletId]);
+
+  useEffect(() => {
+    if (selectedOutletId) {
+      const stored = localStorage.getItem(`merchant_upi_list_${selectedOutletId}`);
+      if (stored) {
+        setSavedUpiList(JSON.parse(stored));
+      } else {
+        if (paymentConfig.upiId) {
+          const initialList = [{ upiId: paymentConfig.upiId, payeeName: paymentConfig.payeeName || '', verified: true }];
+          setSavedUpiList(initialList);
+          localStorage.setItem(`merchant_upi_list_${selectedOutletId}`, JSON.stringify(initialList));
+        } else {
+          setSavedUpiList([]);
+        }
+      }
+    }
+  }, [selectedOutletId, paymentConfig.upiId]);
 
   useEffect(() => {
     const handleOutsideClick = (e) => {
@@ -344,6 +397,8 @@ export default function MerchantDashboard() {
 
     fetchApplications(storedToken);
     fetchDevices(storedToken);
+    fetchPaymentOrders(storedToken);
+    fetchLiveOrders(storedToken);
     setupWebSocket(storedToken);
 
     return () => {
@@ -356,7 +411,13 @@ export default function MerchantDashboard() {
   // Persist Active Tab
   useEffect(() => {
     localStorage.setItem('merchantActiveTab', activeTab);
-  }, [activeTab]);
+    if (activeTab === 'payment' && token) {
+      fetchPaymentOrders(token);
+      if (selectedOutletId) {
+        fetchPaymentConfig(token, selectedOutletId);
+      }
+    }
+  }, [activeTab, token, selectedOutletId]);
 
   // Fetch host applications
   const [isFetchingApps, setIsFetchingApps] = useState(false);
@@ -368,9 +429,30 @@ export default function MerchantDashboard() {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       setApplications(res.data.data);
-      const approvedApps = res.data.data.filter(app => app.status === 'approved' && app.deviceType === 'tablet');
+      const approvedApps = res.data.data.filter(app => app.status === 'approved' && app.requestTablet);
       if (approvedApps.length > 0) {
         setSelectedOutletId((prev) => prev || approvedApps[0]._id);
+      }
+      const hasApproved = res.data.data.some(app => app.status === 'approved');
+      const approvedTabletApp = res.data.data.find(app => app.status === 'approved' && app.requestTablet);
+      const savedTab = localStorage.getItem('merchantActiveTab');
+      if (hasApproved) {
+        if (approvedTabletApp) {
+          if (!savedTab || savedTab === 'applications' || savedTab === 'my-applications') {
+            setActiveTab('orders');
+          } else {
+            setActiveTab(savedTab);
+          }
+        } else {
+          // Screens only - force to Devices
+          setActiveTab('devices');
+        }
+      } else {
+        if (res.data.data.length > 0) {
+          setActiveTab('my-applications');
+        } else {
+          setActiveTab('applications');
+        }
       }
     } catch (err) {
       console.error(err);
@@ -389,6 +471,217 @@ export default function MerchantDashboard() {
     } catch (err) {
       console.error('fetchDevices Error:', err);
     }
+  };
+
+  // Fetch payment config
+  const fetchPaymentConfig = async (authToken, outletId) => {
+    if (!outletId) return;
+    try {
+      const res = await axios.get(`${API_BASE}/host/payment-config`, {
+        params: { hostApplicationId: outletId },
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      setPaymentConfig(res.data.data);
+      setPaymentUpiInput(res.data.data.upiId || '');
+    } catch (err) {
+      console.error('fetchPaymentConfig Error:', err);
+    }
+  };
+
+  // Fetch payment order history
+  const fetchPaymentOrders = async (authToken) => {
+    try {
+      const res = await axios.get(`${API_BASE}/host/orders`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const completed = (res.data.data || []).filter(
+        ord => ord.paymentStatus === 'completed'
+      );
+      setPaymentOrders(completed);
+    } catch (err) {
+      console.error('fetchPaymentOrders Error:', err);
+    }
+  };
+
+  // Fetch live orders (active ones only)
+  const fetchLiveOrders = async (authToken) => {
+    try {
+      const res = await axios.get(`${API_BASE}/host/orders`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const live = (res.data.data || []).filter(
+        ord => ord.tableStatus !== 'completed' && ord.tableStatus !== 'completed_acked'
+      );
+      setOrders(live);
+    } catch (err) {
+      console.error('fetchLiveOrders Error:', err);
+    }
+  };
+
+  // Save payment config
+  const savePaymentConfig = async () => {
+    if (!selectedOutletId || !paymentUpiInput || !paymentUpiInput.includes('@')) return;
+    setPaymentSaving(true);
+    try {
+      await axios.put(`${API_BASE}/host/payment-config`, {
+        hostApplicationId: selectedOutletId,
+        upiId: paymentUpiInput.trim()
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      setPaymentConfig({ hasUpiId: true, upiId: paymentUpiInput.trim() });
+    } catch (err) {
+      console.error('savePaymentConfig Error:', err);
+    } finally {
+      setPaymentSaving(false);
+    }
+  };
+
+  // Order actions
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      await axios.post(`${API_BASE}/host/orders/update-status`, { orderId, orderStatus: newStatus }, { headers: { Authorization: `Bearer ${token}` } });
+      fetchLiveOrders(token);
+      fetchPaymentOrders(token);
+    } catch (err) {
+      console.error('updateOrderStatus Error:', err);
+    }
+  };
+
+  const confirmOrder = async (orderId) => {
+    try {
+      await axios.post(`${API_BASE}/host/orders/confirm`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
+      fetchLiveOrders(token);
+      fetchPaymentOrders(token);
+    } catch (err) { console.error(err); }
+  };
+
+  const closeTable = async (orderId) => {
+    try {
+      await axios.post(`${API_BASE}/host/orders/close-table`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
+      fetchLiveOrders(token);
+      fetchPaymentOrders(token);
+    } catch (err) { console.error(err); }
+  };
+
+  const markPaymentReceived = async (orderId) => {
+    try {
+      await axios.post(`${API_BASE}/host/orders/payment-received`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
+      fetchLiveOrders(token);
+      fetchPaymentOrders(token);
+    } catch (err) { console.error(err); }
+  };
+
+  const handleVerifyUpi = () => {
+    if (!tempUpiInput.includes('@')) return;
+    const upiToCheck = tempUpiInput.trim().toLowerCase();
+    if (savedUpiList.some(item => item && item.upiId && item.upiId.toLowerCase() === upiToCheck)) {
+      setModalError('This UPI ID is already added.');
+      setIsUpiVerified(false);
+      return;
+    }
+    setIsVerifyingUpi(true);
+    setModalError('');
+    setModalInfo('');
+    setTimeout(() => {
+      setIsVerifyingUpi(false);
+      setIsUpiVerified(true);
+      setModalInfo('UPI ID format verified successfully.');
+    }, 800);
+  };
+
+  const handleQrCodeUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingQr(true);
+    setModalError('');
+    setModalInfo('');
+    setIsUpiVerified(false);
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const res = await axios.post(`${API_BASE}/host/payment-config/upload-qr`, arrayBuffer, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': file.type || 'application/octet-stream'
+        }
+      });
+
+      if (res.data.success) {
+        const decodedUpi = (res.data.data.upiId || '').trim();
+        if (savedUpiList.some(item => item && item.upiId && item.upiId.toLowerCase() === decodedUpi.toLowerCase())) {
+          setModalError('This UPI ID is already added.');
+          setTempUpiInput('');
+          setTempPayeeName('');
+          setIsUpiVerified(false);
+          return;
+        }
+        setTempUpiInput(res.data.data.upiId || '');
+        setTempPayeeName(res.data.data.payeeName || '');
+        setIsUpiVerified(true);
+        setModalInfo('QR Code successfully decrypted and verified.');
+      }
+    } catch (err) {
+      console.error('handleQrCodeUpload Error:', err);
+      setModalError(err.response?.data?.message || 'Failed to decode QR code. Please upload a direct payment QR image.');
+      setIsUpiVerified(false);
+    } finally {
+      setIsUploadingQr(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleSaveNewUpi = () => {
+    if (!isUpiVerified || !tempUpiInput) return;
+    const upiToAdd = tempUpiInput.trim();
+    const payeeToAdd = tempPayeeName.trim();
+    if (savedUpiList.some(item => item && item.upiId && item.upiId.toLowerCase() === upiToAdd.toLowerCase())) {
+      setModalError('This UPI ID is already added.');
+      return;
+    }
+    setSavedUpiList(prev => {
+      if (prev.some(item => item.upiId === upiToAdd)) return prev;
+      const newList = [...prev, { upiId: upiToAdd, payeeName: payeeToAdd, verified: true }];
+      localStorage.setItem(`merchant_upi_list_${selectedOutletId}`, JSON.stringify(newList));
+      return newList;
+    });
+    setTempUpiInput('');
+    setTempPayeeName('');
+    setIsUpiVerified(false);
+    setModalInfo('UPI ID saved successfully.');
+  };
+
+  const handleSelectActiveUpi = async (upiId, payeeName) => {
+    setPaymentSaving(true);
+    try {
+      await axios.put(`${API_BASE}/host/payment-config`, {
+        hostApplicationId: selectedOutletId,
+        upiId: upiId,
+        payeeName: payeeName || ''
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      setPaymentConfig({ hasUpiId: true, upiId });
+    } catch (err) {
+      console.error('handleSelectActiveUpi Error:', err);
+    } finally {
+      setPaymentSaving(false);
+    }
+  };
+
+  const handleDeleteUpi = (upiIdToDelete) => {
+    setTimeout(() => {
+      setSavedUpiList(prev => {
+        const newList = prev.filter(item => item && item.upiId !== upiIdToDelete);
+        localStorage.setItem(`merchant_upi_list_${selectedOutletId}`, JSON.stringify(newList));
+        return newList;
+      });
+      if (paymentConfig?.upiId === upiIdToDelete) {
+        setPaymentConfig({ hasUpiId: false, upiId: '' });
+        axios.put(`${API_BASE}/host/payment-config`, {
+          hostApplicationId: selectedOutletId,
+          upiId: '',
+          payeeName: ''
+        }, { headers: { Authorization: `Bearer ${token}` } }).catch(err => console.error(err));
+      }
+    }, 0);
   };
 
   // Fetch menu
@@ -410,6 +703,7 @@ export default function MerchantDashboard() {
   useEffect(() => {
     if (token && selectedOutletId) {
       fetchMenu(token, selectedOutletId);
+      fetchPaymentConfig(token, selectedOutletId);
     }
   }, [token, selectedOutletId]);
 
@@ -423,7 +717,8 @@ export default function MerchantDashboard() {
         const payload = JSON.parse(event.data);
         if (payload.event === 'new_order') {
           const newOrder = payload.data;
-          setOrders(prev => [newOrder, ...prev]);
+          fetchLiveOrders(authToken);
+          fetchPaymentOrders(authToken);
           alert(`New Order placed at Table ${newOrder.tableNumber}!`);
           if (newOrder.hostApplicationId && newOrder.hostApplicationId !== activeOrderVenueTabRef.current) {
             setUnreadOrderVenues(prev => {
@@ -579,11 +874,8 @@ export default function MerchantDashboard() {
 
   // Save restaurant menu items
   const handleSaveMenu = async () => {
-    setError('');
-    setInfo('');
-
     if (!selectedOutletId) {
-      setError('Please select an approved outlet to save the menu.');
+      showToast('Please select an approved outlet to save the menu.', 'error');
       return;
     }
 
@@ -595,17 +887,15 @@ export default function MerchantDashboard() {
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setInfo('Menu saved successfully!');
+      showToast('Menu saved successfully!', 'success');
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to save menu.');
+      showToast(err.response?.data?.message || 'Failed to save menu.', 'error');
     }
   };
 
   const handleSaveCategories = async (updatedCategories) => {
-    setError('');
-    setInfo('');
     if (!selectedOutletId) {
-      setError('Please select an approved outlet first.');
+      showToast('Please select an approved outlet first.', 'error');
       return;
     }
     try {
@@ -617,9 +907,9 @@ export default function MerchantDashboard() {
         headers: { Authorization: `Bearer ${token}` }
       });
       setMenuCategories(updatedCategories);
-      setInfo('Menu categories updated successfully!');
+      showToast('Menu categories updated successfully!', 'success');
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to save menu categories.');
+      showToast(err.response?.data?.message || 'Failed to save menu categories.', 'error');
     }
   };
 
@@ -629,12 +919,9 @@ export default function MerchantDashboard() {
 
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
     if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
-      setError('Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.');
+      showToast('Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.', 'error');
       return;
     }
-
-    setError('');
-    setInfo('');
 
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -650,17 +937,17 @@ export default function MerchantDashboard() {
 
         if (response.data.success && response.data.data.url) {
           updateMenuItemField(index, 'imageUrl', response.data.data.url);
-          setInfo('Image uploaded successfully!');
+          showToast('Image uploaded successfully!', 'success');
         } else {
-          setError(response.data.message || 'Upload failed');
+          showToast(response.data.message || 'Upload failed', 'error');
         }
       } catch (err) {
         console.error(err);
-        setError(err.response?.data?.message || 'Failed to upload image.');
+        showToast(err.response?.data?.message || 'Failed to upload image.', 'error');
       }
     };
     reader.onerror = () => {
-      setError('Failed to read file.');
+      showToast('Failed to read file.', 'error');
     };
     reader.readAsArrayBuffer(file);
   };
@@ -744,12 +1031,9 @@ export default function MerchantDashboard() {
 
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
     if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
-      setError('Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.');
+      showToast('Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.', 'error');
       return;
     }
-
-    setError('');
-    setInfo('');
 
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -765,17 +1049,17 @@ export default function MerchantDashboard() {
 
         if (response.data.success && response.data.data.url) {
           setModalForm(prev => ({ ...prev, imageUrl: response.data.data.url }));
-          setInfo('Image uploaded successfully!');
+          showToast('Image uploaded successfully!', 'success');
         } else {
-          setError(response.data.message || 'Upload failed');
+          showToast(response.data.message || 'Upload failed', 'error');
         }
       } catch (err) {
         console.error(err);
-        setError(err.response?.data?.message || 'Failed to upload image.');
+        showToast(err.response?.data?.message || 'Failed to upload image.', 'error');
       }
     };
     reader.onerror = () => {
-      setError('Failed to read file.');
+      showToast('Failed to read file.', 'error');
     };
     reader.readAsArrayBuffer(file);
   };
@@ -851,51 +1135,83 @@ export default function MerchantDashboard() {
         </div>
 
         <nav className="flex space-x-1.5 md:space-x-2">
-          <button
-            onClick={() => setActiveTab('applications')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'applications'
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-          >
-            <Form className={`w-4 h-4  ${activeTab === 'applications' ? 'text-primary-foreground' : 'text-primary'}`} />
-            <span className="hidden sm:inline">Host Applications</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('devices')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'devices'
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-          >
-            <MonitorSmartphone className={`w-4 h-4  ${activeTab === 'devices' ? 'text-primary-foreground' : 'text-primary'}`} />
-            <span className="hidden sm:inline">Devices</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('menu')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'menu'
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-          >
-            <UtensilsCrossed className={`w-4 h-4  ${activeTab === 'menu' ? 'text-primary-foreground' : 'text-primary'}`} />
-            <span className="hidden sm:inline">Menu Manager</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('orders')}
-            className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all relative cursor-pointer ${activeTab === 'orders'
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-          >
-            <Salad className={`w-4 h-4 ${activeTab === 'orders' ? 'text-primary-foreground' : 'text-primary'}`} />
-            <span className="hidden sm:inline">Live Orders</span>
-            {orders.length > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 bg-destructive text-destructive-foreground text-[8px] px-1.5 py-0.5 rounded-full font-bold">
-                {orders.length}
-              </span>
-            )}
-          </button>
+          {applications.length === 0 && !hasApprovedVenue && (
+            <button
+              onClick={() => setActiveTab('applications')}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'applications'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                }`}
+            >
+              <Form className={`w-4 h-4  ${activeTab === 'applications' ? 'text-primary-foreground' : 'text-primary'}`} />
+              <span className="hidden sm:inline">Host Applications</span>
+            </button>
+          )}
+          {applications.length > 0 && !hasApprovedVenue && (
+            <button
+              onClick={() => setActiveTab('my-applications')}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'my-applications'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                }`}
+            >
+              <Form className={`w-4 h-4  ${activeTab === 'my-applications' ? 'text-primary-foreground' : 'text-primary'}`} />
+              <span className="hidden sm:inline">Your Applications</span>
+            </button>
+          )}
+          {hasApprovedVenue && (
+            <>
+              <button
+                onClick={() => setActiveTab('devices')}
+                className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'devices'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                  }`}
+              >
+                <MonitorSmartphone className={`w-4 h-4  ${activeTab === 'devices' ? 'text-primary-foreground' : 'text-primary'}`} />
+                <span className="hidden sm:inline">Devices</span>
+              </button>
+              {applications.some(app => app.status === 'approved' && app.requestTablet) && (
+                <>
+                  <button
+                    onClick={() => setActiveTab('menu')}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'menu'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                      }`}
+                  >
+                    <UtensilsCrossed className={`w-4 h-4  ${activeTab === 'menu' ? 'text-primary-foreground' : 'text-primary'}`} />
+                    <span className="hidden sm:inline">Menu Manager</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('orders')}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all relative cursor-pointer ${activeTab === 'orders'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                      }`}
+                  >
+                    <Salad className={`w-4 h-4 ${activeTab === 'orders' ? 'text-primary-foreground' : 'text-primary'}`} />
+                    <span className="hidden sm:inline">Live Orders</span>
+                    {orders.length > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 bg-destructive text-destructive-foreground text-[8px] px-1.5 py-0.5 rounded-full font-bold">
+                        {orders.length}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('payment')}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all relative cursor-pointer ${activeTab === 'payment'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                      }`}
+                  >
+                    <CreditCard className={`w-4 h-4 ${activeTab === 'payment' ? 'text-primary-foreground' : 'text-primary'}`} />
+                    <span className="hidden sm:inline">Payment</span>
+                  </button>
+                </>
+              )}
+            </>
+          )}
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
@@ -948,18 +1264,34 @@ export default function MerchantDashboard() {
                   <p className="text-xs font-bold text-foreground mt-1 truncate">{name || phone}</p>
                 </div>
 
-                <div className="p-1.5 space-y-1 border-b border-border/40">
-                  <button
-                    onClick={() => {
-                      setUserMenuOpen(false);
-                      setActiveTab('my-applications');
-                    }}
-                    className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
-                  >
-                    <Form className="w-4 h-4 text-[#0069a8]" />
-                    <span>Your Applications</span>
-                  </button>
-                </div>
+                {((applications.length > 0 && !hasApprovedVenue) || applications.length === 0) && (
+                  <div className="p-1.5 space-y-1 border-b border-border/40">
+                    {applications.length > 0 && !hasApprovedVenue && (
+                      <button
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          setActiveTab('my-applications');
+                        }}
+                        className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                      >
+                        <Form className="w-4 h-4 text-[#0069a8]" />
+                        <span>Your Applications</span>
+                      </button>
+                    )}
+                    {applications.length === 0 && (
+                      <button
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          setActiveTab('applications');
+                        }}
+                        className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                      >
+                        <Plus className="w-4 h-4 text-emerald-500" />
+                        <span>New Host Application</span>
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 <div className="p-1.5">
                   <button
@@ -1426,33 +1758,18 @@ export default function MerchantDashboard() {
 
             {approvedOutlets.length > 0 ? (
               <>
-                {/* Outlet Selector Dropdown */}
-                <div className="mb-6 p-4 bg-card/10 border border-border/40 rounded-xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div>
-                    <h4 className="text-xs font-bold text-foreground">Select Venue / Outlet</h4>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">Customize menu list specific to this venue display target.</p>
-                  </div>
-                  <select
-                    value={selectedOutletId}
-                    onChange={(e) => setSelectedOutletId(e.target.value)}
-                    className="bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary w-full sm:w-64"
-                  >
-                    {approvedOutlets.map((app) => (
-                      <option key={app._id} value={app._id}>
-                        {app.outletName} ({app.city}) - Tablets: {app.tabletQuantity || 0}, Screens: {app.screenQuantity || 0}
-                      </option>
-                    ))}
-                  </select>
-                </div>
 
                 <div className="space-y-12">
                   {menuCategories.map((category) => {
                     const items = menuItems.filter(item => (item.category || '').toLowerCase() === category.toLowerCase());
                     return (
                       <div key={category} className="space-y-4">
-                        <div className="flex items-center space-x-2 border-b border-border/20 pb-2">
-                          <span className={`w-2.5 h-2.5 rounded-full ${getCategoryDotColor(category)}`} />
-                          <h3 className="font-outfit text-sm font-bold text-foreground tracking-wider">{category.toUpperCase()}</h3>
+                        <div className="flex items-center space-x-3 bg-muted/20 dark:bg-muted/5 border border-border/40 px-4 py-3 rounded-xl shadow-sm">
+                          <span className={`w-3 h-3 rounded-full ${getCategoryDotColor(category)} shadow-sm`} />
+                          <h3 className="font-outfit text-base md:text-lg font-black text-foreground tracking-widest uppercase">{category}</h3>
+                          <span className="text-[10px] text-muted-foreground font-bold px-2 py-0.5 rounded-md bg-muted/50 dark:bg-muted/10 border border-border/20">
+                            {items.length} {items.length === 1 ? 'Item' : 'Items'}
+                          </span>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
@@ -1550,13 +1867,7 @@ export default function MerchantDashboard() {
 
         {/* 3. Live Orders Tab */}
         {activeTab === 'orders' && (
-          <div className="animate-fade-in">
-            <h1 className="font-outfit text-2xl font-black text-foreground mb-2">Live Kiosk Orders</h1>
-            <p className="text-muted-foreground text-xs font-semibold mb-8 flex items-center">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping mr-2 shrink-0" />
-              Connected to active tabletop devices. Orders update in real-time.
-            </p>
-
+          <div className="animate-fade-in w-full">
             {approvedOutlets.length === 0 ? (
               <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
                 <Building className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
@@ -1565,89 +1876,256 @@ export default function MerchantDashboard() {
               </div>
             ) : (
               <>
-                {/* Tabbed Approach for Venues */}
-                <div className="flex space-x-2 border-b border-border/40 pb-3 mb-6 overflow-x-auto">
-                  {approvedOutlets.map((app) => {
-                    const hasUnread = unreadOrderVenues.has(app._id);
-                    const isActive = activeOrderVenueTab === app._id;
-                    return (
-                      <button
-                        key={app._id}
-                        onClick={() => {
-                          setActiveOrderVenueTab(app._id);
-                          setUnreadOrderVenues(prev => {
-                            const next = new Set(prev);
-                            next.delete(app._id);
-                            return next;
-                          });
-                        }}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all relative flex items-center space-x-2 cursor-pointer shrink-0 ${isActive
-                          ? 'bg-[#0069a8] text-white shadow-md'
-                          : 'bg-card text-foreground hover:bg-muted border border-border/40'
-                          }`}
-                      >
-                        <span>{app.outletName}</span>
-                        {hasUnread && !isActive && (
-                          <span className="w-2 h-2 rounded-full bg-[#0069a8] animate-pulse" />
-                        )}
-                      </button>
-                    );
-                  })}
+                <div className="flex justify-between items-center mb-6 border-b border-border/40 pb-3 flex-wrap gap-4">
+                  <h1 className="font-outfit text-2xl font-black text-foreground uppercase tracking-wider">
+                    {applications.find(app => app.status === 'approved')?.outletName || 'VENUE'}
+                  </h1>
+
+                  <div className="flex items-center space-x-2 text-xs font-bold text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-xl shrink-0">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span>LIVE</span>
+                  </div>
                 </div>
 
-                {(() => {
-                  const filteredOrders = orders.filter(ord => ord.hostApplicationId === activeOrderVenueTab);
-                  return filteredOrders.length === 0 ? (
-                    <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
-                      <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                      <p className="text-sm font-bold text-foreground">Waiting for live orders...</p>
-                      <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">When customers place orders at dining tables in this venue, they will pop up here instantly.</p>
-                    </div>
-                  ) : (
-                    <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
-                      {filteredOrders.map((ord) => (
-                        <div key={ord.orderId} className="p-4 rounded-xl bg-card/10 border border-border/40 flex flex-col justify-between space-y-4">
-                          <div>
-                            <div className="flex justify-between items-start border-b border-border/40 pb-3 mb-3">
-                              <div>
-                                <span className="text-[10px] text-primary font-bold uppercase tracking-wider">Table {ord.tableNumber}</span>
-                                <h4 className="font-bold text-foreground text-xs">{ord.orderId}</h4>
-                              </div>
-                              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${ord.paymentStatus === 'completed'
-                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                                : 'bg-destructive/10 text-destructive border border-destructive/20'
-                                }`}>
-                                {ord.paymentStatus === 'completed' ? 'Paid' : 'Unpaid'}
-                              </span>
+                        {(() => {
+                          const filteredOrders = orders.filter(ord => ord.hostApplicationId === activeOrderVenueTab);
+                          
+                          // Rank orders by status: placed (1), cooking (2), served (3), others (4). Chronological (oldest first) within the same rank.
+                          const getStatusRank = (status) => {
+                            if (status === 'placed') return 1;
+                            if (status === 'cooking') return 2;
+                            if (status === 'served') return 3;
+                            return 4;
+                          };
+
+                          const sortedOrders = [...filteredOrders].sort((a, b) => {
+                            const rankA = getStatusRank(a.orderStatus);
+                            const rankB = getStatusRank(b.orderStatus);
+                            if (rankA !== rankB) return rankA - rankB;
+                            
+                            const timeA = new Date(a.createdAt || a.updatedAt || 0).getTime();
+                            const timeB = new Date(b.createdAt || b.updatedAt || 0).getTime();
+                            return timeA - timeB;
+                          });
+
+                          return sortedOrders.length === 0 ? (
+                            <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
+                              <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+                              <p className="text-sm font-bold text-foreground">Waiting for live orders...</p>
+                              <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">When customers place orders at dining tables in this venue, they will pop up here instantly.</p>
                             </div>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                  <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
+                                    <th className="pb-3 pr-2">Table</th>
+                                    <th className="pb-3 pr-2">Order ID</th>
+                                    <th className="pb-3 pr-2">Items</th>
+                                    <th className="pb-3 pr-2">Status</th>
+                                    <th className="pb-3 pr-2">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {sortedOrders.map((ord) => (
+                                    <tr key={ord.orderId} className="hover:bg-muted/10">
+                                      <td className="py-4 pr-2">
+                                        <div className="flex items-center space-x-2">
+                                          {ord.orderStatus === 'placed' && (
+                                            <span className="relative flex h-2 w-2 shrink-0">
+                                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                            </span>
+                                          )}
+                                          <span className="font-black text-blue-500 dark:text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded text-xs whitespace-nowrap">
+                                            Table &nbsp; {ord.tableNumber}
+                                          </span>
+                                        </div>
+                                      </td>
+                                      <td className="py-4 pr-2 font-mono font-bold text-foreground">
+                                        {ord.orderId}
+                                      </td>
+                                      <td className="py-4 pr-2">
+                                        <div className="space-y-1 font-semibold text-foreground">
+                                          {ord.items.map((item, idx) => (
+                                            <div key={idx} className="text-xs">
+                                              {item.name} &nbsp;&nbsp; <span className="text-muted-foreground">x &nbsp;{item.quantity}</span>
+                                            </div>
+                                          ))}
+                                          <div className="w-12 border-t-2 border-border/50 my-1.5"></div>
+                                          <div className="text-[10px] font-bold text-foreground">
+                                            Total: ₹{(ord.totalAmount / 100).toFixed(2)}
+                                          </div>
+                                        </div>
+                                      </td>
+                                      <td className="py-4 pr-2">
+                                        <select
+                                          value={ord.orderStatus}
+                                          onChange={(e) => {
+                                            e.stopPropagation();
+                                            updateOrderStatus(ord.orderId, e.target.value);
+                                          }}
+                                          className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border focus:outline-none cursor-pointer w-fit ${ord.orderStatus === 'placed'
+                                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                                            : ord.orderStatus === 'cooking'
+                                              ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30'
+                                              : ord.orderStatus === 'served'
+                                                ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30'
+                                                : 'bg-muted-foreground/15 text-muted-foreground border-border/30'
+                                            }`}
+                                        >
+                                          <option value="placed" className="bg-card text-foreground">Placed</option>
+                                          <option value="cooking" className="bg-card text-foreground">Accepted & Preparing</option>
+                                          <option value="served" className="bg-card text-foreground">Delivered / Served</option>
+                                        </select>
+                                      </td>
+                                      <td className="py-4 pr-2">
+                                        {ord.tableStatus === 'close_table' ? (
+                                          confirmingPaymentOrderId === ord.orderId ? (
+                                            <div className="flex items-center space-x-1.5 animate-fade-in whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                                              <span className="text-[9px] font-black text-foreground uppercase">Received?</span>
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  markPaymentReceived(ord.orderId);
+                                                  setConfirmingPaymentOrderId(null);
+                                                }}
+                                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2 py-1 rounded text-[9px] transition-colors cursor-pointer uppercase tracking-wider"
+                                              >
+                                                Yes
+                                              </button>
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setConfirmingPaymentOrderId(null);
+                                                }}
+                                                className="bg-muted hover:bg-muted/80 text-foreground font-bold px-2 py-1 rounded text-[9px] transition-colors cursor-pointer border border-border/40 uppercase tracking-wider"
+                                              >
+                                                No
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setConfirmingPaymentOrderId(ord.orderId);
+                                              }}
+                                              className="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-[9px] font-black uppercase px-3 py-1.5 rounded-xl flex items-center justify-center cursor-pointer transition-all shadow-sm w-fit shrink-0 animate-pulse"
+                                            >
+                                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 shrink-0 animate-pulse" />
+                                              Payment Received
+                                            </button>
+                                          )
+                                        ) : (
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              closeTable(ord.orderId);
+                                            }}
+                                            disabled={ord.orderStatus !== 'served'}
+                                            className={`text-[9px] font-black uppercase px-3 py-1.5 rounded-xl border transition-all shadow-sm shrink-0 w-fit cursor-pointer ${
+                                              ord.orderStatus === 'served'
+                                                ? 'bg-destructive/10 hover:bg-destructive/20 text-destructive border-destructive/20'
+                                                : 'bg-muted text-muted-foreground border-border/40 opacity-50 cursor-not-allowed'
+                                            }`}
+                                          >
+                                            Clear Table
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )
+                        })()}
+                      </>
+                    )}
+                  </div>
+                )}
 
-                            <ul className="space-y-2 text-xs">
-                              {ord.items.map((item, idx) => (
-                                <li key={idx} className="flex justify-between font-semibold">
-                                  <span className="text-muted-foreground">{item.name} x {item.quantity}</span>
-                                  <span className="text-foreground">₹{(item.price * item.quantity / 100).toFixed(2)}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
+        {/* 4. Payment Tab */}
+        {activeTab === 'payment' && (
+          <div className="animate-fade-in w-full">
+            {/* Header row */}
+            <div className="flex justify-between items-center mb-6 border-b border-border/40 pb-3 flex-wrap gap-4">
+              <h1 className="font-outfit text-2xl font-black text-foreground uppercase tracking-wider">
+                PAYMENT
+              </h1>
 
-                          <div className="flex justify-between items-center border-t border-border/40 pt-3">
-                            <span className="text-xs font-bold text-foreground">Total: ₹{(ord.totalAmount / 100).toFixed(2)}</span>
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${ord.orderStatus === 'placed'
-                              ? 'bg-amber-500/10 text-amber-600'
-                              : ord.orderStatus === 'cooking'
-                                ? 'bg-blue-500/10 text-blue-600'
-                                : 'bg-emerald-500/10 text-emerald-600'
-                              }`}>
-                              {ord.orderStatus}
-                            </span>
+              <button
+                onClick={() => setShowUpiModal(true)}
+                className="bg-[#0069a8] hover:bg-[#005b94] text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Configure UPI Payments</span>
+              </button>
+            </div>
+
+            {/* Always show history/orders table */}
+            {paymentOrders.length === 0 ? (
+              <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
+                <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+                <p className="text-sm font-bold text-foreground">No completed payments found</p>
+                <p className="text-xs text-muted-foreground mt-1">Paid order transaction history will appear here once finalized.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
+                      <th className="pb-3 pr-2">Table</th>
+                      <th className="pb-3 pr-2">Order ID</th>
+                      <th className="pb-3 pr-2">Items</th>
+                      <th className="pb-3 pr-2">Status</th>
+                      <th className="pb-3 pr-2">Payment Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paymentOrders.map((ord) => (
+                      <tr key={ord.orderId} className="hover:bg-muted/10">
+                        <td className="py-4 pr-2">
+                          <span className="font-black text-blue-500 dark:text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded text-xs whitespace-nowrap">
+                            Table &nbsp; {ord.tableNumber}
+                          </span>
+                        </td>
+                        <td className="py-4 pr-2 font-mono font-bold text-foreground">
+                          {ord.orderId}
+                        </td>
+                        <td className="py-4 pr-2">
+                          <div className="space-y-1 font-semibold text-foreground">
+                            {ord.items.map((item, idx) => (
+                              <div key={idx} className="text-xs">
+                                {item.name} &nbsp;&nbsp; <span className="text-muted-foreground">x &nbsp;{item.quantity}</span>
+                              </div>
+                            ))}
+                            <div className="w-12 border-t-2 border-border/50 my-1.5"></div>
+                            <div className="text-[10px] font-bold text-foreground">
+                              Total: ₹{(ord.totalAmount / 100).toFixed(2)}
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </>
+                        </td>
+                        <td className="py-4 pr-2">
+                          <span className="w-fit text-[9px] font-black uppercase px-2.5 py-1 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
+                            <span className="w-1.5 h-1.5 rounded-full mr-1.5 shrink-0 bg-emerald-500" />
+                            Completed
+                          </span>
+                        </td>
+                        <td className="py-4 pr-2">
+                          <span className="w-fit text-[9px] font-black uppercase px-2.5 py-1 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
+                            <span className="w-1.5 h-1.5 rounded-full mr-1.5 shrink-0 bg-emerald-500" />
+                            Paid
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         )}
@@ -1959,6 +2437,191 @@ export default function MerchantDashboard() {
         </div>
       )}
 
+      {/* Configure UPI Modal */}
+      {showUpiModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+          <div 
+            className="bg-card border border-border/40 rounded-2xl w-full p-6 relative flex flex-col space-y-4 shadow-2xl overflow-y-auto"
+            style={{ maxWidth: '85%', maxHeight: '80%' }}
+          >
+            <button
+              onClick={() => {
+                setShowUpiModal(false);
+                setTempUpiInput('');
+                setTempPayeeName('');
+                setIsUpiVerified(false);
+                setModalError('');
+                setModalInfo('');
+              }}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div>
+              <h3 className="font-outfit text-md font-bold text-foreground">Configure UPI Payments</h3>
+              <p className="text-[11px] text-muted-foreground mt-1 font-semibold">Upload your UPI QR code or enter details manually.</p>
+            </div>
+
+            {/* Notification messages */}
+            {modalError && (
+              <div className="p-2.5 bg-destructive/10 border border-destructive/20 rounded-xl text-[10px] text-destructive font-bold text-left animate-fade-in">
+                {modalError}
+              </div>
+            )}
+            {modalInfo && (
+              <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-[10px] text-emerald-600 dark:text-emerald-400 font-bold text-left animate-fade-in">
+                {modalInfo}
+              </div>
+            )}
+
+            {/* Side-by-side layout container */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-stretch">
+              {/* Left Column: QR Upload & Manual Entry */}
+              <div className="flex flex-col space-y-4 md:col-span-5">
+                {/* QR Code Upload Zone (Smaller, compact height, fully clickable) */}
+                <div className="border border-dashed border-border/60 rounded-xl p-3 bg-muted/20 flex flex-col items-center justify-center text-center space-y-1 relative transition-all hover:bg-muted/30 cursor-pointer min-h-[90px]">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleQrCodeUpload}
+                    disabled={isUploadingQr}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-20"
+                  />
+                  <div className="flex items-center justify-center space-x-2 pointer-events-none z-10">
+                    <QrCode className="w-5 h-5 text-[#0069a8] opacity-70 animate-pulse shrink-0" />
+                    <span className="text-xs font-bold text-foreground">
+                      {isUploadingQr ? 'Scanning QR Code...' : 'Upload UPI QR Code Image'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground pointer-events-none z-10">
+                    Upload a screenshot or photo of your UPI QR code
+                  </span>
+                </div>
+
+                {/* Manual Entry & Save */}
+                <div className="flex flex-col space-y-3 pt-1">
+                  <div className="space-y-3">
+                    <div className="flex space-x-2 items-end">
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1 block">UPI ID</label>
+                        <input
+                          type="text"
+                          placeholder="enter upi id (e.g. name@bank)"
+                          value={tempUpiInput}
+                          onChange={(e) => {
+                            setTempUpiInput(e.target.value);
+                            setIsUpiVerified(false);
+                            setModalError('');
+                            setModalInfo('');
+                          }}
+                          className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-3.5 py-2 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all exclude-uppercase"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleVerifyUpi}
+                        disabled={isVerifyingUpi || !tempUpiInput.includes('@')}
+                        className="bg-[#0069a8]/10 hover:bg-[#0069a8]/20 disabled:opacity-50 text-[#0069a8] border border-[#0069a8]/20 font-bold px-4 py-2 rounded-xl text-xs transition-all cursor-pointer h-[34px] flex items-center justify-center shrink-0 min-w-[70px]"
+                      >
+                        {isVerifyingUpi ? (
+                          <span className="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          'Verify'
+                        )}
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1 block">Payee Name (Optional)</label>
+                      <input
+                        type="text"
+                        placeholder="enter payee name (e.g. Shop Name)"
+                        value={tempPayeeName}
+                        onChange={(e) => setTempPayeeName(e.target.value)}
+                        className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-3.5 py-2 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all exclude-uppercase"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Save Button */}
+                  <button
+                    onClick={handleSaveNewUpi}
+                    disabled={!isUpiVerified}
+                    className="w-full bg-[#0069a8] hover:bg-[#005b94] disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-xs tracking-wider transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Save UPI ID</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Right Column: Saved list */}
+              <div className="border-t md:border-t-0 md:border-l border-border/40 pt-4 md:pt-0 md:pl-6 flex flex-col min-h-0 md:col-span-7">
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-3">Saved UPI IDs</h4>
+
+                {savedUpiList.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic py-2">No saved UPI IDs found. Add one above.</p>
+                ) : (
+                  <div className="space-y-2 overflow-y-auto pr-1 flex-1 min-h-[150px] max-h-72">
+                    {savedUpiList.map((item, idx) => {
+                      const isActive = paymentConfig.upiId === item.upiId;
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-3 rounded-xl border transition-all flex items-center justify-between ${isActive
+                            ? 'bg-primary/5 border-[#0069a8] shadow-sm'
+                            : 'bg-background hover:bg-muted border-border/40'
+                            }`}
+                        >
+                          <div className="flex flex-col space-y-0.5 text-left min-w-0 flex-1 mr-4">
+                            <span className={`text-xs font-mono font-bold truncate ${isActive ? 'text-[#0069a8]' : 'text-foreground'}`} title={item.upiId}>
+                              {item.upiId}
+                            </span>
+                            {item.payeeName && (
+                              <span className="text-[10px] text-muted-foreground font-semibold truncate" title={item.payeeName}>
+                                Name: {item.payeeName}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center space-x-2 shrink-0">
+                            {isActive ? (
+                              <span className="text-[9px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 rounded-lg uppercase tracking-wider select-none">
+                                Active
+                              </span>
+                            ) : (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSelectActiveUpi(item.upiId, item.payeeName);
+                                }}
+                                className="text-[9px] font-black text-[#0069a8] bg-[#0069a8]/10 hover:bg-[#0069a8]/20 border border-[#0069a8]/20 px-2.5 py-1 rounded-lg transition-colors cursor-pointer uppercase tracking-wider"
+                              >
+                                Make Default
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteUpi(item.upiId);
+                              }}
+                              className="text-muted-foreground hover:text-destructive p-1 transition-colors cursor-pointer"
+                              title="Delete UPI"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Become Advertiser Modal */}
       {showBecomeAdvertiserModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
@@ -1996,6 +2659,33 @@ export default function MerchantDashboard() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className={`fixed top-6 right-6 z-[9999] flex items-center space-x-3 border px-4 py-3 rounded-2xl shadow-xl animate-in slide-in-from-top-2 duration-300 ${
+          toast.type === 'success' 
+            ? 'bg-emerald-600 dark:bg-emerald-700 border-emerald-700 text-white' 
+            : 'bg-red-600 dark:bg-red-700 border-red-700 text-white'
+        }`}>
+          {toast.type === 'success' ? (
+            <CheckCircle className="w-5 h-5 text-white shrink-0" />
+          ) : (
+            <AlertCircle className="w-5 h-5 text-white shrink-0" />
+          )}
+          <div className="text-xs font-bold pr-4">
+            {toast.message}
+          </div>
+          <button
+            onClick={() => setToast(null)}
+            className={`p-1 rounded-lg transition-colors cursor-pointer ${
+              toast.type === 'success' 
+                ? 'text-emerald-100 hover:bg-emerald-700 hover:text-white' 
+                : 'text-red-100 hover:bg-red-700 hover:text-white'
+            }`}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
     </div>

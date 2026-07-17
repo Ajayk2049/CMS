@@ -27,6 +27,7 @@ message HeartbeatRequest {
 message HeartbeatResponse {
   bool success = 1;
   string command = 2; // e.g. reload, reboot, normal
+  string tableSessionJson = 3; // JSON: {"status":"close_table|completed","orderId":"...","amount":45000,"upiUrl":"upi://pay?...","tableNumber":"..."}
 }
 
 message AdImpressionRequest {

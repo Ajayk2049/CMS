@@ -38,11 +38,21 @@ class _OrderCheckoutModalState extends State<OrderCheckoutModal> {
   bool _loading = true;
   String _error = '';
   String _orderId = '';
+  bool _isPopped = false;
 
   @override
   void initState() {
     super.initState();
     _createOrder();
+  }
+
+  void _closeModal() {
+    if (_isPopped) return;
+    _isPopped = true;
+    Navigator.pop(context);
+    if (_error.isEmpty) {
+      widget.onOrderCompleted();
+    }
   }
 
   void _createOrder() async {
@@ -72,6 +82,12 @@ class _OrderCheckoutModalState extends State<OrderCheckoutModal> {
             _orderId = response.orderId;
             _loading = false;
           });
+          // Auto close after 5 seconds
+          Future.delayed(const Duration(seconds: 5), () {
+            if (mounted) {
+              _closeModal();
+            }
+          });
         }
       } else {
         if (mounted) {
@@ -93,6 +109,11 @@ class _OrderCheckoutModalState extends State<OrderCheckoutModal> {
 
   @override
   Widget build(BuildContext context) {
+    final itemNames = widget.cart.entries.map((entry) {
+      final item = widget.menuItems.firstWhere((i) => i.itemId == entry.key);
+      return "${item.name} x${entry.value}";
+    }).join(', ');
+
     return AlertDialog(
       shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
       backgroundColor: kCardBg,
@@ -123,8 +144,16 @@ class _OrderCheckoutModalState extends State<OrderCheckoutModal> {
               ),
               const SizedBox(height: 8),
               Text(
-                "${widget.tableNumber} • ${widget.cart.length} items",
-                style: const TextStyle(fontSize: 14, color: kTextGrey),
+                "Table ${widget.tableNumber}",
+                style: const TextStyle(fontSize: 14, color: kTextGrey, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                itemNames,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, color: kTextDark, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 16),
               const Text(
@@ -138,14 +167,7 @@ class _OrderCheckoutModalState extends State<OrderCheckoutModal> {
       ),
       actions: [
         TextButton(
-          onPressed: _loading
-              ? null
-              : () {
-                  Navigator.pop(context);
-                  if (_error.isEmpty) {
-                    widget.onOrderCompleted();
-                  }
-                },
+          onPressed: _loading ? null : _closeModal,
           style: TextButton.styleFrom(foregroundColor: kAccentBlue),
           child: Text(
             _loading ? "Cancel" : (_error.isNotEmpty ? "Close" : "Done"),

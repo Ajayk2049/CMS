@@ -71,6 +71,16 @@ const HostApplicationSchema = new mongoose.Schema({
     default: 'pending',
     index: true
   },
+  upiId: {
+    type: String,
+    default: null,
+    trim: true
+  },
+  payeeName: {
+    type: String,
+    default: null,
+    trim: true
+  },
   createdAt: {
     type: Date,
     default: Date.now

@@ -233,10 +233,12 @@ class HeartbeatResponse extends $pb.GeneratedMessage {
   factory HeartbeatResponse({
     $core.bool? success,
     $core.String? command,
+    $core.String? tableSessionJson,
   }) {
     final result = create();
     if (success != null) result.success = success;
     if (command != null) result.command = command;
+    if (tableSessionJson != null) result.tableSessionJson = tableSessionJson;
     return result;
   }
 
@@ -255,6 +257,8 @@ class HeartbeatResponse extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOB(1, _omitFieldNames ? '' : 'success')
     ..aOS(2, _omitFieldNames ? '' : 'command')
+    ..aOS(3, _omitFieldNames ? '' : 'tableSessionJson',
+        protoName: 'tableSessionJson')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -293,6 +297,15 @@ class HeartbeatResponse extends $pb.GeneratedMessage {
   $core.bool hasCommand() => $_has(1);
   @$pb.TagNumber(2)
   void clearCommand() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get tableSessionJson => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set tableSessionJson($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasTableSessionJson() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearTableSessionJson() => $_clearField(3);
 }
 
 class AdImpressionRequest extends $pb.GeneratedMessage {

@@ -61,9 +61,22 @@ const OrderSchema = new mongoose.Schema({
   },
   orderStatus: {
     type: String,
-    enum: ['placed', 'cooking', 'served', 'cancelled'],
+    enum: ['placed', 'confirmed', 'cooking', 'served', 'cancelled'],
     default: 'placed',
     index: true
+  },
+  tableStatus: {
+    type: String,
+    enum: ['active', 'close_table', 'completed', 'completed_acked'],
+    default: 'active'
+  },
+  confirmedAt: {
+    type: Date,
+    default: null
+  },
+  paidAt: {
+    type: Date,
+    default: null
   },
   transactionId: {
     type: String,

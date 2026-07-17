@@ -132,6 +132,10 @@ code, pre, .font-mono, [class*="font-mono"] {
 .exclude-uppercase, 
 .exclude-uppercase *,
 [class*="brandLogo"],
-[class*="brand-logo"] {
+[class*="brand-logo"],
+input[type="password"],
+input[type="email"],
+.normal-case,
+.normal-case * {
   text-transform: none !important;
 }

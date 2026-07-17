@@ -1,6 +1,59 @@
 const HostApplication = require('../models/HostApplication');
 const Menu = require('../models/Menu');
 const Device = require('../models/Device');
+const Order = require('../models/Order');
+
+// Utility to push session update to device via WebSocket
+async function notifyDeviceSessionUpdate(order) {
+  if (!order || !order.deviceId) return;
+  const socket = global.deviceSockets ? global.deviceSockets.get(order.deviceId) : null;
+  if (!socket) return;
+
+  try {
+    const HostApplication = require('../models/HostApplication');
+    const app = await HostApplication.findById(order.hostApplicationId);
+    const upiId = app?.upiId || '';
+    const payeeName = app?.payeeName || '';
+    const amountRs = (order.totalAmount / 100).toFixed(2);
+    let upiUrl = '';
+    if (upiId) {
+      upiUrl = `upi://pay?pa=${upiId}`;
+      if (payeeName) {
+        upiUrl += `&pn=${encodeURIComponent(payeeName)}`;
+      }
+      upiUrl += `&am=${amountRs}&cu=INR`;
+    }
+
+    const payload = {
+      event: 'table_session',
+      status: order.tableStatus,
+      orderId: order.orderId,
+      amount: order.totalAmount,
+      upiUrl,
+      orderStatus: order.orderStatus,
+      tableNumber: order.tableNumber
+    };
+
+    socket.send(JSON.stringify(payload));
+    console.log(`[WS] Push session update to Device ${order.deviceId}: status=${order.tableStatus}, orderStatus=${order.orderStatus}`);
+
+    // If order was completed, mark tableStatus as completed_acked in DB after sending,
+    // so it resets cleanly and isn't queried as active by other methods
+    if (order.tableStatus === 'completed') {
+      setTimeout(async () => {
+        try {
+          order.tableStatus = 'completed_acked';
+          await order.save();
+          console.log(`[WS] Auto-acked completed table session for table ${order.tableNumber}`);
+        } catch (e) {
+          console.error('[WS] Failed to auto-ack completed order:', e.message);
+        }
+      }, 1000);
+    }
+  } catch (err) {
+    console.error('[WS] Failed to send update to device:', err.message);
+  }
+}
 
 class HostController {
   /**
@@ -64,6 +117,11 @@ class HostController {
     }
 
     try {
+      const existingApp = await HostApplication.findOne({ userId: req.user.uid });
+      if (existingApp) {
+        return res.status(400).send({ success: false, message: 'You have already submitted a host application. Only one venue is allowed per account.' });
+      }
+
       const application = new HostApplication({
         userId: req.user.uid,
         outletName,
@@ -127,17 +185,17 @@ class HostController {
       let menu = await Menu.findOne({ hostApplicationId });
       if (!menu) {
         // Return empty menu format if not initialized yet
-        return res.status(200).send({ 
-          success: true, 
-          data: { 
-            items: [], 
-            categories: ['Starters', 'Main Course', 'Dessert', 'Beverages'], 
-            hostApplicationId 
-          } 
+        return res.status(200).send({
+          success: true,
+          data: {
+            items: [],
+            categories: ['Starters', 'Main Course', 'Dessert', 'Beverages'],
+            hostApplicationId
+          }
         });
       }
-      return res.status(200).send({ 
-        success: true, 
+      return res.status(200).send({
+        success: true,
         data: {
           _id: menu._id,
           hostApplicationId: menu.hostApplicationId,
@@ -171,9 +229,9 @@ class HostController {
     // Validate menu items
     for (const item of items) {
       if (!item.itemId || !item.name || item.price === undefined || !item.category) {
-        return res.status(400).send({ 
-          success: false, 
-          message: 'Each menu item must contain itemId, name, price (in paise), and category' 
+        return res.status(400).send({
+          success: false,
+          message: 'Each menu item must contain itemId, name, price (in paise), and category'
         });
       }
       if (typeof item.price !== 'number' || item.price < 0) {
@@ -192,6 +250,19 @@ class HostController {
         { merchantId: req.user.uid, items, categories, updatedAt: Date.now() },
         { upsert: true, new: true }
       );
+
+      // Notify devices via WebSocket to reload menu
+      if (global.deviceSockets) {
+        const Device = require('../models/Device');
+        const devices = await Device.find({ hostApplicationId });
+        for (const device of devices) {
+          const socket = global.deviceSockets.get(device.deviceId);
+          if (socket) {
+            socket.send(JSON.stringify({ event: 'reload_menu' }));
+            console.log(`[WS] Sent reload_menu signal to Device ${device.deviceId}`);
+          }
+        }
+      }
 
       return res.status(200).send({
         success: true,
@@ -271,6 +342,74 @@ class HostController {
   }
 
   /**
+   * Upload and decode QR Code from image stream in memory
+   */
+  async uploadQrCode(req, res) {
+    try {
+      const chunks = [];
+      for await (const chunk of req.body) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+
+      if (!buffer || buffer.length === 0) {
+        return res.status(400).send({ success: false, message: 'Empty image upload.' });
+      }
+
+      const sharp = require('sharp');
+      const jsQR = require('jsqr');
+
+      // Convert image to raw RGBA buffer for jsQR
+      const { data, info } = await sharp(buffer)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const code = jsQR(new Uint8ClampedArray(data), info.width, info.height);
+
+      if (!code || !code.data) {
+        return res.status(400).send({
+          success: false,
+          message: 'Could not decode QR code. Please ensure the image is clear and contains a visible QR code.'
+        });
+      }
+
+      const decodedText = code.data;
+      if (!decodedText.startsWith('upi://pay')) {
+        return res.status(400).send({
+          success: false,
+          message: 'This QR code does not contain a standard UPI payment URL.'
+        });
+      }
+
+      // Parse UPI URL params
+      const queryString = decodedText.split('?')[1] || '';
+      const params = new URLSearchParams(queryString);
+      const pa = params.get('pa');
+      const pn = params.get('pn');
+
+      if (!pa) {
+        return res.status(400).send({
+          success: false,
+          message: 'Invalid UPI QR: Missing merchant address (pa).'
+        });
+      }
+
+      return res.status(200).send({
+        success: true,
+        message: 'QR Code successfully decrypted',
+        data: {
+          upiId: decodeURIComponent(pa),
+          payeeName: pn ? decodeURIComponent(pn) : ''
+        }
+      });
+    } catch (error) {
+      console.error('uploadQrCode Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to process QR code image: ' + error.message });
+    }
+  }
+
+  /**
    * Get devices provisioned for the logged-in merchant's approved applications
    */
   async getMyDevices(req, res) {
@@ -283,6 +422,214 @@ class HostController {
     } catch (error) {
       console.error('getMyDevices Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to fetch devices' });
+    }
+  }
+
+  /**
+   * Save UPI payment config for a venue
+   */
+  async savePaymentConfig(req, res) {
+    const { hostApplicationId, upiId, payeeName } = req.body || {};
+    if (!hostApplicationId) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId is required' });
+    }
+    if (!upiId || !upiId.includes('@')) {
+      return res.status(400).send({ success: false, message: 'A valid UPI ID is required (e.g. merchant@okhdfcbank)' });
+    }
+
+    try {
+      const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid });
+      if (!app) {
+        return res.status(403).send({ success: false, message: 'Access denied' });
+      }
+
+      app.upiId = upiId.trim();
+      app.payeeName = payeeName ? payeeName.trim() : null;
+      await app.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'UPI payment configuration saved',
+        data: { hostApplicationId, upiId: app.upiId, payeeName: app.payeeName }
+      });
+    } catch (error) {
+      console.error('savePaymentConfig Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to save payment config' });
+    }
+  }
+
+  /**
+   * Get UPI payment config for a venue
+   */
+  async getPaymentConfig(req, res) {
+    const { hostApplicationId } = req.query || {};
+    if (!hostApplicationId) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId is required' });
+    }
+
+    try {
+      const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid });
+      if (!app) {
+        return res.status(403).send({ success: false, message: 'Access denied' });
+      }
+
+      return res.status(200).send({
+        success: true,
+        data: {
+          hasUpiId: !!app.upiId,
+          upiId: app.upiId || '',
+          payeeName: app.payeeName || ''
+        }
+      });
+    } catch (error) {
+      console.error('getPaymentConfig Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch payment config' });
+    }
+  }
+
+  /**
+   * Get all orders for merchant's venues (for payment tab)
+   */
+  async getMyOrders(req, res) {
+    try {
+      const apps = await HostApplication.find({ userId: req.user.uid, status: 'approved' });
+      const appIds = apps.map(app => app._id);
+
+      const orders = await Order.find({ hostApplicationId: { $in: appIds } })
+        .sort({ createdAt: -1 })
+        .limit(200);
+
+      return res.status(200).send({ success: true, data: orders });
+    } catch (error) {
+      console.error('getMyOrders Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch orders' });
+    }
+  }
+
+  /**
+   * Admin updates order status
+   */
+  async updateOrderStatus(req, res) {
+    const { orderId, orderStatus } = req.body || {};
+    if (!orderId || !orderStatus) {
+      return res.status(400).send({ success: false, message: 'orderId and orderStatus are required' });
+    }
+
+    const validStatuses = ['placed', 'confirmed', 'cooking', 'served', 'cancelled'];
+    if (!validStatuses.includes(orderStatus)) {
+      return res.status(400).send({ success: false, message: 'Invalid orderStatus' });
+    }
+
+    try {
+      const order = await Order.findOne({ orderId });
+      if (!order) return res.status(404).send({ success: false, message: 'Order not found' });
+
+      const app = await HostApplication.findOne({ _id: order.hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
+
+      order.orderStatus = orderStatus;
+      if (orderStatus === 'confirmed') {
+        order.confirmedAt = new Date();
+      }
+      // If updating orderStatus, ensure table status stays active
+      if (order.tableStatus === 'close_table' || order.tableStatus === 'completed') {
+        order.tableStatus = 'active';
+      }
+      await order.save();
+      notifyDeviceSessionUpdate(order);
+
+      return res.status(200).send({ success: true, message: `Order status updated to ${orderStatus}`, data: order });
+    } catch (error) {
+      console.error('updateOrderStatus Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to update order status' });
+    }
+  }
+
+  /**
+   * Admin confirms an order
+   */
+  async confirmOrder(req, res) {
+    const { orderId } = req.body || {};
+    if (!orderId) {
+      return res.status(400).send({ success: false, message: 'orderId is required' });
+    }
+
+    try {
+      const order = await Order.findOne({ orderId });
+      if (!order) return res.status(404).send({ success: false, message: 'Order not found' });
+
+      const app = await HostApplication.findOne({ _id: order.hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
+
+      order.orderStatus = 'confirmed';
+      order.confirmedAt = new Date();
+      await order.save();
+      notifyDeviceSessionUpdate(order);
+
+      return res.status(200).send({ success: true, message: 'Order confirmed', data: order });
+    } catch (error) {
+      console.error('confirmOrder Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to confirm order' });
+    }
+  }
+
+  /**
+   * Admin initiates close table — tablet will show QR code, ads will stop
+   */
+  async closeTable(req, res) {
+    const { orderId } = req.body || {};
+    if (!orderId) {
+      return res.status(400).send({ success: false, message: 'orderId is required' });
+    }
+
+    try {
+      const order = await Order.findOne({ orderId });
+      if (!order) return res.status(404).send({ success: false, message: 'Order not found' });
+
+      const app = await HostApplication.findOne({ _id: order.hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
+
+      if (!app.upiId) {
+        return res.status(400).send({ success: false, message: 'No UPI ID configured. Set up payment config first.' });
+      }
+
+      order.tableStatus = 'close_table';
+      await order.save();
+      notifyDeviceSessionUpdate(order);
+
+      return res.status(200).send({ success: true, message: 'Table closed — showing payment QR to customer', data: order });
+    } catch (error) {
+      console.error('closeTable Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to close table' });
+    }
+  }
+
+  /**
+   * Admin marks payment as received — resets tablet to ad mode
+   */
+  async markPaymentReceived(req, res) {
+    const { orderId } = req.body || {};
+    if (!orderId) {
+      return res.status(400).send({ success: false, message: 'orderId is required' });
+    }
+
+    try {
+      const order = await Order.findOne({ orderId });
+      if (!order) return res.status(404).send({ success: false, message: 'Order not found' });
+
+      const app = await HostApplication.findOne({ _id: order.hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
+
+      order.tableStatus = 'completed';
+      order.paymentStatus = 'completed';
+      order.paidAt = new Date();
+      await order.save();
+      notifyDeviceSessionUpdate(order);
+
+      return res.status(200).send({ success: true, message: 'Payment received — session completed', data: order });
+    } catch (error) {
+      console.error('markPaymentReceived Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to mark payment received' });
     }
   }
 }

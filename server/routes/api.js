@@ -54,6 +54,14 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.post('/host/menu', hostController.updateMenu);
     merchantRoutes.post('/host/menu/upload-image', { bodyLimit: 5242880 }, hostController.uploadImage);
     merchantRoutes.get('/host/devices', hostController.getMyDevices);
+    merchantRoutes.put('/host/payment-config', hostController.savePaymentConfig);
+    merchantRoutes.get('/host/payment-config', hostController.getPaymentConfig);
+    merchantRoutes.post('/host/payment-config/upload-qr', { bodyLimit: 5242880 }, hostController.uploadQrCode);
+    merchantRoutes.get('/host/orders', hostController.getMyOrders);
+    merchantRoutes.post('/host/orders/update-status', hostController.updateOrderStatus);
+    merchantRoutes.post('/host/orders/confirm', hostController.confirmOrder);
+    merchantRoutes.post('/host/orders/close-table', hostController.closeTable);
+    merchantRoutes.post('/host/orders/payment-received', hostController.markPaymentReceived);
     next();
   });
 

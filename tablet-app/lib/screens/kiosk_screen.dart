@@ -20,6 +20,7 @@ import '../widgets/ad_view.dart';
 import '../widgets/menu_catalog.dart';
 import '../widgets/order_summary.dart';
 import '../widgets/checkout_modal.dart';
+import '../widgets/payment_qr_widget.dart';
 import '../widgets/download_progress_indicator.dart';
 import '../menu_image_cache.dart';
 import 'settings_screen.dart';
@@ -85,6 +86,9 @@ class _KioskScreenState extends State<KioskScreen> {
   bool _backOnlineVisible = false;
   Timer? _backOnlineTimer;
 
+  // ── Close table / payment state ──
+  Map<String, dynamic>? _tableSession;
+
   // ── Timers ──
   Timer? _inactivityTimer;
 
@@ -110,6 +114,9 @@ class _KioskScreenState extends State<KioskScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _deferredBootstrap());
   }
 
+  WebSocket? _socket;
+  bool _isWsConnected = false;
+
   // ────────────────── Deferred bootstrap ──────────────────
 
   Future<void> _deferredBootstrap() async {
@@ -117,6 +124,7 @@ class _KioskScreenState extends State<KioskScreen> {
     await _registerAndStartHeartbeat();
     await _fetchMenu();
     await _bootAds();
+    _initWebSocket();
 
     if (mounted) {
       setState(() {
@@ -142,6 +150,58 @@ class _KioskScreenState extends State<KioskScreen> {
     );
   }
 
+  void _initWebSocket() async {
+    _socket?.close();
+    try {
+      final host = widget.serverHost;
+      final wsUrl = 'ws://$host:4200/ws/device?token=${widget.token}';
+      debugPrint('[WS] Connecting to $wsUrl');
+      
+      _socket = await WebSocket.connect(wsUrl).timeout(const Duration(seconds: 10));
+      _isWsConnected = true;
+      debugPrint('[WS] Connected successfully');
+
+      _socket!.listen(
+        (data) {
+          try {
+            final payload = jsonDecode(data as String) as Map<String, dynamic>;
+            final event = payload['event'] as String? ?? '';
+            if (event == 'table_session') {
+              debugPrint('[WS] Table session payload: $payload');
+              _processTableSession(jsonEncode(payload));
+            } else if (event == 'reload_menu') {
+              debugPrint('[WS] Menu update reload request received');
+              _fetchMenu();
+            }
+          } catch (e) {
+            debugPrint('[WS] Error processing msg: $e');
+          }
+        },
+        onError: (err) {
+          debugPrint('[WS] Socket error: $err');
+          _reconnectWebSocket();
+        },
+        onDone: () {
+          debugPrint('[WS] Socket closed by host');
+          _reconnectWebSocket();
+        },
+        cancelOnError: true,
+      );
+    } catch (e) {
+      debugPrint('[WS] Socket connection failed: $e');
+      _reconnectWebSocket();
+    }
+  }
+
+  void _reconnectWebSocket() {
+    _isWsConnected = false;
+    Future.delayed(const Duration(seconds: 5), () {
+      if (mounted) {
+        _initWebSocket();
+      }
+    });
+  }
+
   Future<void> _registerAndStartHeartbeat() async {
     try {
       final req = RegisterDeviceRequest()
@@ -159,7 +219,7 @@ class _KioskScreenState extends State<KioskScreen> {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(kHeartbeatInterval, (timer) async {
       try {
-        await _deviceClient!.sendHeartbeat(
+        final resp = await _deviceClient!.sendHeartbeat(
             HeartbeatRequest()..deviceId = widget.deviceId,
             options: _callOptions);
         if (_heartbeatFailCount > 0) _heartbeatFailCount = 0;
@@ -167,6 +227,7 @@ class _KioskScreenState extends State<KioskScreen> {
         if (!_isOnline && _heartbeatSuccessCount >= _minHeartbeatSuccessesBeforeOnline) {
           _markOnline();
         }
+        _processTableSession(resp.tableSessionJson);
       } catch (e) {
         _heartbeatFailCount++;
         _heartbeatSuccessCount = 0;
@@ -417,10 +478,95 @@ class _KioskScreenState extends State<KioskScreen> {
     setState(() {
       _isIdle = true;
       _showCart = false;
+      _tableSession = null;
     });
     _adSync.syncNow();
     _adPlayer.resume();
     _cancelIdleTimer();
+  }
+
+  /// Process table session state from heartbeat: close_table → show QR,
+  /// completed → dismiss QR and return to ads.
+  void _processTableSession(String? jsonStr) {
+    if (jsonStr == null || jsonStr.isEmpty) {
+      if (_tableSession != null && _tableSession!['status'] == 'active') {
+        setState(() {
+          _tableSession = null;
+        });
+      }
+      return;
+    }
+    try {
+      final data = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final status = data['status'] as String? ?? '';
+      if (status == 'close_table') {
+        _adPlayer.pause();
+        _cancelIdleTimer();
+        setState(() {
+          _tableSession = data;
+          _isIdle = true;
+        });
+      } else if (status == 'active') {
+        setState(() {
+          _tableSession = data;
+        });
+      } else if (status == 'completed') {
+        setState(() => _tableSession = null);
+        
+        // Show Thank You Popup
+        BuildContext? dialogContext;
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogCtx) {
+            dialogContext = dialogCtx;
+            return AlertDialog(
+              shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
+              backgroundColor: kCardBg,
+              content: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.favorite_rounded, color: Colors.pink, size: 64),
+                    SizedBox(height: 20),
+                    Text(
+                      'Thank You!',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: kTextDark,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Do visit again.',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: kTextGrey,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+
+        // Auto dismiss after 3 seconds and return to ads
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) {
+            if (dialogContext != null) {
+              Navigator.pop(dialogContext!);
+            }
+            _returnToAds();
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to parse table session: $e');
+    }
   }
 
   // ────────────────── Order placement ──────────────────
@@ -516,6 +662,7 @@ class _KioskScreenState extends State<KioskScreen> {
 
   @override
   void dispose() {
+    _socket?.close();
     _heartbeatTimer?.cancel();
     _inactivityTimer?.cancel();
     _backOnlineTimer?.cancel();
@@ -578,6 +725,17 @@ class _KioskScreenState extends State<KioskScreen> {
     }
 
     if (_isIdle) {
+      // Show payment QR if table is in close_table mode
+      if (_tableSession != null && _tableSession!['status'] == 'close_table') {
+        return PaymentQrWidget(
+          upiUrl: _tableSession!['upiUrl'] as String? ?? '',
+          amountPaise: _tableSession!['amount'] as int? ?? 0,
+          orderId: _tableSession!['orderId'] as String? ?? '',
+          tableNumber: _tableSession!['tableNumber'] as String? ?? '',
+          onUnlock: _promptUnlock,
+        );
+      }
+
       return Scaffold(
         body: Listener(
           behavior: HitTestBehavior.opaque,
@@ -780,6 +938,7 @@ class _KioskScreenState extends State<KioskScreen> {
           ],
         ),
         _buildFloatingCartBar(),
+        _buildLiveSessionStatusBar(),
         if (!_isOnline)
           Positioned.fill(
             child: AbsorbPointer(
@@ -812,8 +971,8 @@ class _KioskScreenState extends State<KioskScreen> {
                     )
                   ],
                 ),
-                padding: const EdgeInsets.all(12),
-                child: const Icon(Icons.arrow_back, color: kTextDark, size: 20),
+                padding: const EdgeInsets.all(22),
+                child: const Icon(Icons.arrow_back, color: kTextDark, size: 32),
               ),
             ),
             const SizedBox(width: 20),
@@ -1038,6 +1197,141 @@ class _KioskScreenState extends State<KioskScreen> {
                     ),
                 ],
               ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLiveSessionStatusBar() {
+    return ValueListenableBuilder<CartSnapshot>(
+      valueListenable: _cart,
+      builder: (context, cart, _) {
+        if (!cart.isEmpty || _tableSession == null || _tableSession!['status'] != 'active') {
+          return const SizedBox.shrink();
+        }
+
+        final orderStatus = _tableSession!['orderStatus'] as String? ?? 'placed';
+        final amountPaise = _tableSession!['amount'] as int? ?? 0;
+        final orderId = _tableSession!['orderId'] as String? ?? '';
+        final amountFormatted = (amountPaise / 100).toStringAsFixed(2);
+
+        IconData iconData;
+        Color iconColor;
+        String statusTitle;
+        String statusSubtitle;
+
+        switch (orderStatus.toLowerCase()) {
+          case 'placed':
+            iconData = Icons.pending_actions_rounded;
+            iconColor = Colors.amber.shade600;
+            statusTitle = 'Order Placed';
+            statusSubtitle = 'Waiting for kitchen confirmation…';
+            break;
+          case 'confirmed':
+            iconData = Icons.check_circle_outline_rounded;
+            iconColor = Colors.green.shade600;
+            statusTitle = 'Order Confirmed';
+            statusSubtitle = 'Preparing your food shortly…';
+            break;
+          case 'cooking':
+            iconData = Icons.soup_kitchen_rounded;
+            iconColor = Colors.blue.shade600;
+            statusTitle = 'Preparing & Cooking';
+            statusSubtitle = 'Chefs are working on your food!';
+            break;
+          case 'served':
+            iconData = Icons.restaurant_rounded;
+            iconColor = const Color(0xFF059669);
+            statusTitle = 'Delivered & Served';
+            statusSubtitle = 'Enjoy your meal!';
+            break;
+          case 'cancelled':
+            iconData = Icons.cancel_outlined;
+            iconColor = Colors.red.shade600;
+            statusTitle = 'Order Cancelled';
+            statusSubtitle = 'Please contact the staff.';
+            break;
+          default:
+            iconData = Icons.receipt_long_rounded;
+            iconColor = kTextGrey;
+            statusTitle = 'Active Order';
+            statusSubtitle = 'Status: $orderStatus';
+        }
+
+        return Positioned(
+          bottom: 24,
+          left: 144,
+          right: 24,
+          child: Container(
+            height: 76,
+            decoration: BoxDecoration(
+              color: kAccentBlue,
+              borderRadius: kFloatingCartBorderRadius,
+              border: Border.all(color: const Color(0xFF1E1B4B), width: 3.0),
+              boxShadow: const [
+                BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4)),
+              ],
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
+                      padding: const EdgeInsets.all(10),
+                      child: Icon(iconData, color: Colors.white, size: 22),
+                    ),
+                    const SizedBox(width: 16),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          statusTitle,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Text(
+                          statusSubtitle,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.white.withValues(alpha: 0.85),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Total: ₹$amountFormatted',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 15,
+                        color: Colors.white,
+                      ),
+                    ),
+                    Text(
+                      'ID: $orderId',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.white.withValues(alpha: 0.75),
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         );
