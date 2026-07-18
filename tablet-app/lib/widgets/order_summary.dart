@@ -42,9 +42,7 @@ class OrderSummaryPanel extends StatelessWidget {
           );
         }
 
-        final subtotal = cart.totalPrice(menuItems);
-        final taxesAndFees = subtotal * 0.09; // 9% taxes & fees as shown in the mockup
-        final total = subtotal + taxesAndFees;
+        final total = cart.totalPrice(menuItems);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -210,25 +208,6 @@ class OrderSummaryPanel extends StatelessWidget {
               padding: const EdgeInsets.all(20),
               child: Column(
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text("Subtotal", style: kOrderItemSubtitleStyle.copyWith(fontSize: 14)),
-                      Text("₹${subtotal.toStringAsFixed(2)}", style: kCardTitleStyle.copyWith(fontSize: 14)),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text("Taxes & fees (9%)", style: kOrderItemSubtitleStyle.copyWith(fontSize: 14)),
-                      Text("₹${taxesAndFees.toStringAsFixed(2)}", style: kCardTitleStyle.copyWith(fontSize: 14)),
-                    ],
-                  ),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Divider(color: kDividerColor, height: 1),
-                  ),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [

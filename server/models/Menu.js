@@ -31,6 +31,19 @@ const MenuItemSchema = new mongoose.Schema({
   imageUrl: {
     type: String,
     default: ''
+  },
+  gst: {
+    type: Number,
+    default: null
+  },
+  otherCharges: {
+    type: Number,
+    default: null
+  },
+  otherChargesType: {
+    type: String,
+    enum: ['percentage', 'rupees'],
+    default: 'percentage'
   }
 });
 
@@ -52,6 +65,19 @@ const MenuSchema = new mongoose.Schema({
   categories: {
     type: [String],
     default: ['Starters', 'Main Course', 'Dessert', 'Beverages']
+  },
+  defaultGst: {
+    type: Number,
+    default: 0
+  },
+  defaultOtherCharges: {
+    type: Number,
+    default: 0
+  },
+  defaultOtherChargesType: {
+    type: String,
+    enum: ['percentage', 'rupees'],
+    default: 'percentage'
   },
   createdAt: {
     type: Date,

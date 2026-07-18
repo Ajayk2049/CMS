@@ -12,6 +12,7 @@ class MenuCatalogWidget extends StatefulWidget {
   final double viewportHeight;
   final String selectedCategory;
   final MenuImageCache imageCache;
+  final bool isOnline;
 
   const MenuCatalogWidget({
     super.key,
@@ -21,6 +22,7 @@ class MenuCatalogWidget extends StatefulWidget {
     required this.viewportHeight,
     required this.selectedCategory,
     required this.imageCache,
+    this.isOnline = true,
   });
 
   @override
@@ -126,6 +128,7 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
                           cartNotifier: widget.cartNotifier,
                           serverHost: widget.serverHost,
                           imageCache: widget.imageCache,
+                          isOnline: widget.isOnline,
                         );
                       },
                     ),
@@ -159,12 +162,14 @@ class _MenuCard extends StatelessWidget {
   final CartNotifier cartNotifier;
   final String serverHost;
   final MenuImageCache imageCache;
+  final bool isOnline;
 
   const _MenuCard({
     required this.item,
     required this.cartNotifier,
     required this.serverHost,
     required this.imageCache,
+    required this.isOnline,
   });
 
   @override
@@ -279,7 +284,7 @@ class _MenuCard extends StatelessWidget {
             constraints: const BoxConstraints(),
             padding: const EdgeInsets.all(6),
             icon: const Icon(Icons.remove, color: kAccentBlue, size: 16),
-            onPressed: () => cartNotifier.removeItem(item.itemId),
+            onPressed: isOnline ? () => cartNotifier.removeItem(item.itemId) : null,
           ),
           const SizedBox(width: 4),
           Text('$qty', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: kTextDark)),
@@ -288,7 +293,7 @@ class _MenuCard extends StatelessWidget {
             constraints: const BoxConstraints(),
             padding: const EdgeInsets.all(6),
             icon: const Icon(Icons.add, color: Colors.green, size: 16),
-            onPressed: () => cartNotifier.addItem(item.itemId),
+            onPressed: isOnline ? () => cartNotifier.addItem(item.itemId) : null,
           ),
         ],
       ),
@@ -296,18 +301,19 @@ class _MenuCard extends StatelessWidget {
   }
 
   Widget _buildAddButton() {
+    final bool canAdd = item.isAvailable && isOnline;
     return GestureDetector(
-      onTap: item.isAvailable ? () => cartNotifier.addItem(item.itemId) : null,
+      onTap: canAdd ? () => cartNotifier.addItem(item.itemId) : null,
       child: Container(
         decoration: BoxDecoration(
-          color: item.isAvailable ? Colors.red : Colors.grey.shade300,
+          color: canAdd ? Colors.red : Colors.grey.shade300,
           borderRadius: BorderRadius.circular(20),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: const Text(
+        child: Text(
           "Add",
           style: TextStyle(
-            color: Colors.white,
+            color: canAdd ? Colors.white : Colors.grey.shade600,
             fontWeight: FontWeight.bold,
             fontSize: 14,
           ),

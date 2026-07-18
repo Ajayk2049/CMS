@@ -29,7 +29,8 @@ import {
   Salad,
   QrCode,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Percent
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -156,7 +157,21 @@ export default function MerchantDashboard() {
   const [zipError, setZipError] = useState('');
   const [roleActionLoading, setRoleActionLoading] = useState(false);
   const [showBecomeAdvertiserModal, setShowBecomeAdvertiserModal] = useState(false);
+  const [showGetMoreDevicesModal, setShowGetMoreDevicesModal] = useState(false);
+  const [reqDeviceType, setReqDeviceType] = useState('tabletop');
+  const [reqDeviceQty, setReqDeviceQty] = useState('1');
+  const [reqDeviceLoading, setReqDeviceLoading] = useState(false);
+  const [reqDeviceError, setReqDeviceError] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [showGlobalTaxesModal, setShowGlobalTaxesModal] = useState(false);
+  const [globalGstInput, setGlobalGstInput] = useState('0');
+  const [globalOtherChargesInput, setGlobalOtherChargesInput] = useState('0');
+  const [globalOtherChargesType, setGlobalOtherChargesType] = useState('percentage');
+  const [globalTaxesLoading, setGlobalTaxesLoading] = useState(false);
+  const [globalTaxesError, setGlobalTaxesError] = useState('');
+  const [menuDefaultGst, setMenuDefaultGst] = useState(0);
+  const [menuDefaultOtherCharges, setMenuDefaultOtherCharges] = useState(0);
+  const [menuDefaultOtherChargesType, setMenuDefaultOtherChargesType] = useState('percentage');
   const [deviceFilterType, setDeviceFilterType] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('deviceFilterType') || 'tablet';
@@ -570,6 +585,14 @@ export default function MerchantDashboard() {
     } catch (err) { console.error(err); }
   };
 
+  const serviceWaiter = async (orderId) => {
+    try {
+      await axios.post(`${API_BASE}/host/orders/service-waiter`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
+      fetchLiveOrders(token);
+      fetchPaymentOrders(token);
+    } catch (err) { console.error('serviceWaiter error:', err); }
+  };
+
   const handleVerifyUpi = () => {
     if (!tempUpiInput.includes('@')) return;
     const upiToCheck = tempUpiInput.trim().toLowerCase();
@@ -667,6 +690,7 @@ export default function MerchantDashboard() {
   };
 
   const handleDeleteUpi = (upiIdToDelete) => {
+    if (!window.confirm("Are you sure you want to delete this UPI configuration?")) return;
     setTimeout(() => {
       setSavedUpiList(prev => {
         const newList = prev.filter(item => item && item.upiId !== upiIdToDelete);
@@ -694,6 +718,9 @@ export default function MerchantDashboard() {
       });
       setMenuItems(res.data.data.items || []);
       setMenuCategories(res.data.data.categories || ['Starters', 'Main Course', 'Dessert', 'Beverages']);
+      setMenuDefaultGst(res.data.data.defaultGst || 0);
+      setMenuDefaultOtherCharges(res.data.data.defaultOtherCharges || 0);
+      setMenuDefaultOtherChargesType(res.data.data.defaultOtherChargesType || 'percentage');
     } catch (err) {
       console.error(err);
       setMenuItems([]);
@@ -715,15 +742,13 @@ export default function MerchantDashboard() {
 
       ws.onmessage = (event) => {
         const payload = JSON.parse(event.data);
-        if (payload.event === 'new_order') {
-          const newOrder = payload.data;
+        if (payload.event === 'new_order' || payload.event === 'waiter_call' || payload.event === 'waiter_serviced') {
           fetchLiveOrders(authToken);
           fetchPaymentOrders(authToken);
-          alert(`New Order placed at Table ${newOrder.tableNumber}!`);
-          if (newOrder.hostApplicationId && newOrder.hostApplicationId !== activeOrderVenueTabRef.current) {
+          if (payload.event === 'new_order' && payload.data.hostApplicationId && payload.data.hostApplicationId !== activeOrderVenueTabRef.current) {
             setUnreadOrderVenues(prev => {
               const next = new Set(prev);
-              next.add(newOrder.hostApplicationId);
+              next.add(payload.data.hostApplicationId);
               return next;
             });
           }
@@ -883,7 +908,10 @@ export default function MerchantDashboard() {
       await axios.post(`${API_BASE}/host/menu`, {
         hostApplicationId: selectedOutletId,
         items: menuItems,
-        categories: menuCategories
+        categories: menuCategories,
+        defaultGst: menuDefaultGst,
+        defaultOtherCharges: menuDefaultOtherCharges,
+        defaultOtherChargesType: menuDefaultOtherChargesType
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -902,7 +930,10 @@ export default function MerchantDashboard() {
       await axios.post(`${API_BASE}/host/menu`, {
         hostApplicationId: selectedOutletId,
         items: menuItems,
-        categories: updatedCategories
+        categories: updatedCategories,
+        defaultGst: menuDefaultGst,
+        defaultOtherCharges: menuDefaultOtherCharges,
+        defaultOtherChargesType: menuDefaultOtherChargesType
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -960,7 +991,10 @@ export default function MerchantDashboard() {
       price: '',
       category: category,
       isAvailable: true,
-      imageUrl: ''
+      imageUrl: '',
+      gst: (menuDefaultGst || 0).toString(),
+      otherCharges: (menuDefaultOtherCharges || 0).toString(),
+      otherChargesType: menuDefaultOtherChargesType || 'percentage'
     });
     setZoomFactor(100);
     setImageTab('upload');
@@ -975,7 +1009,10 @@ export default function MerchantDashboard() {
       price: item.price ? (item.price / 100).toString() : '',
       category: item.category || 'Starters',
       isAvailable: item.isAvailable !== false,
-      imageUrl: item.imageUrl || ''
+      imageUrl: item.imageUrl || '',
+      gst: item.gst !== undefined && item.gst !== null ? item.gst.toString() : (menuDefaultGst || 0).toString(),
+      otherCharges: item.otherCharges !== undefined && item.otherCharges !== null ? item.otherCharges.toString() : (menuDefaultOtherCharges || 0).toString(),
+      otherChargesType: (item.otherCharges !== undefined && item.otherCharges !== null) ? (item.otherChargesType || 'percentage') : (menuDefaultOtherChargesType || 'percentage')
     });
     setZoomFactor(100);
     setImageTab(item.imageUrl ? 'url' : 'upload');
@@ -993,6 +1030,24 @@ export default function MerchantDashboard() {
       return;
     }
 
+    const parsedGst = modalForm.gst !== '' ? parseFloat(modalForm.gst) : null;
+    const parsedOther = modalForm.otherCharges !== '' ? parseFloat(modalForm.otherCharges) : null;
+
+    if (parsedGst !== null && (isNaN(parsedGst) || parsedGst < 0)) {
+      setError('Please enter a valid GST percentage');
+      return;
+    }
+    if (parsedOther !== null && (isNaN(parsedOther) || parsedOther < 0)) {
+      setError('Please enter a valid other charges value');
+      return;
+    }
+
+    // CSS-like override: save null in DB if it matches global default configuration
+    const gstVal = parsedGst === menuDefaultGst ? null : parsedGst;
+    const otherChargesVal = (parsedOther === menuDefaultOtherCharges && modalForm.otherChargesType === menuDefaultOtherChargesType) 
+      ? null 
+      : parsedOther;
+
     const priceInPaise = Math.round(priceVal * 100);
 
     if (editingItemIndex === -1) {
@@ -1004,7 +1059,10 @@ export default function MerchantDashboard() {
         price: priceInPaise,
         category: modalForm.category,
         isAvailable: modalForm.isAvailable,
-        imageUrl: modalForm.imageUrl
+        imageUrl: modalForm.imageUrl,
+        gst: gstVal,
+        otherCharges: otherChargesVal,
+        otherChargesType: modalForm.otherChargesType
       };
       setMenuItems([...menuItems, newItem]);
     } else {
@@ -1017,7 +1075,10 @@ export default function MerchantDashboard() {
         price: priceInPaise,
         category: modalForm.category,
         isAvailable: modalForm.isAvailable,
-        imageUrl: modalForm.imageUrl
+        imageUrl: modalForm.imageUrl,
+        gst: gstVal,
+        otherCharges: otherChargesVal,
+        otherChargesType: modalForm.otherChargesType
       };
       setMenuItems(updated);
     }
@@ -1069,7 +1130,10 @@ export default function MerchantDashboard() {
   };
 
   const removeMenuItem = (index) => {
-    setMenuItems(menuItems.filter((_, i) => i !== index));
+    const item = menuItems[index];
+    if (window.confirm(`Are you sure you want to delete "${item?.name || 'this item'}"?`)) {
+      setMenuItems(menuItems.filter((_, i) => i !== index));
+    }
   };
 
   const updateMenuItemField = (index, field, value) => {
@@ -1119,6 +1183,37 @@ export default function MerchantDashboard() {
       setError(err.response?.data?.message || 'Failed to register as advertiser.');
     } finally {
       setRoleActionLoading(false);
+    }
+  };
+
+  const handleRequestMoreDevices = async (e) => {
+    e.preventDefault();
+    if (!selectedOutletId) {
+      setReqDeviceError('Please select a venue/outlet first.');
+      return;
+    }
+    const qty = parseInt(reqDeviceQty, 10);
+    if (isNaN(qty) || qty < 1) {
+      setReqDeviceError('Quantity must be at least 1.');
+      return;
+    }
+
+    setReqDeviceError('');
+    setReqDeviceLoading(true);
+    try {
+      await axios.post(`${API_BASE}/host/request-more-devices`, {
+        hostApplicationId: selectedOutletId,
+        deviceType: reqDeviceType,
+        quantity: qty
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      showToast('Device request submitted successfully!', 'success');
+      setShowGetMoreDevicesModal(false);
+    } catch (err) {
+      setReqDeviceError(err.response?.data?.message || 'Failed to submit request.');
+    } finally {
+      setReqDeviceLoading(false);
     }
   };
 
@@ -1216,26 +1311,6 @@ export default function MerchantDashboard() {
 
         <div className="flex items-center space-x-2 md:space-x-3">
           {/* Role Actions */}
-          {roles.includes('advertiser') ? (
-            <button
-              onClick={() => handleSwitchRole('advertiser')}
-              disabled={roleActionLoading}
-              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 hover:border-indigo-500 text-indigo-400 hover:text-indigo-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
-            >
-              <RefreshCw className={`w-4 h-4 ${roleActionLoading ? 'animate-spin' : ''}`} />
-              <span className="hidden md:inline">Switch to Advertiser</span>
-            </button>
-          ) : (
-            <button
-              onClick={() => setShowBecomeAdvertiserModal(true)}
-              disabled={roleActionLoading}
-              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border border-blue-500/30 hover:border-blue-500 text-blue-400 hover:text-blue-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
-            >
-              <Megaphone className="w-4 h-4 " />
-              <span className="hidden md:inline">Become Advertiser</span>
-            </button>
-          )}
-
           <button
             onClick={toggleTheme}
             className="p-2 bg-card hover:bg-muted border border-border rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer flex items-center justify-center shadow-sm"
@@ -1264,30 +1339,60 @@ export default function MerchantDashboard() {
                   <p className="text-xs font-bold text-foreground mt-1 truncate">{name || phone}</p>
                 </div>
 
-                {((applications.length > 0 && !hasApprovedVenue) || applications.length === 0) && (
+                {applications.length > 0 && !hasApprovedVenue && (
                   <div className="p-1.5 space-y-1 border-b border-border/40">
-                    {applications.length > 0 && !hasApprovedVenue && (
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        setActiveTab('my-applications');
+                      }}
+                      className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                    >
+                      <Form className="w-4 h-4 text-[#0069a8]" />
+                      <span>Your Applications</span>
+                    </button>
+                  </div>
+                )}
+
+                {applications.length > 0 && (
+                  <div className="p-1.5 space-y-1 border-b border-border/40">
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        setShowGetMoreDevicesModal(true);
+                        setReqDeviceType('tabletop');
+                        setReqDeviceQty('1');
+                        setReqDeviceError('');
+                      }}
+                      className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                    >
+                      <Tablet className="w-4 h-4 text-blue-500" />
+                      <span>Get More Devices</span>
+                    </button>
+
+                    {roles.includes('advertiser') ? (
                       <button
                         onClick={() => {
                           setUserMenuOpen(false);
-                          setActiveTab('my-applications');
+                          handleSwitchRole('advertiser');
                         }}
+                        disabled={roleActionLoading}
                         className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
                       >
-                        <Form className="w-4 h-4 text-[#0069a8]" />
-                        <span>Your Applications</span>
+                        <RefreshCw className={`w-4 h-4 text-indigo-500 ${roleActionLoading ? 'animate-spin' : ''}`} />
+                        <span>Switch to Advertiser</span>
                       </button>
-                    )}
-                    {applications.length === 0 && (
+                    ) : (
                       <button
                         onClick={() => {
                           setUserMenuOpen(false);
-                          setActiveTab('applications');
+                          setShowBecomeAdvertiserModal(true);
                         }}
+                        disabled={roleActionLoading}
                         className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
                       >
-                        <Plus className="w-4 h-4 text-emerald-500" />
-                        <span>New Host Application</span>
+                        <Megaphone className="w-4 h-4 text-blue-500" />
+                        <span>Become Advertiser</span>
                       </button>
                     )}
                   </div>
@@ -1733,6 +1838,19 @@ export default function MerchantDashboard() {
               {approvedOutlets.length > 0 && (
                 <div className="flex space-x-4">
                   <button
+                    onClick={() => {
+                      setGlobalGstInput(menuDefaultGst !== null ? menuDefaultGst.toString() : '0');
+                      setGlobalOtherChargesInput(menuDefaultOtherCharges !== null ? menuDefaultOtherCharges.toString() : '0');
+                      setGlobalOtherChargesType(menuDefaultOtherChargesType || 'percentage');
+                      setShowGlobalTaxesModal(true);
+                    }}
+                    className="bg-card hover:bg-muted border border-border/40 text-foreground font-semibold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center space-x-1.5 cursor-pointer shadow-sm"
+                  >
+                    <Percent className="w-4 h-4 text-indigo-500" />
+                    <span>Configure Taxes</span>
+                  </button>
+
+                  <button
                     onClick={() => setIsCategoryModalOpen(true)}
                     className="bg-card hover:bg-muted border border-border/40 text-foreground font-semibold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center space-x-1.5 cursor-pointer shadow-sm"
                   >
@@ -1796,7 +1914,7 @@ export default function MerchantDashboard() {
                                 className="relative flex flex-col justify-between overflow-hidden rounded-2xl border border-border/40 bg-card/10 p-4 transition-all duration-300 hover:-translate-y-1 hover:border-primary/50 group"
                               >
                                 {/* Overlay Edit/Delete Controls */}
-                                <div className="absolute top-6 right-6 z-10 flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="absolute top-6 right-6 z-10 flex space-x-2">
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -1811,7 +1929,7 @@ export default function MerchantDashboard() {
                                       e.stopPropagation();
                                       removeMenuItem(originalIndex);
                                     }}
-                                    className="p-1.5 bg-destructive/95 hover:bg-destructive border border-destructive/20 rounded-lg text-white transition-all cursor-pointer shadow-sm"
+                                    className="p-1.5 bg-red-600 hover:bg-red-700 border border-red-500/20 rounded-lg text-white transition-all cursor-pointer shadow-sm"
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
@@ -1890,163 +2008,183 @@ export default function MerchantDashboard() {
                   </div>
                 </div>
 
-                        {(() => {
-                          const filteredOrders = orders.filter(ord => ord.hostApplicationId === activeOrderVenueTab);
-                          
-                          // Rank orders by status: placed (1), cooking (2), served (3), others (4). Chronological (oldest first) within the same rank.
-                          const getStatusRank = (status) => {
-                            if (status === 'placed') return 1;
-                            if (status === 'cooking') return 2;
-                            if (status === 'served') return 3;
-                            return 4;
-                          };
+                {(() => {
+                  const filteredOrders = orders.filter(ord => ord.hostApplicationId === activeOrderVenueTab);
 
-                          const sortedOrders = [...filteredOrders].sort((a, b) => {
-                            const rankA = getStatusRank(a.orderStatus);
-                            const rankB = getStatusRank(b.orderStatus);
-                            if (rankA !== rankB) return rankA - rankB;
-                            
-                            const timeA = new Date(a.createdAt || a.updatedAt || 0).getTime();
-                            const timeB = new Date(b.createdAt || b.updatedAt || 0).getTime();
-                            return timeA - timeB;
-                          });
+                  // Rank orders by status: placed (1), cooking (2), served (3), others (4). Chronological (oldest first) within the same rank.
+                  const getStatusRank = (status) => {
+                    if (status === 'placed') return 1;
+                    if (status === 'cooking') return 2;
+                    if (status === 'served') return 3;
+                    return 4;
+                  };
 
-                          return sortedOrders.length === 0 ? (
-                            <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
-                              <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                              <p className="text-sm font-bold text-foreground">Waiting for live orders...</p>
-                              <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">When customers place orders at dining tables in this venue, they will pop up here instantly.</p>
-                            </div>
-                          ) : (
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-left border-collapse text-xs">
-                                <thead>
-                                  <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
-                                    <th className="pb-3 pr-2">Table</th>
-                                    <th className="pb-3 pr-2">Order ID</th>
-                                    <th className="pb-3 pr-2">Items</th>
-                                    <th className="pb-3 pr-2">Status</th>
-                                    <th className="pb-3 pr-2">Actions</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {sortedOrders.map((ord) => (
-                                    <tr key={ord.orderId} className="hover:bg-muted/10">
-                                      <td className="py-4 pr-2">
-                                        <div className="flex items-center space-x-2">
-                                          {ord.orderStatus === 'placed' && (
-                                            <span className="relative flex h-2 w-2 shrink-0">
-                                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                                            </span>
-                                          )}
-                                          <span className="font-black text-blue-500 dark:text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded text-xs whitespace-nowrap">
-                                            Table &nbsp; {ord.tableNumber}
-                                          </span>
-                                        </div>
-                                      </td>
-                                      <td className="py-4 pr-2 font-mono font-bold text-foreground">
-                                        {ord.orderId}
-                                      </td>
-                                      <td className="py-4 pr-2">
-                                        <div className="space-y-1 font-semibold text-foreground">
-                                          {ord.items.map((item, idx) => (
-                                            <div key={idx} className="text-xs">
-                                              {item.name} &nbsp;&nbsp; <span className="text-muted-foreground">x &nbsp;{item.quantity}</span>
-                                            </div>
-                                          ))}
-                                          <div className="w-12 border-t-2 border-border/50 my-1.5"></div>
-                                          <div className="text-[10px] font-bold text-foreground">
-                                            Total: ₹{(ord.totalAmount / 100).toFixed(2)}
-                                          </div>
-                                        </div>
-                                      </td>
-                                      <td className="py-4 pr-2">
-                                        <select
-                                          value={ord.orderStatus}
-                                          onChange={(e) => {
-                                            e.stopPropagation();
-                                            updateOrderStatus(ord.orderId, e.target.value);
-                                          }}
-                                          className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border focus:outline-none cursor-pointer w-fit ${ord.orderStatus === 'placed'
-                                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                                            : ord.orderStatus === 'cooking'
-                                              ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30'
-                                              : ord.orderStatus === 'served'
-                                                ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30'
-                                                : 'bg-muted-foreground/15 text-muted-foreground border-border/30'
-                                            }`}
-                                        >
-                                          <option value="placed" className="bg-card text-foreground">Placed</option>
-                                          <option value="cooking" className="bg-card text-foreground">Accepted & Preparing</option>
-                                          <option value="served" className="bg-card text-foreground">Delivered / Served</option>
-                                        </select>
-                                      </td>
-                                      <td className="py-4 pr-2">
-                                        {ord.tableStatus === 'close_table' ? (
-                                          confirmingPaymentOrderId === ord.orderId ? (
-                                            <div className="flex items-center space-x-1.5 animate-fade-in whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                                              <span className="text-[9px] font-black text-foreground uppercase">Received?</span>
-                                              <button
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  markPaymentReceived(ord.orderId);
-                                                  setConfirmingPaymentOrderId(null);
-                                                }}
-                                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2 py-1 rounded text-[9px] transition-colors cursor-pointer uppercase tracking-wider"
-                                              >
-                                                Yes
-                                              </button>
-                                              <button
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  setConfirmingPaymentOrderId(null);
-                                                }}
-                                                className="bg-muted hover:bg-muted/80 text-foreground font-bold px-2 py-1 rounded text-[9px] transition-colors cursor-pointer border border-border/40 uppercase tracking-wider"
-                                              >
-                                                No
-                                              </button>
-                                            </div>
-                                          ) : (
-                                            <button
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                setConfirmingPaymentOrderId(ord.orderId);
-                                              }}
-                                              className="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-[9px] font-black uppercase px-3 py-1.5 rounded-xl flex items-center justify-center cursor-pointer transition-all shadow-sm w-fit shrink-0 animate-pulse"
-                                            >
-                                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 shrink-0 animate-pulse" />
-                                              Payment Received
-                                            </button>
-                                          )
-                                        ) : (
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              closeTable(ord.orderId);
-                                            }}
-                                            disabled={ord.orderStatus !== 'served'}
-                                            className={`text-[9px] font-black uppercase px-3 py-1.5 rounded-xl border transition-all shadow-sm shrink-0 w-fit cursor-pointer ${
-                                              ord.orderStatus === 'served'
-                                                ? 'bg-destructive/10 hover:bg-destructive/20 text-destructive border-destructive/20'
-                                                : 'bg-muted text-muted-foreground border-border/40 opacity-50 cursor-not-allowed'
-                                            }`}
-                                          >
-                                            Clear Table
-                                          </button>
-                                        )}
-                                      </td>
-                                    </tr>
+                  const sortedOrders = [...filteredOrders].sort((a, b) => {
+                    const rankA = getStatusRank(a.orderStatus);
+                    const rankB = getStatusRank(b.orderStatus);
+                    if (rankA !== rankB) return rankA - rankB;
+
+                    const timeA = new Date(a.createdAt || a.updatedAt || 0).getTime();
+                    const timeB = new Date(b.createdAt || b.updatedAt || 0).getTime();
+                    return timeA - timeB;
+                  });
+
+                  return sortedOrders.length === 0 ? (
+                    <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
+                      <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
+                      <p className="text-sm font-bold text-foreground">Waiting for live orders...</p>
+                      <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">When customers place orders at dining tables in this venue, they will pop up here instantly.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
+                            <th className="pb-3 pr-2">Table</th>
+                            <th className="pb-3 pr-2">Order ID</th>
+                            <th className="pb-3 pr-2">Items</th>
+                            <th className="pb-3 pr-2">Status</th>
+                            <th className="pb-3 pr-2">Requests</th>
+                            <th className="pb-3 pr-2">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortedOrders.map((ord) => (
+                            <tr key={ord.orderId} className="hover:bg-muted/10">
+                              <td className="py-4 pr-2">
+                                <div className="flex items-center space-x-2">
+                                  {ord.orderStatus === 'placed' && (
+                                    <span className="relative flex h-2 w-2 shrink-0">
+                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                    </span>
+                                  )}
+                                  <span className="font-black text-blue-500 dark:text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded text-xs whitespace-nowrap">
+                                    Table &nbsp; {ord.tableNumber}
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-4 pr-2 font-mono font-bold text-foreground">
+                                {ord.orderId}
+                              </td>
+                              <td className="py-4 pr-2">
+                                <div className="space-y-1 font-semibold text-foreground">
+                                  {ord.items.map((item, idx) => (
+                                    <div key={idx} className="text-xs">
+                                      {item.name} &nbsp;&nbsp; <span className="text-muted-foreground">x &nbsp;{item.quantity}</span>
+                                    </div>
                                   ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          )
-                        })()}
-                      </>
-                    )}
-                  </div>
-                )}
+                                  <div className="w-12 border-t-2 border-border/50 my-1.5"></div>
+                                  <div className="text-[10px] font-bold text-foreground">
+                                    Total: ₹{(ord.totalAmount / 100).toFixed(2)}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-4 pr-2">
+                                <select
+                                  value={ord.orderStatus}
+                                  onChange={(e) => {
+                                    e.stopPropagation();
+                                    updateOrderStatus(ord.orderId, e.target.value);
+                                  }}
+                                  className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border focus:outline-none cursor-pointer w-fit ${ord.orderStatus === 'placed'
+                                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                                    : ord.orderStatus === 'cooking'
+                                      ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30'
+                                      : ord.orderStatus === 'served'
+                                        ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30'
+                                        : 'bg-muted-foreground/15 text-muted-foreground border-border/30'
+                                    }`}
+                                >
+                                  <option value="placed" className="bg-card text-foreground">Placed</option>
+                                  <option value="cooking" className="bg-card text-foreground">Accepted & Preparing</option>
+                                  <option value="served" className="bg-card text-foreground">Delivered / Served</option>
+                                </select>
+                              </td>
+                              <td className="py-4 pr-2">
+                                {ord.waiterCallStatus === 'pending' ? (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      serviceWaiter(ord.orderId);
+                                    }}
+                                    className="bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase px-2.5 py-1.5 rounded-xl animate-pulse cursor-pointer shrink-0 border-none select-none"
+                                    style={{ animationDuration: '0.8s' }}
+                                  >
+                                    Call Waiter ({ord.waiterCallOption || 'Others'}) x{ord.waiterCallCount || 1}
+                                  </button>
+                                ) : ord.waiterCallStatus === 'serviced' ? (
+                                  <div className="bg-zinc-500/15 text-zinc-600 dark:text-zinc-400 border border-zinc-500/30 text-[10px] font-black uppercase px-2.5 py-1.5 rounded-xl w-fit shrink-0 select-none">
+                                    Serviced x{ord.waiterCallCount || 1}
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground font-semibold">-</span>
+                                )}
+                              </td>
+                              <td className="py-4 pr-2">
+                                {ord.tableStatus === 'close_table' ? (
+                                  confirmingPaymentOrderId === ord.orderId ? (
+                                    <div className="flex items-center space-x-1.5 animate-fade-in whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                                      <span className="text-[9px] font-black text-foreground uppercase">Received?</span>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          markPaymentReceived(ord.orderId);
+                                          setConfirmingPaymentOrderId(null);
+                                        }}
+                                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2 py-1 rounded text-[9px] transition-colors cursor-pointer uppercase tracking-wider"
+                                      >
+                                        Yes
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setConfirmingPaymentOrderId(null);
+                                        }}
+                                        className="bg-muted hover:bg-muted/80 text-foreground font-bold px-2 py-1 rounded text-[9px] transition-colors cursor-pointer border border-border/40 uppercase tracking-wider"
+                                      >
+                                        No
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setConfirmingPaymentOrderId(ord.orderId);
+                                      }}
+                                      className="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-[9px] font-black uppercase px-3 py-1.5 rounded-xl flex items-center justify-center cursor-pointer transition-all shadow-sm w-fit shrink-0 animate-pulse"
+                                    >
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 shrink-0 animate-pulse" />
+                                      Payment Received
+                                    </button>
+                                  )
+                                ) : (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      closeTable(ord.orderId);
+                                    }}
+                                    disabled={ord.orderStatus !== 'served'}
+                                    className={`text-[9px] font-black uppercase px-3 py-1.5 rounded-xl border transition-all shadow-sm shrink-0 w-fit cursor-pointer ${ord.orderStatus === 'served'
+                                      ? 'bg-destructive/10 hover:bg-destructive/20 text-destructive border-destructive/20'
+                                      : 'bg-muted text-muted-foreground border-border/40 opacity-50 cursor-not-allowed'
+                                      }`}
+                                  >
+                                    Clear Table
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                })()}
+              </>
+            )}
+          </div>
+        )}
 
         {/* 4. Payment Tab */}
         {activeTab === 'payment' && (
@@ -2175,6 +2313,43 @@ export default function MerchantDashboard() {
                   />
                 </div>
 
+                <div className="flex space-x-2">
+                  <div className="flex-1 relative">
+                    <input
+                      type="text"
+                      placeholder="GST PERCENTAGE"
+                      value={modalForm.gst}
+                      onChange={(e) => {
+                        const cleaned = e.target.value.replace(/[^\d.]/g, '');
+                        setModalForm(prev => ({ ...prev, gst: cleaned }));
+                      }}
+                      className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">%</span>
+                  </div>
+                </div>
+
+                <div className="flex border border-input rounded-xl bg-background dark:bg-black/20 focus-within:ring-1 focus-within:ring-primary overflow-hidden">
+                  <input
+                    type="text"
+                    placeholder="Other Charges"
+                    value={modalForm.otherCharges}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/[^\d.]/g, '');
+                      setModalForm(prev => ({ ...prev, otherCharges: cleaned }));
+                    }}
+                    className="flex-1 bg-transparent px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  />
+                  <select
+                    value={modalForm.otherChargesType}
+                    onChange={(e) => setModalForm(prev => ({ ...prev, otherChargesType: e.target.value }))}
+                    className="bg-muted border-l border-input px-3 py-3 text-xs font-bold text-foreground focus:outline-none cursor-pointer outline-none"
+                  >
+                    <option value="percentage">%</option>
+                    <option value="rupees">₹</option>
+                  </select>
+                </div>
+
                 <div>
                   <textarea
                     placeholder="Brief description about the dish..."
@@ -2244,7 +2419,11 @@ export default function MerchantDashboard() {
                     {modalForm.imageUrl && (
                       <button
                         type="button"
-                        onClick={() => setModalForm(prev => ({ ...prev, imageUrl: '' }))}
+                        onClick={() => {
+                          if (window.confirm("Are you sure you want to delete this cover image?")) {
+                            setModalForm(prev => ({ ...prev, imageUrl: '' }));
+                          }
+                        }}
                         className="p-1 hover:text-destructive text-white transition-colors"
                         title="Delete Image"
                       >
@@ -2380,8 +2559,10 @@ export default function MerchantDashboard() {
                   <span className="text-foreground">{cat}</span>
                   <button
                     onClick={() => {
-                      const updated = menuCategories.filter(c => c !== cat);
-                      handleSaveCategories(updated);
+                      if (window.confirm(`Are you sure you want to delete category "${cat}"?`)) {
+                        const updated = menuCategories.filter(c => c !== cat);
+                        handleSaveCategories(updated);
+                      }
                     }}
                     className="p-1 text-destructive hover:bg-destructive/10 rounded-lg transition-all cursor-pointer"
                     title={`Delete category ${cat}`}
@@ -2440,7 +2621,7 @@ export default function MerchantDashboard() {
       {/* Configure UPI Modal */}
       {showUpiModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
-          <div 
+          <div
             className="bg-card border border-border/40 rounded-2xl w-full p-6 relative flex flex-col space-y-4 shadow-2xl overflow-y-auto"
             style={{ maxWidth: '85%', maxHeight: '80%' }}
           >
@@ -2602,8 +2783,8 @@ export default function MerchantDashboard() {
                             )}
                             <button
                               onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteUpi(item.upiId);
+                                e.stopPropagation();
+                                handleDeleteUpi(item.upiId);
                               }}
                               className="text-muted-foreground hover:text-destructive p-1 transition-colors cursor-pointer"
                               title="Delete UPI"
@@ -2616,6 +2797,126 @@ export default function MerchantDashboard() {
                     })}
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Configure Taxes Modal */}
+      {showGlobalTaxesModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in exclude-uppercase">
+          <div className="bg-card border border-border/40 rounded-2xl w-full max-w-md p-6 relative flex flex-col space-y-4 shadow-2xl">
+            <button
+              onClick={() => setShowGlobalTaxesModal(false)}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div>
+              <h3 className="font-outfit text-md font-bold text-foreground">Configure Taxes</h3>
+              <p className="text-[11px] text-muted-foreground mt-1 font-semibold">Set default taxes & charges applied to all menu items unless overridden.</p>
+            </div>
+
+            {globalTaxesError && (
+              <div className="p-2.5 bg-destructive/10 border border-destructive/20 rounded-xl text-[10px] text-destructive font-bold text-left animate-fade-in">
+                {globalTaxesError}
+              </div>
+            )}
+
+            <div className="space-y-4 text-xs font-semibold text-foreground">
+              <div className="space-y-2">
+                <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">GST</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="e.g. 5"
+                    value={globalGstInput}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/[^\d.]/g, '');
+                      setGlobalGstInput(cleaned);
+                    }}
+                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">%</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Other Charges</label>
+                <div className="flex border border-input rounded-xl bg-background dark:bg-black/20 focus-within:ring-1 focus-within:ring-primary overflow-hidden">
+                  <input
+                    type="text"
+                    placeholder="e.g. 10"
+                    value={globalOtherChargesInput}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/[^\d.]/g, '');
+                      setGlobalOtherChargesInput(cleaned);
+                    }}
+                    className="flex-1 bg-transparent px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  />
+                  <select
+                    value={globalOtherChargesType}
+                    onChange={(e) => setGlobalOtherChargesType(e.target.value)}
+                    className="bg-muted border-l border-input px-3 py-3 text-xs font-bold text-foreground focus:outline-none cursor-pointer outline-none"
+                  >
+                    <option value="percentage">%</option>
+                    <option value="rupees">₹</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex space-x-3 pt-2">
+                <button
+                  onClick={async () => {
+                    const gstVal = globalGstInput !== '' ? parseFloat(globalGstInput) : 0;
+                    const otherVal = globalOtherChargesInput !== '' ? parseFloat(globalOtherChargesInput) : 0;
+                    if (isNaN(gstVal) || gstVal < 0) {
+                      setGlobalTaxesError('Please enter a valid GST percentage');
+                      return;
+                    }
+                    if (isNaN(otherVal) || otherVal < 0) {
+                      setGlobalTaxesError('Please enter a valid other charges value');
+                      return;
+                    }
+
+                    setGlobalTaxesError('');
+                    setGlobalTaxesLoading(true);
+                    try {
+                      await axios.post(`${API_BASE}/host/menu`, {
+                        hostApplicationId: selectedOutletId,
+                        items: menuItems,
+                        categories: menuCategories,
+                        defaultGst: gstVal,
+                        defaultOtherCharges: otherVal,
+                        defaultOtherChargesType: globalOtherChargesType
+                      }, {
+                        headers: { Authorization: `Bearer ${token}` }
+                      });
+                      setMenuDefaultGst(gstVal);
+                      setMenuDefaultOtherCharges(otherVal);
+                      setMenuDefaultOtherChargesType(globalOtherChargesType);
+                      showToast('Global taxes applied successfully!', 'success');
+                      setShowGlobalTaxesModal(false);
+                    } catch (err) {
+                      setGlobalTaxesError(err.response?.data?.message || 'Failed to apply global taxes.');
+                    } finally {
+                      setGlobalTaxesLoading(false);
+                    }
+                  }}
+                  disabled={globalTaxesLoading}
+                  className="flex-1 bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all text-xs cursor-pointer shadow-lg flex items-center justify-center"
+                >
+                  {globalTaxesLoading ? 'Applying...' : 'Apply to All'}
+                </button>
+                <button
+                  onClick={() => setShowGlobalTaxesModal(false)}
+                  disabled={globalTaxesLoading}
+                  className="px-5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           </div>
@@ -2662,12 +2963,108 @@ export default function MerchantDashboard() {
         </div>
       )}
 
+      {/* Get More Devices Modal */}
+      {showGetMoreDevicesModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="w-full max-w-md bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative space-y-6">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0">
+                <Tablet className="w-5 h-5 text-white" />
+              </div>
+              <div className="text-left">
+                <h3 className="font-outfit text-md font-bold tracking-tight">Request More Devices</h3>
+                <p className="text-[10px] text-muted-foreground font-semibold mt-0.5 font-bold">
+                  For Venue: {applications.find(app => app._id === selectedOutletId)?.outletName || 'Select Venue'}
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleRequestMoreDevices} className="space-y-4 text-xs font-semibold text-foreground">
+              {reqDeviceError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl">
+                  {reqDeviceError}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Device Type</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className={`flex items-center justify-center space-x-2 p-3 rounded-xl border cursor-pointer select-none transition-all ${reqDeviceType === 'screen'
+                    ? 'bg-blue-500/10 border-blue-500 text-blue-500'
+                    : 'border-border/40 hover:bg-muted text-muted-foreground'
+                    }`}>
+                    <input
+                      type="radio"
+                      name="deviceType"
+                      value="screen"
+                      checked={reqDeviceType === 'screen'}
+                      onChange={() => setReqDeviceType('screen')}
+                      className="sr-only"
+                    />
+                    <Tv className="w-4 h-4" />
+                    <span>Screens</span>
+                  </label>
+
+                  <label className={`flex items-center justify-center space-x-2 p-3 rounded-xl border cursor-pointer select-none transition-all ${reqDeviceType === 'tabletop'
+                    ? 'bg-blue-500/10 border-blue-500 text-blue-500'
+                    : 'border-border/40 hover:bg-muted text-muted-foreground'
+                    }`}>
+                    <input
+                      type="radio"
+                      name="deviceType"
+                      value="tabletop"
+                      checked={reqDeviceType === 'tabletop'}
+                      onChange={() => setReqDeviceType('tabletop')}
+                      className="sr-only"
+                    />
+                    <Tablet className="w-4 h-4" />
+                    <span>Tabletops</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label htmlFor="deviceQty" className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">
+                  {reqDeviceType === 'screen' ? 'Number of screens expected' : 'Number of tabletops expected'}
+                </label>
+                <input
+                  id="deviceQty"
+                  type="number"
+                  min="1"
+                  required
+                  value={reqDeviceQty}
+                  onChange={(e) => setReqDeviceQty(e.target.value)}
+                  className="w-full bg-muted border border-border/40 px-3 py-3 rounded-xl focus:outline-none focus:border-blue-500 font-bold"
+                />
+              </div>
+
+              <div className="flex space-x-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={reqDeviceLoading}
+                  className="flex-1 bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all text-xs cursor-pointer shadow-lg flex items-center justify-center space-x-2"
+                >
+                  <span>{reqDeviceLoading ? 'Submitting...' : 'Submit Request'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowGetMoreDevicesModal(false)}
+                  disabled={reqDeviceLoading}
+                  className="px-5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {toast && (
-        <div className={`fixed top-6 right-6 z-[9999] flex items-center space-x-3 border px-4 py-3 rounded-2xl shadow-xl animate-in slide-in-from-top-2 duration-300 ${
-          toast.type === 'success' 
-            ? 'bg-emerald-600 dark:bg-emerald-700 border-emerald-700 text-white' 
-            : 'bg-red-600 dark:bg-red-700 border-red-700 text-white'
-        }`}>
+        <div className={`fixed top-6 right-6 z-[9999] flex items-center space-x-3 border px-4 py-3 rounded-2xl shadow-xl animate-in slide-in-from-top-2 duration-300 ${toast.type === 'success'
+          ? 'bg-emerald-600 dark:bg-emerald-700 border-emerald-700 text-white'
+          : 'bg-red-600 dark:bg-red-700 border-red-700 text-white'
+          }`}>
           {toast.type === 'success' ? (
             <CheckCircle className="w-5 h-5 text-white shrink-0" />
           ) : (
@@ -2678,11 +3075,10 @@ export default function MerchantDashboard() {
           </div>
           <button
             onClick={() => setToast(null)}
-            className={`p-1 rounded-lg transition-colors cursor-pointer ${
-              toast.type === 'success' 
-                ? 'text-emerald-100 hover:bg-emerald-700 hover:text-white' 
-                : 'text-red-100 hover:bg-red-700 hover:text-white'
-            }`}
+            className={`p-1 rounded-lg transition-colors cursor-pointer ${toast.type === 'success'
+              ? 'text-emerald-100 hover:bg-emerald-700 hover:text-white'
+              : 'text-red-100 hover:bg-red-700 hover:text-white'
+              }`}
           >
             <X className="w-3.5 h-3.5" />
           </button>

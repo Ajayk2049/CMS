@@ -70,6 +70,20 @@ const OrderSchema = new mongoose.Schema({
     enum: ['active', 'close_table', 'completed', 'completed_acked'],
     default: 'active'
   },
+  waiterCallStatus: {
+    type: String,
+    enum: ['none', 'pending', 'serviced'],
+    default: 'none',
+    index: true
+  },
+  waiterCallCount: {
+    type: Number,
+    default: 0
+  },
+  waiterCallOption: {
+    type: String,
+    default: ''
+  },
   confirmedAt: {
     type: Date,
     default: null

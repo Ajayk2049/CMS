@@ -31,14 +31,68 @@ async function notifyDeviceSessionUpdate(order) {
       amount: order.totalAmount,
       upiUrl,
       orderStatus: order.orderStatus,
-      tableNumber: order.tableNumber
+      tableNumber: order.tableNumber,
+      waiterCallStatus: order.waiterCallStatus || 'none',
+      waiterCallCount: order.waiterCallCount || 0,
+      waiterCallOption: order.waiterCallOption || ''
     };
 
-    socket.send(JSON.stringify(payload));
-    console.log(`[WS] Push session update to Device ${order.deviceId}: status=${order.tableStatus}, orderStatus=${order.orderStatus}`);
+    if (order.tableStatus === 'close_table' && order.items && order.items.length > 0) {
+      const Menu = require('../models/Menu');
+      const menu = await Menu.findOne({ hostApplicationId: order.hostApplicationId });
+      if (menu) {
+        const itemsBreakdown = [];
+        let subtotalPaise = 0;
+        let gstPaise = 0;
+        let otherChargesPaise = 0;
 
-    // If order was completed, mark tableStatus as completed_acked in DB after sending,
-    // so it resets cleanly and isn't queried as active by other methods
+        const defaultGst = menu.defaultGst || 0;
+        const defaultOtherCharges = menu.defaultOtherCharges || 0;
+        const defaultOtherChargesType = menu.defaultOtherChargesType || 'percentage';
+
+        for (const item of order.items) {
+          const menuItem = menu.items.find(i => i.itemId === item.itemId);
+          const gstPercent = (menuItem && menuItem.gst !== undefined && menuItem.gst !== null) 
+            ? menuItem.gst 
+            : defaultGst;
+          const otherChargesVal = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
+            ? menuItem.otherCharges 
+            : defaultOtherCharges;
+          const otherChargesType = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
+            ? (menuItem.otherChargesType || 'percentage')
+            : defaultOtherChargesType;
+
+          const itemSubtotal = item.price * item.quantity;
+          const itemGst = Math.round(itemSubtotal * (gstPercent / 100));
+          
+          let itemOther = 0;
+          if (otherChargesType === 'rupees') {
+            itemOther = Math.round(item.quantity * (otherChargesVal * 100));
+          } else {
+            itemOther = Math.round(itemSubtotal * (otherChargesVal / 100));
+          }
+
+          subtotalPaise += itemSubtotal;
+          gstPaise += itemGst;
+          otherChargesPaise += itemOther;
+
+          itemsBreakdown.push({
+            name: item.name,
+            quantity: item.quantity,
+            price: item.price
+          });
+        }
+
+        payload.items = itemsBreakdown;
+        payload.subtotal = subtotalPaise;
+        payload.gst = gstPaise;
+        payload.otherCharges = otherChargesPaise;
+      }
+    }
+
+    socket.send(JSON.stringify(payload));
+    console.log(`[WS] Push session update to Device ${order.deviceId}: status=${order.tableStatus}, orderStatus=${order.orderStatus}, waiterCallStatus=${order.waiterCallStatus}`);
+
     if (order.tableStatus === 'completed') {
       setTimeout(async () => {
         try {
@@ -202,6 +256,9 @@ class HostController {
           merchantId: menu.merchantId,
           items: menu.items,
           categories: menu.categories && menu.categories.length > 0 ? menu.categories : ['Starters', 'Main Course', 'Dessert', 'Beverages'],
+          defaultGst: menu.defaultGst || 0,
+          defaultOtherCharges: menu.defaultOtherCharges || 0,
+          defaultOtherChargesType: menu.defaultOtherChargesType || 'percentage',
           createdAt: menu.createdAt,
           updatedAt: menu.updatedAt
         }
@@ -216,7 +273,14 @@ class HostController {
    * Create or Update restaurant menu
    */
   async updateMenu(req, res) {
-    const { hostApplicationId, items, categories } = req.body || {};
+    const { 
+      hostApplicationId, 
+      items, 
+      categories, 
+      defaultGst, 
+      defaultOtherCharges, 
+      defaultOtherChargesType 
+    } = req.body || {};
 
     if (!hostApplicationId) {
       return res.status(400).send({ success: false, message: 'hostApplicationId is required' });
@@ -247,7 +311,15 @@ class HostController {
 
       const menu = await Menu.findOneAndUpdate(
         { hostApplicationId },
-        { merchantId: req.user.uid, items, categories, updatedAt: Date.now() },
+        { 
+          merchantId: req.user.uid, 
+          items, 
+          categories, 
+          defaultGst: defaultGst !== undefined ? Number(defaultGst) : undefined,
+          defaultOtherCharges: defaultOtherCharges !== undefined ? Number(defaultOtherCharges) : undefined,
+          defaultOtherChargesType: defaultOtherChargesType || undefined,
+          updatedAt: Date.now() 
+        },
         { upsert: true, new: true }
       );
 
@@ -589,15 +661,65 @@ class HostController {
       const app = await HostApplication.findOne({ _id: order.hostApplicationId, userId: req.user.uid });
       if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
 
-      if (!app.upiId) {
-        return res.status(400).send({ success: false, message: 'No UPI ID configured. Set up payment config first.' });
-      }
+      const isEmpty = (!order.items || order.items.length === 0) && (order.totalAmount || 0) === 0;
+      if (isEmpty) {
+        order.tableStatus = 'completed';
+        order.paymentStatus = 'completed';
+        order.paidAt = new Date();
+      } else {
+        if (!app.upiId) {
+          return res.status(400).send({ success: false, message: 'No UPI ID configured. Set up payment config first.' });
+        }
 
-      order.tableStatus = 'close_table';
+        // Recalculate final totalAmount containing taxes before table closure
+        const Menu = require('../models/Menu');
+        const menu = await Menu.findOne({ hostApplicationId: order.hostApplicationId });
+        if (menu) {
+          let totalSubtotal = 0;
+          let totalGst = 0;
+          let totalOtherCharges = 0;
+
+          const defaultGst = menu.defaultGst || 0;
+          const defaultOtherCharges = menu.defaultOtherCharges || 0;
+          const defaultOtherChargesType = menu.defaultOtherChargesType || 'percentage';
+
+          for (const item of order.items) {
+            const menuItem = menu.items.find(i => i.itemId === item.itemId);
+            const gstPercent = (menuItem && menuItem.gst !== undefined && menuItem.gst !== null) 
+              ? menuItem.gst 
+              : defaultGst;
+            const otherChargesVal = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
+              ? menuItem.otherCharges 
+              : defaultOtherCharges;
+            const otherChargesType = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
+              ? (menuItem.otherChargesType || 'percentage') 
+              : defaultOtherChargesType;
+
+            const itemSubtotal = item.price * item.quantity;
+            const itemGst = Math.round(itemSubtotal * (gstPercent / 100));
+            
+            let itemOther = 0;
+            if (otherChargesType === 'rupees') {
+              itemOther = Math.round(item.quantity * (otherChargesVal * 100));
+            } else {
+              itemOther = Math.round(itemSubtotal * (otherChargesVal / 100));
+            }
+
+            totalSubtotal += itemSubtotal;
+            totalGst += itemGst;
+            totalOtherCharges += itemOther;
+          }
+
+          order.totalAmount = totalSubtotal + totalGst + totalOtherCharges;
+        }
+
+        order.tableStatus = 'close_table';
+      }
       await order.save();
       notifyDeviceSessionUpdate(order);
 
-      return res.status(200).send({ success: true, message: 'Table closed — showing payment QR to customer', data: order });
+      const message = isEmpty ? 'Session completed' : 'Table closed — showing payment QR to customer';
+      return res.status(200).send({ success: true, message, data: order });
     } catch (error) {
       console.error('closeTable Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to close table' });
@@ -630,6 +752,83 @@ class HostController {
     } catch (error) {
       console.error('markPaymentReceived Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to mark payment received' });
+    }
+  }
+
+  /**
+   * Service waiter call - transitions waiterCallStatus to serviced
+   */
+  async serviceWaiter(req, res) {
+    const { orderId } = req.body || {};
+    if (!orderId) {
+      return res.status(400).send({ success: false, message: 'orderId is required' });
+    }
+
+    try {
+      const order = await Order.findOne({ orderId });
+      if (!order) return res.status(404).send({ success: false, message: 'Session/Order not found' });
+
+      const app = await HostApplication.findOne({ _id: order.hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
+
+      order.waiterCallStatus = 'serviced';
+      await order.save();
+      notifyDeviceSessionUpdate(order);
+
+      // Broadcast update to merchant WebSocket
+      const wsClient = global.merchantSockets.get(app.userId.toString());
+      if (wsClient) {
+        wsClient.send(JSON.stringify({
+          event: 'waiter_serviced',
+          data: {
+            orderId: order.orderId,
+            waiterCallStatus: order.waiterCallStatus
+          }
+        }));
+      }
+
+      return res.status(200).send({ success: true, message: 'Waiter call marked as serviced', data: order });
+    } catch (error) {
+      console.error('serviceWaiter Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to service waiter request' });
+    }
+  }
+
+  /**
+   * Request more devices (screens / tabletops) for a venue
+   */
+  async requestMoreDevices(req, res) {
+    const { hostApplicationId, deviceType, quantity } = req.body || {};
+    if (!hostApplicationId || !deviceType || !quantity) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId, deviceType, and quantity are required' });
+    }
+
+    const qty = parseInt(quantity, 10);
+    if (isNaN(qty) || qty < 1) {
+      return res.status(400).send({ success: false, message: 'Quantity must be a positive number' });
+    }
+
+    if (deviceType !== 'screen' && deviceType !== 'tabletop') {
+      return res.status(400).send({ success: false, message: 'Device type must be screen or tabletop' });
+    }
+
+    try {
+      const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
+
+      const DeviceRequest = require('../models/DeviceRequest');
+      const deviceReq = new DeviceRequest({
+        hostApplicationId,
+        userId: req.user.uid,
+        deviceType,
+        quantity: qty
+      });
+      await deviceReq.save();
+
+      return res.status(200).send({ success: true, message: 'Request submitted successfully' });
+    } catch (error) {
+      console.error('requestMoreDevices Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to submit device request' });
     }
   }
 }

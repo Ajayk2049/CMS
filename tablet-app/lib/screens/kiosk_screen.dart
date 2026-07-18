@@ -62,6 +62,10 @@ class _KioskScreenState extends State<KioskScreen> {
   String _outletName = '';
   String _selectedCategory = '';
   late String _tableNumber;
+  bool _showWaiterStatus = false;
+  String _waiterStatusText = '';
+  String _waiterStatusOption = '';
+  Timer? _waiterVanishTimer;
 
   // ── gRPC ──
   ClientChannel? _channel;
@@ -499,6 +503,34 @@ class _KioskScreenState extends State<KioskScreen> {
     try {
       final data = jsonDecode(jsonStr) as Map<String, dynamic>;
       final status = data['status'] as String? ?? '';
+
+      // Process waiter request state
+      final waiterCallStatus = data['waiterCallStatus'] as String? ?? 'none';
+      final waiterCallOption = data['waiterCallOption'] as String? ?? '';
+
+      if (waiterCallStatus == 'pending') {
+        _waiterVanishTimer?.cancel();
+        setState(() {
+          _showWaiterStatus = true;
+          _waiterStatusText = 'Request Made';
+          _waiterStatusOption = waiterCallOption;
+        });
+      } else if (waiterCallStatus == 'serviced') {
+        if (_showWaiterStatus && _waiterStatusText == 'Request Made') {
+          setState(() {
+            _waiterStatusText = 'Request Accepted';
+          });
+          _waiterVanishTimer?.cancel();
+          _waiterVanishTimer = Timer(const Duration(seconds: 5), () {
+            if (mounted) {
+              setState(() {
+                _showWaiterStatus = false;
+              });
+            }
+          });
+        }
+      }
+
       if (status == 'close_table') {
         _adPlayer.pause();
         _cancelIdleTimer();
@@ -511,58 +543,61 @@ class _KioskScreenState extends State<KioskScreen> {
           _tableSession = data;
         });
       } else if (status == 'completed') {
+        final prevAmount = _tableSession?['amount'] as int? ?? 0;
         setState(() => _tableSession = null);
         
-        // Show Thank You Popup
-        BuildContext? dialogContext;
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (dialogCtx) {
-            dialogContext = dialogCtx;
-            return AlertDialog(
-              shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
-              backgroundColor: kCardBg,
-              content: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.favorite_rounded, color: Colors.pink, size: 64),
-                    SizedBox(height: 20),
-                    Text(
-                      'Thank You!',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: kTextDark,
+        if (prevAmount > 0) {
+          // Show Thank You Popup
+          BuildContext? dialogContext;
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (dialogCtx) {
+              dialogContext = dialogCtx;
+              return AlertDialog(
+                shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
+                backgroundColor: kCardBg,
+                content: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.favorite_rounded, color: Colors.pink, size: 64),
+                      SizedBox(height: 20),
+                      Text(
+                        'Thank You!',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: kTextDark,
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Do visit again.',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: kTextGrey,
-                        fontWeight: FontWeight.w500,
+                      SizedBox(height: 8),
+                      Text(
+                        'Do visit again.',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: kTextGrey,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            );
-          },
-        );
+              );
+            },
+          );
 
-        // Auto dismiss after 3 seconds and return to ads
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) {
-            if (dialogContext != null) {
-              Navigator.pop(dialogContext!);
+          // Auto dismiss after 3 seconds and return to ads
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted) {
+              if (dialogContext != null) {
+                Navigator.pop(dialogContext!);
+              }
+              _returnToAds();
             }
-            _returnToAds();
-          }
-        });
+          });
+        }
       }
     } catch (e) {
       debugPrint('Failed to parse table session: $e');
@@ -666,6 +701,7 @@ class _KioskScreenState extends State<KioskScreen> {
     _heartbeatTimer?.cancel();
     _inactivityTimer?.cancel();
     _backOnlineTimer?.cancel();
+    _waiterVanishTimer?.cancel();
     _passwordController.dispose();
     _adPlayer.dispose();
     _adSync.dispose();
@@ -733,6 +769,10 @@ class _KioskScreenState extends State<KioskScreen> {
           orderId: _tableSession!['orderId'] as String? ?? '',
           tableNumber: _tableSession!['tableNumber'] as String? ?? '',
           onUnlock: _promptUnlock,
+          items: _tableSession!['items'] as List<dynamic>?,
+          subtotalPaise: _tableSession!['subtotal'] as int?,
+          gstPaise: _tableSession!['gst'] as int?,
+          otherChargesPaise: _tableSession!['otherCharges'] as int?,
         );
       }
 
@@ -933,20 +973,13 @@ class _KioskScreenState extends State<KioskScreen> {
                 viewportHeight: MediaQuery.of(context).size.height,
                 selectedCategory: _selectedCategory,
                 imageCache: _imageCache,
+                isOnline: _isOnline,
               ),
             ),
           ],
         ),
         _buildFloatingCartBar(),
         _buildLiveSessionStatusBar(),
-        if (!_isOnline)
-          Positioned.fill(
-            child: AbsorbPointer(
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.08),
-              ),
-            ),
-          ),
       ],
     );
   }
@@ -984,7 +1017,7 @@ class _KioskScreenState extends State<KioskScreen> {
               children: [
                 _showCart
                     ? Text(
-                        _outletName.toUpperCase(),
+                        "$_outletName (Table $_tableNumber)".toUpperCase(),
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w900,
@@ -993,7 +1026,7 @@ class _KioskScreenState extends State<KioskScreen> {
                         ),
                       )
                     : Text(
-                        _outletName,
+                        "$_outletName  •  Table $_tableNumber",
                         style: const TextStyle(
                           fontSize: 32,
                           fontWeight: FontWeight.w800,
@@ -1015,12 +1048,26 @@ class _KioskScreenState extends State<KioskScreen> {
               ],
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.play_circle_outline_rounded, color: kTextGrey),
-            onPressed: _returnToAds,
-            tooltip: "Return to ad slideshow",
+          ElevatedButton.icon(
+            onPressed: _showCallWaiterDialog,
+            icon: const Icon(Icons.room_service_rounded, color: Colors.white, size: 20),
+            label: const Text(
+              "CALL WAITER",
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 14,
+                color: Colors.white,
+                letterSpacing: 1,
+              ),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: kAccentBlue,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 3,
+            ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 16),
           IconButton(
             icon: const Icon(Icons.admin_panel_settings_outlined, color: kTextGrey),
             onPressed: _promptUnlock,
@@ -1029,6 +1076,121 @@ class _KioskScreenState extends State<KioskScreen> {
         ],
       ),
     );
+  }
+
+  void _showCallWaiterDialog() {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: kCardBg,
+          shape: const RoundedRectangleBorder(borderRadius: kCardBorderRadius),
+          title: const Text(
+            "How can we help you?",
+            style: TextStyle(fontWeight: FontWeight.bold, color: kTextDark, fontSize: 22),
+            textAlign: TextAlign.center,
+          ),
+          content: Container(
+            width: 320,
+            padding: const EdgeInsets.only(top: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: _buildWaiterOptionCard(dialogCtx, "Water", Icons.local_drink_rounded)),
+                    const SizedBox(width: 16),
+                    Expanded(child: _buildWaiterOptionCard(dialogCtx, "Cutlery", Icons.flatware_rounded)),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(child: _buildWaiterOptionCard(dialogCtx, "Cleaning", Icons.cleaning_services_rounded)),
+                    const SizedBox(width: 16),
+                    Expanded(child: _buildWaiterOptionCard(dialogCtx, "Others", Icons.help_outline_rounded)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text(
+                "Cancel",
+                style: TextStyle(color: kTextGrey, fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildWaiterOptionCard(BuildContext dialogCtx, String option, IconData icon) {
+    return AspectRatio(
+      aspectRatio: 1.0,
+      child: InkWell(
+        onTap: () {
+          Navigator.pop(dialogCtx);
+          _triggerCallWaiter(option);
+        },
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          decoration: BoxDecoration(
+            color: kSidebarBg,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: kDividerColor, width: 1.5),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: kAccentBlue, size: 40),
+              const SizedBox(height: 12),
+              Text(
+                option,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: kTextDark,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _triggerCallWaiter(String option) async {
+    try {
+      _waiterVanishTimer?.cancel();
+      setState(() {
+        _showWaiterStatus = true;
+        _waiterStatusText = 'Request Made';
+        _waiterStatusOption = option;
+      });
+
+      final req = HeartbeatRequest()
+        ..deviceId = widget.deviceId
+        ..callWaiter = true
+        ..waiterOption = option
+        ..tableNumber = _tableNumber;
+
+      final resp = await _deviceClient!.sendHeartbeat(req, options: _callOptions);
+      _processTableSession(resp.tableSessionJson);
+    } catch (e) {
+      debugPrint('Call waiter failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Failed to call waiter. Please try again."),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildSidebar() {
@@ -1208,12 +1370,80 @@ class _KioskScreenState extends State<KioskScreen> {
     return ValueListenableBuilder<CartSnapshot>(
       valueListenable: _cart,
       builder: (context, cart, _) {
-        if (!cart.isEmpty || _tableSession == null || _tableSession!['status'] != 'active') {
+        if (!cart.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        if (_showWaiterStatus) {
+          final isAccepted = _waiterStatusText == 'Request Accepted';
+          return Positioned(
+            bottom: 24,
+            left: 144,
+            right: 24,
+            child: Container(
+              height: 76,
+              decoration: BoxDecoration(
+                color: isAccepted ? const Color(0xFF059669) : Colors.red.shade600,
+                borderRadius: kFloatingCartBorderRadius,
+                border: Border.all(color: isAccepted ? Colors.green.shade900 : Colors.red.shade900, width: 3.0),
+                boxShadow: const [
+                  BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4)),
+                ],
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
+                        padding: const EdgeInsets.all(10),
+                        child: Icon(
+                          isAccepted ? Icons.check_circle_outline_rounded : Icons.room_service_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _waiterStatusText,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                              color: Colors.white,
+                            ),
+                          ),
+                          Text(
+                            "Service requested: $_waiterStatusOption",
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        if (_tableSession == null || _tableSession!['status'] != 'active') {
           return const SizedBox.shrink();
         }
 
         final orderStatus = _tableSession!['orderStatus'] as String? ?? 'placed';
         final amountPaise = _tableSession!['amount'] as int? ?? 0;
+        if (amountPaise == 0) {
+          return const SizedBox.shrink();
+        }
         final orderId = _tableSession!['orderId'] as String? ?? '';
         final amountFormatted = (amountPaise / 100).toStringAsFixed(2);
 

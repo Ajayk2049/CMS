@@ -524,27 +524,6 @@ export default function AdvertiserDashboard() {
         </nav>
 
         <div className="flex items-center space-x-2 md:space-x-3">
-          {/* Role Actions */}
-          {roles.includes('merchant') ? (
-            <button
-              onClick={() => handleSwitchRole('merchant')}
-              disabled={roleActionLoading}
-              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border border-blue-500/30 hover:border-blue-500 text-blue-400 hover:text-blue-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${roleActionLoading ? 'animate-spin' : ''}`} />
-              <span className="hidden md:inline">Switch to Host</span>
-            </button>
-          ) : (
-            <button
-              onClick={() => setShowBecomeHostModal(true)}
-              disabled={roleActionLoading}
-              className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/30 hover:border-emerald-500 text-emerald-400 hover:text-emerald-300 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm disabled:opacity-50"
-            >
-              <Megaphone className="w-3.5 h-3.5 fill-current" />
-              <span className="hidden md:inline">Become Host</span>
-            </button>
-          )}
-
           <button
             onClick={toggleTheme}
             className="p-2 bg-card hover:bg-muted border border-border rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer flex items-center justify-center shadow-sm"
@@ -572,7 +551,38 @@ export default function AdvertiserDashboard() {
                   <p className="text-[10px] text-muted-foreground leading-none">Logged in as</p>
                   <p className="text-xs font-bold text-foreground mt-1 truncate">{name || phone}</p>
                 </div>
-                <div className="p-1.5 space-y-1">
+
+                {bookings.length > 0 && (
+                  <div className="p-1.5 space-y-1 border-b border-border/40">
+                    {roles.includes('merchant') ? (
+                      <button
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          handleSwitchRole('merchant');
+                        }}
+                        disabled={roleActionLoading}
+                        className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                      >
+                        <RefreshCw className={`w-4 h-4 text-indigo-500 ${roleActionLoading ? 'animate-spin' : ''}`} />
+                        <span>Switch to Host</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          setShowBecomeHostModal(true);
+                        }}
+                        disabled={roleActionLoading}
+                        className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                      >
+                        <Megaphone className="w-4 h-4 text-blue-500" />
+                        <span>Become Host</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="p-1.5">
                   <button
                     onClick={() => {
                       setUserMenuOpen(false);

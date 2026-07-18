@@ -22,6 +22,9 @@ message RegisterDeviceResponse {
 
 message HeartbeatRequest {
   string deviceId = 1;
+  bool callWaiter = 2;
+  string waiterOption = 3;
+  string tableNumber = 4;
 }
 
 message HeartbeatResponse {

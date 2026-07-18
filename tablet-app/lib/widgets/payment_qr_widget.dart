@@ -12,6 +12,10 @@ class PaymentQrWidget extends StatelessWidget {
   final String orderId;
   final String tableNumber;
   final VoidCallback? onUnlock;
+  final List<dynamic>? items;
+  final int? subtotalPaise;
+  final int? gstPaise;
+  final int? otherChargesPaise;
 
   const PaymentQrWidget({
     super.key,
@@ -20,9 +24,26 @@ class PaymentQrWidget extends StatelessWidget {
     required this.orderId,
     required this.tableNumber,
     this.onUnlock,
+    this.items,
+    this.subtotalPaise,
+    this.gstPaise,
+    this.otherChargesPaise,
   });
 
   String get _amountFormatted => (amountPaise / 100).toStringAsFixed(2);
+
+  Widget _buildBreakdownRow(String label, int amountPaise) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+          Text('₹${(amountPaise / 100).toStringAsFixed(2)}', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,13 +77,75 @@ class PaymentQrWidget extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 32),
+                    if (items != null && items!.isNotEmpty) ...[
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 24),
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        width: 320,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'ORDER BREAKDOWN',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white70,
+                                letterSpacing: 1.5,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            ...items!.map((item) {
+                              if (item is! Map) return const SizedBox.shrink();
+                              final name = item['name'] as String? ?? '';
+                              final qty = item['quantity'] as int? ?? 1;
+                              final pricePaise = item['price'] as int? ?? 0;
+                              final itemTotal = (pricePaise * qty / 100).toStringAsFixed(2);
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '$name x$qty',
+                                        style: const TextStyle(color: Colors.white, fontSize: 14),
+                                      ),
+                                    ),
+                                    Text(
+                                      '₹$itemTotal',
+                                      style: const TextStyle(color: Colors.white70, fontSize: 14),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 8),
+                              child: Divider(color: Colors.white10, height: 1),
+                            ),
+                            if (subtotalPaise != null && subtotalPaise! > 0)
+                              _buildBreakdownRow('Subtotal', subtotalPaise!),
+                            if (gstPaise != null && gstPaise! > 0)
+                              _buildBreakdownRow('GST', gstPaise!),
+                            if (otherChargesPaise != null && otherChargesPaise! > 0)
+                              _buildBreakdownRow('Other Charges', otherChargesPaise!),
+                          ],
+                        ),
+                      ),
+                    ],
                     Container(
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(24),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.3),
+                            color: Colors.black.withOpacity(0.3),
                             blurRadius: 20,
                             offset: const Offset(0, 10),
                           ),
@@ -129,7 +212,7 @@ class PaymentQrWidget extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.1),
+                        color: Colors.white.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: const Text(

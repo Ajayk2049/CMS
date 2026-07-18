@@ -405,6 +405,7 @@ const deviceServiceHandlers = {
     try {
       const claims = verifyGrpcToken(call);
       const { deviceId } = claims;
+      const { callWaiter, waiterOption, tableNumber } = call.request;
 
       const device = await Device.findOne({ deviceId });
       if (!device) {
@@ -414,6 +415,59 @@ const deviceServiceHandlers = {
       device.status = 'online';
       device.lastHeartbeat = new Date();
       await device.save();
+
+      // Handle waiter call request
+      if (callWaiter) {
+        let activeOrder = await Order.findOne({
+          deviceId,
+          tableStatus: { $in: ['active', 'close_table'] }
+        }).sort({ createdAt: -1 });
+
+        if (!activeOrder) {
+          const app = await HostApplication.findById(device.hostApplicationId);
+          if (app) {
+            activeOrder = new Order({
+              orderId: 'ORD-' + Math.random().toString(36).substring(2, 7).toUpperCase(),
+              merchantId: app.userId,
+              hostApplicationId: device.hostApplicationId,
+              deviceId,
+              tableNumber: tableNumber || 'T1',
+              items: [],
+              totalAmount: 0,
+              paymentStatus: 'pending',
+              orderStatus: 'placed',
+              tableStatus: 'active',
+              waiterCallStatus: 'pending',
+              waiterCallCount: 1,
+              waiterCallOption: waiterOption || 'Others'
+            });
+            await activeOrder.save();
+          }
+        } else {
+          activeOrder.waiterCallCount = (activeOrder.waiterCallCount || 0) + 1;
+          activeOrder.waiterCallStatus = 'pending';
+          activeOrder.waiterCallOption = waiterOption || 'Others';
+          await activeOrder.save();
+        }
+
+        // Broadcast to merchant dashboard
+        if (activeOrder) {
+          const wsClient = global.merchantSockets.get(activeOrder.merchantId.toString());
+          if (wsClient) {
+            wsClient.send(JSON.stringify({
+              event: 'waiter_call',
+              data: {
+                deviceId,
+                tableNumber: activeOrder.tableNumber,
+                waiterCallCount: activeOrder.waiterCallCount,
+                waiterCallOption: activeOrder.waiterCallOption,
+                waiterCallStatus: activeOrder.waiterCallStatus,
+                orderId: activeOrder.orderId
+              }
+            }));
+          }
+        }
+      }
 
       // Check for active table session state
       let tableSessionJson = '';
@@ -434,14 +488,72 @@ const deviceServiceHandlers = {
           }
           upiUrl += `&am=${amountRs}&cu=INR`;
         }
-        tableSessionJson = JSON.stringify({
+        const sessionPayload = {
           status: activeOrder.tableStatus,
           orderId: activeOrder.orderId,
           amount: activeOrder.totalAmount,
           upiUrl,
           orderStatus: activeOrder.orderStatus,
-          tableNumber: activeOrder.tableNumber
-        });
+          tableNumber: activeOrder.tableNumber,
+          waiterCallStatus: activeOrder.waiterCallStatus || 'none',
+          waiterCallCount: activeOrder.waiterCallCount || 0,
+          waiterCallOption: activeOrder.waiterCallOption || ''
+        };
+
+        if (activeOrder.tableStatus === 'close_table' && activeOrder.items && activeOrder.items.length > 0) {
+          const Menu = require('./models/Menu');
+          const menu = await Menu.findOne({ hostApplicationId: activeOrder.hostApplicationId });
+          if (menu) {
+            const itemsBreakdown = [];
+            let subtotalPaise = 0;
+            let gstPaise = 0;
+            let otherChargesPaise = 0;
+
+            const defaultGst = menu.defaultGst || 0;
+            const defaultOtherCharges = menu.defaultOtherCharges || 0;
+            const defaultOtherChargesType = menu.defaultOtherChargesType || 'percentage';
+
+            for (const item of activeOrder.items) {
+              const menuItem = menu.items.find(i => i.itemId === item.itemId);
+              const gstPercent = (menuItem && menuItem.gst !== undefined && menuItem.gst !== null) 
+                ? menuItem.gst 
+                : defaultGst;
+              const otherChargesVal = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
+                ? menuItem.otherCharges 
+                : defaultOtherCharges;
+              const otherChargesType = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
+                ? (menuItem.otherChargesType || 'percentage')
+                : defaultOtherChargesType;
+
+              const itemSubtotal = item.price * item.quantity;
+              const itemGst = Math.round(itemSubtotal * (gstPercent / 100));
+              
+              let itemOther = 0;
+              if (otherChargesType === 'rupees') {
+                itemOther = Math.round(item.quantity * (otherChargesVal * 100));
+              } else {
+                itemOther = Math.round(itemSubtotal * (otherChargesVal / 100));
+              }
+
+              subtotalPaise += itemSubtotal;
+              gstPaise += itemGst;
+              otherChargesPaise += itemOther;
+
+              itemsBreakdown.push({
+                name: item.name,
+                quantity: item.quantity,
+                price: item.price
+              });
+            }
+
+            sessionPayload.items = itemsBreakdown;
+            sessionPayload.subtotal = subtotalPaise;
+            sessionPayload.gst = gstPaise;
+            sessionPayload.otherCharges = otherChargesPaise;
+          }
+        }
+
+        tableSessionJson = JSON.stringify(sessionPayload);
       } else {
         // Check if order was completed (payment received)
         const completedOrder = await Order.findOne({

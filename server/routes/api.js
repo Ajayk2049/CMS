@@ -62,6 +62,8 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.post('/host/orders/confirm', hostController.confirmOrder);
     merchantRoutes.post('/host/orders/close-table', hostController.closeTable);
     merchantRoutes.post('/host/orders/payment-received', hostController.markPaymentReceived);
+    merchantRoutes.post('/host/orders/service-waiter', hostController.serviceWaiter);
+    merchantRoutes.post('/host/request-more-devices', hostController.requestMoreDevices);
     next();
   });
 

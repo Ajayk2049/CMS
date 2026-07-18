@@ -178,9 +178,15 @@ class RegisterDeviceResponse extends $pb.GeneratedMessage {
 class HeartbeatRequest extends $pb.GeneratedMessage {
   factory HeartbeatRequest({
     $core.String? deviceId,
+    $core.bool? callWaiter,
+    $core.String? waiterOption,
+    $core.String? tableNumber,
   }) {
     final result = create();
     if (deviceId != null) result.deviceId = deviceId;
+    if (callWaiter != null) result.callWaiter = callWaiter;
+    if (waiterOption != null) result.waiterOption = waiterOption;
+    if (tableNumber != null) result.tableNumber = tableNumber;
     return result;
   }
 
@@ -198,6 +204,9 @@ class HeartbeatRequest extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'device'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'deviceId', protoName: 'deviceId')
+    ..aOB(2, _omitFieldNames ? '' : 'callWaiter', protoName: 'callWaiter')
+    ..aOS(3, _omitFieldNames ? '' : 'waiterOption', protoName: 'waiterOption')
+    ..aOS(4, _omitFieldNames ? '' : 'tableNumber', protoName: 'tableNumber')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -227,6 +236,33 @@ class HeartbeatRequest extends $pb.GeneratedMessage {
   $core.bool hasDeviceId() => $_has(0);
   @$pb.TagNumber(1)
   void clearDeviceId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.bool get callWaiter => $_getBF(1);
+  @$pb.TagNumber(2)
+  set callWaiter($core.bool value) => $_setBool(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasCallWaiter() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearCallWaiter() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get waiterOption => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set waiterOption($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasWaiterOption() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearWaiterOption() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get tableNumber => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set tableNumber($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasTableNumber() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearTableNumber() => $_clearField(4);
 }
 
 class HeartbeatResponse extends $pb.GeneratedMessage {
