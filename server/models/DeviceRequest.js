@@ -11,15 +11,23 @@ const DeviceRequestSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  deviceType: {
-    type: String,
-    enum: ['screen', 'tabletop'],
-    required: true
+  requestTablet: {
+    type: Boolean,
+    default: false
   },
-  quantity: {
+  tabletQuantity: {
     type: Number,
-    required: true,
-    min: 1
+    default: 0,
+    min: 0
+  },
+  requestScreen: {
+    type: Boolean,
+    default: false
+  },
+  screenQuantity: {
+    type: Number,
+    default: 0,
+    min: 0
   },
   status: {
     type: String,

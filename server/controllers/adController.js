@@ -69,6 +69,9 @@ const pollTransactionStatus = (bookingId, transactionId) => {
         booking.approvalStatus = 'pending';
         booking.paymentId = checkResult.raw?.payload?.transactionId || checkResult.raw?.payload?.providerReferenceId || 'PAY_POLL_' + uuidv4().replace(/-/g, '').slice(0, 10).toUpperCase();
         await booking.save();
+        if (global.broadcastToAdmins) {
+          global.broadcastToAdmins('new_campaign', { bookingId: booking.bookingId });
+        }
         clearInterval(interval);
       } else if (mappedStatus === 'FAILED') {
         console.log(`[Auto-Polling] Booking ${bookingId} payment FAILED`);
@@ -474,10 +477,15 @@ class AdController {
         const paymentId = data.transactionId || data.providerReferenceId || null;
 
         // Update corresponding AdBooking
-        await AdBooking.updateOne(
+        const booking = await AdBooking.findOneAndUpdate(
           { transactionId: merchantTransactionId },
-          { paymentStatus: 'completed', approvalStatus: 'pending', paymentId }
+          { paymentStatus: 'completed', approvalStatus: 'pending', paymentId },
+          { new: true }
         );
+
+        if (booking && global.broadcastToAdmins) {
+          global.broadcastToAdmins('new_campaign', { bookingId: booking.bookingId });
+        }
 
         // Update corresponding Order (if it was a kiosk customer order)
         await Order.updateOne(

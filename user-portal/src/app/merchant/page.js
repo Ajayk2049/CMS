@@ -30,7 +30,8 @@ import {
   QrCode,
   CheckCircle,
   AlertCircle,
-  Percent
+  Percent,
+  Lock
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -158,8 +159,10 @@ export default function MerchantDashboard() {
   const [roleActionLoading, setRoleActionLoading] = useState(false);
   const [showBecomeAdvertiserModal, setShowBecomeAdvertiserModal] = useState(false);
   const [showGetMoreDevicesModal, setShowGetMoreDevicesModal] = useState(false);
-  const [reqDeviceType, setReqDeviceType] = useState('tabletop');
-  const [reqDeviceQty, setReqDeviceQty] = useState('1');
+  const [reqRequestTablet, setReqRequestTablet] = useState(false);
+  const [reqTabletQuantity, setReqTabletQuantity] = useState('1');
+  const [reqRequestScreen, setReqRequestScreen] = useState(false);
+  const [reqScreenQuantity, setReqScreenQuantity] = useState('1');
   const [reqDeviceLoading, setReqDeviceLoading] = useState(false);
   const [reqDeviceError, setReqDeviceError] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -206,6 +209,7 @@ export default function MerchantDashboard() {
 
   // Menu tab states
   const [menuItems, setMenuItems] = useState([]);
+  const originalMenuRef = useRef(null);
   const [selectedOutletId, setSelectedOutletId] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('selectedOutletId') || '';
@@ -225,7 +229,8 @@ export default function MerchantDashboard() {
     price: '',
     category: 'Starters',
     isAvailable: true,
-    imageUrl: ''
+    imageUrl: '',
+    isVeg: true
   });
   const [zoomFactor, setZoomFactor] = useState(100);
   const [imageTab, setImageTab] = useState('upload');
@@ -273,6 +278,12 @@ export default function MerchantDashboard() {
   const [modalError, setModalError] = useState('');
   const [modalInfo, setModalInfo] = useState('');
   const [confirmingPaymentOrderId, setConfirmingPaymentOrderId] = useState(null);
+
+  // Security Password Modal for UPI Config
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [passwordVerifyError, setPasswordVerifyError] = useState('');
+  const [isVerifyingPassword, setIsVerifyingPassword] = useState(false);
 
   // Handle Theme
   useEffect(() => {
@@ -593,6 +604,28 @@ export default function MerchantDashboard() {
     } catch (err) { console.error('serviceWaiter error:', err); }
   };
 
+  const handleVerifyPasswordSubmit = async (e) => {
+    e.preventDefault();
+    if (!confirmPasswordInput.trim()) {
+      setPasswordVerifyError('Account password is required');
+      return;
+    }
+    setPasswordVerifyError('');
+    setIsVerifyingPassword(true);
+    try {
+      await axios.post(`${API_BASE}/host/verify-password`, { password: confirmPasswordInput }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setShowPasswordModal(false);
+      setConfirmPasswordInput('');
+      setShowUpiModal(true);
+    } catch (err) {
+      setPasswordVerifyError(err.response?.data?.message || 'Incorrect account password');
+    } finally {
+      setIsVerifyingPassword(false);
+    }
+  };
+
   const handleVerifyUpi = () => {
     if (!tempUpiInput.includes('@')) return;
     const upiToCheck = tempUpiInput.trim().toLowerCase();
@@ -716,14 +749,29 @@ export default function MerchantDashboard() {
         params: { hostApplicationId: outletId },
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      setMenuItems(res.data.data.items || []);
-      setMenuCategories(res.data.data.categories || ['Starters', 'Main Course', 'Dessert', 'Beverages']);
-      setMenuDefaultGst(res.data.data.defaultGst || 0);
-      setMenuDefaultOtherCharges(res.data.data.defaultOtherCharges || 0);
-      setMenuDefaultOtherChargesType(res.data.data.defaultOtherChargesType || 'percentage');
+      const items = res.data.data.items || [];
+      const categories = res.data.data.categories || ['Starters', 'Main Course', 'Dessert', 'Beverages'];
+      const defaultGst = res.data.data.defaultGst || 0;
+      const defaultOtherCharges = res.data.data.defaultOtherCharges || 0;
+      const defaultOtherChargesType = res.data.data.defaultOtherChargesType || 'percentage';
+
+      setMenuItems(items);
+      setMenuCategories(categories);
+      setMenuDefaultGst(defaultGst);
+      setMenuDefaultOtherCharges(defaultOtherCharges);
+      setMenuDefaultOtherChargesType(defaultOtherChargesType);
+
+      originalMenuRef.current = JSON.stringify({
+        items,
+        categories,
+        defaultGst,
+        defaultOtherCharges,
+        defaultOtherChargesType
+      });
     } catch (err) {
       console.error(err);
       setMenuItems([]);
+      originalMenuRef.current = null;
     }
   };
 
@@ -915,6 +963,17 @@ export default function MerchantDashboard() {
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
+
+      originalMenuRef.current = JSON.stringify({
+        items: menuItems,
+        categories: menuCategories,
+        defaultGst: menuDefaultGst,
+        defaultOtherCharges: menuDefaultOtherCharges,
+        defaultOtherChargesType: menuDefaultOtherChargesType
+      });
+      // Force update state trigger
+      setMenuItems([...menuItems]);
+
       showToast('Menu saved successfully!', 'success');
     } catch (err) {
       showToast(err.response?.data?.message || 'Failed to save menu.', 'error');
@@ -938,6 +997,16 @@ export default function MerchantDashboard() {
         headers: { Authorization: `Bearer ${token}` }
       });
       setMenuCategories(updatedCategories);
+
+      originalMenuRef.current = JSON.stringify({
+        items: menuItems,
+        categories: updatedCategories,
+        defaultGst: menuDefaultGst,
+        defaultOtherCharges: menuDefaultOtherCharges,
+        defaultOtherChargesType: menuDefaultOtherChargesType
+      });
+      setMenuItems([...menuItems]);
+
       showToast('Menu categories updated successfully!', 'success');
     } catch (err) {
       showToast(err.response?.data?.message || 'Failed to save menu categories.', 'error');
@@ -992,6 +1061,7 @@ export default function MerchantDashboard() {
       category: category,
       isAvailable: true,
       imageUrl: '',
+      isVeg: true,
       gst: (menuDefaultGst || 0).toString(),
       otherCharges: (menuDefaultOtherCharges || 0).toString(),
       otherChargesType: menuDefaultOtherChargesType || 'percentage'
@@ -1010,12 +1080,14 @@ export default function MerchantDashboard() {
       category: item.category || 'Starters',
       isAvailable: item.isAvailable !== false,
       imageUrl: item.imageUrl || '',
+      isVeg: item.isVeg !== false,
       gst: item.gst !== undefined && item.gst !== null ? item.gst.toString() : (menuDefaultGst || 0).toString(),
       otherCharges: item.otherCharges !== undefined && item.otherCharges !== null ? item.otherCharges.toString() : (menuDefaultOtherCharges || 0).toString(),
       otherChargesType: (item.otherCharges !== undefined && item.otherCharges !== null) ? (item.otherChargesType || 'percentage') : (menuDefaultOtherChargesType || 'percentage')
     });
+    const isExternalUrl = item.imageUrl && (item.imageUrl.startsWith('http://') || item.imageUrl.startsWith('https://'));
     setZoomFactor(100);
-    setImageTab(item.imageUrl ? 'url' : 'upload');
+    setImageTab(isExternalUrl ? 'url' : 'upload');
     setIsMenuModalOpen(true);
   };
 
@@ -1044,8 +1116,8 @@ export default function MerchantDashboard() {
 
     // CSS-like override: save null in DB if it matches global default configuration
     const gstVal = parsedGst === menuDefaultGst ? null : parsedGst;
-    const otherChargesVal = (parsedOther === menuDefaultOtherCharges && modalForm.otherChargesType === menuDefaultOtherChargesType) 
-      ? null 
+    const otherChargesVal = (parsedOther === menuDefaultOtherCharges && modalForm.otherChargesType === menuDefaultOtherChargesType)
+      ? null
       : parsedOther;
 
     const priceInPaise = Math.round(priceVal * 100);
@@ -1060,6 +1132,7 @@ export default function MerchantDashboard() {
         category: modalForm.category,
         isAvailable: modalForm.isAvailable,
         imageUrl: modalForm.imageUrl,
+        isVeg: modalForm.isVeg,
         gst: gstVal,
         otherCharges: otherChargesVal,
         otherChargesType: modalForm.otherChargesType
@@ -1076,6 +1149,7 @@ export default function MerchantDashboard() {
         category: modalForm.category,
         isAvailable: modalForm.isAvailable,
         imageUrl: modalForm.imageUrl,
+        isVeg: modalForm.isVeg,
         gst: gstVal,
         otherCharges: otherChargesVal,
         otherChargesType: modalForm.otherChargesType
@@ -1192,10 +1266,28 @@ export default function MerchantDashboard() {
       setReqDeviceError('Please select a venue/outlet first.');
       return;
     }
-    const qty = parseInt(reqDeviceQty, 10);
-    if (isNaN(qty) || qty < 1) {
-      setReqDeviceError('Quantity must be at least 1.');
+
+    if (!reqRequestTablet && !reqRequestScreen) {
+      setReqDeviceError('Please select at least one type of device to request.');
       return;
+    }
+
+    let parsedTabletQty = 0;
+    if (reqRequestTablet) {
+      parsedTabletQty = parseInt(reqTabletQuantity, 10);
+      if (isNaN(parsedTabletQty) || parsedTabletQty < 1) {
+        setReqDeviceError('Tablet quantity must be at least 1.');
+        return;
+      }
+    }
+
+    let parsedScreenQty = 0;
+    if (reqRequestScreen) {
+      parsedScreenQty = parseInt(reqScreenQuantity, 10);
+      if (isNaN(parsedScreenQty) || parsedScreenQty < 1) {
+        setReqDeviceError('Screen quantity must be at least 1.');
+        return;
+      }
     }
 
     setReqDeviceError('');
@@ -1203,8 +1295,10 @@ export default function MerchantDashboard() {
     try {
       await axios.post(`${API_BASE}/host/request-more-devices`, {
         hostApplicationId: selectedOutletId,
-        deviceType: reqDeviceType,
-        quantity: qty
+        requestTablet: reqRequestTablet,
+        tabletQuantity: parsedTabletQty,
+        requestScreen: reqRequestScreen,
+        screenQuantity: parsedScreenQty
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -1217,14 +1311,26 @@ export default function MerchantDashboard() {
     }
   };
 
+  const hasMenuChanges = () => {
+    if (!originalMenuRef.current) return false;
+    const currentMenu = {
+      items: menuItems,
+      categories: menuCategories,
+      defaultGst: menuDefaultGst,
+      defaultOtherCharges: menuDefaultOtherCharges,
+      defaultOtherChargesType: menuDefaultOtherChargesType
+    };
+    return JSON.stringify(currentMenu) !== originalMenuRef.current;
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground font-sans flex flex-col transition-all duration-300">
 
       {/* Top Header Navbar - Universal styled shadcn preset */}
       <header className="border-b border-border/40 bg-card px-5 sm:px-6 py-3.5 flex items-center justify-between shadow-sm sticky top-0 z-30">
         <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
-            <Tv className="w-5 h-5 text-white " />
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0 overflow-hidden p-1">
+            <img src="/brandicon.png" alt="DigiAds Logo" className="w-full h-full object-contain rounded-lg" />
           </div>
           <span className="font-outfit text-md font-bold text-foreground brandLogo">Merchant Portal</span>
         </div>
@@ -1288,7 +1394,7 @@ export default function MerchantDashboard() {
                     <Salad className={`w-4 h-4 ${activeTab === 'orders' ? 'text-primary-foreground' : 'text-primary'}`} />
                     <span className="hidden sm:inline">Live Orders</span>
                     {orders.length > 0 && (
-                      <span className="absolute -top-0.5 -right-0.5 bg-destructive text-destructive-foreground text-[8px] px-1.5 py-0.5 rounded-full font-bold">
+                      <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1.5 rounded-full bg-red-600 text-white text-[11px] font-black flex items-center justify-center border-2 border-background shadow-md select-none pointer-events-none">
                         {orders.length}
                       </span>
                     )}
@@ -1360,8 +1466,10 @@ export default function MerchantDashboard() {
                       onClick={() => {
                         setUserMenuOpen(false);
                         setShowGetMoreDevicesModal(true);
-                        setReqDeviceType('tabletop');
-                        setReqDeviceQty('1');
+                        setReqRequestTablet(false);
+                        setReqTabletQuantity('1');
+                        setReqRequestScreen(false);
+                        setReqScreenQuantity('1');
                         setReqDeviceError('');
                       }}
                       className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
@@ -1864,9 +1972,10 @@ export default function MerchantDashboard() {
                     <Plus className="w-4 h-4" />
                     <span>Add Item</span>
                   </button>
-                  <button
+                   <button
                     onClick={handleSaveMenu}
-                    className="bg-primary hover:bg-primary/95 text-primary-foreground font-bold text-xs px-6 py-2.5 rounded-xl transition-all shadow-md cursor-pointer glow-hover"
+                    disabled={!hasMenuChanges()}
+                    className="bg-primary hover:bg-primary/95 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none text-primary-foreground font-bold text-xs px-6 py-2.5 rounded-xl transition-all shadow-md cursor-pointer glow-hover"
                   >
                     Save Menu
                   </button>
@@ -1920,7 +2029,7 @@ export default function MerchantDashboard() {
                                       e.stopPropagation();
                                       openEditModal(item, originalIndex);
                                     }}
-                                    className="p-1.5 bg-card/95 hover:bg-muted border border-border/40 rounded-lg text-foreground transition-all cursor-pointer shadow-sm"
+                                    className="p-1.5 bg-black hover:bg-muted border border-border/40 rounded-lg text-foreground transition-all cursor-pointer shadow-sm"
                                   >
                                     <Pencil className="w-4 h-4" />
                                   </button>
@@ -2108,7 +2217,7 @@ export default function MerchantDashboard() {
                                       e.stopPropagation();
                                       serviceWaiter(ord.orderId);
                                     }}
-                                    className="bg-red-600 hover:bg-red-700 text-white text-[10px] font-black uppercase px-2.5 py-1.5 rounded-xl animate-pulse cursor-pointer shrink-0 border-none select-none"
+                                    className="bg-red-600 text-white text-[11px] font-black uppercase px-3 py-1.5 rounded-xl animate-pulse cursor-pointer shrink-0 border border-red-700 shadow-md select-none"
                                     style={{ animationDuration: '0.8s' }}
                                   >
                                     Call Waiter ({ord.waiterCallOption || 'Others'}) x{ord.waiterCallCount || 1}
@@ -2196,10 +2305,14 @@ export default function MerchantDashboard() {
               </h1>
 
               <button
-                onClick={() => setShowUpiModal(true)}
+                onClick={() => {
+                  setConfirmPasswordInput('');
+                  setPasswordVerifyError('');
+                  setShowPasswordModal(true);
+                }}
                 className="bg-[#0069a8] hover:bg-[#005b94] text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
               >
-                <Plus className="w-4 h-4" />
+                <Lock className="w-4 h-4" />
                 <span>Configure UPI Payments</span>
               </button>
             </div>
@@ -2272,7 +2385,7 @@ export default function MerchantDashboard() {
       {/* Food Catalog Item Modal */}
       {isMenuModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in exclude-uppercase">
-          <div className="w-full max-w-2xl bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative text-foreground">
+          <div className="w-full max-w-2xl bg-card border border-border/40 p-5 md:p-6 rounded-2xl shadow-2xl relative text-foreground max-h-[90vh] overflow-y-auto">
             {/* Close button */}
             <button
               onClick={() => setIsMenuModalOpen(false)}
@@ -2281,7 +2394,7 @@ export default function MerchantDashboard() {
               <X className="w-5 h-5" />
             </button>
 
-            <h3 className="font-outfit text-md font-bold uppercase tracking-wider mb-6 text-foreground">
+            <h3 className="font-outfit text-md font-bold uppercase tracking-wider mb-5 text-foreground">
               {editingItemIndex === -1 ? 'Create Food Catalog Item' : 'Edit Food Catalog Item'}
             </h3>
 
@@ -2295,7 +2408,7 @@ export default function MerchantDashboard() {
                     placeholder="Name of item"
                     value={modalForm.name}
                     onChange={(e) => setModalForm(prev => ({ ...prev, name: e.target.value }))}
-                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
                   />
                 </div>
 
@@ -2309,7 +2422,7 @@ export default function MerchantDashboard() {
                       const cleaned = e.target.value.replace(/[^\d.]/g, '');
                       setModalForm(prev => ({ ...prev, price: cleaned }));
                     }}
-                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
                   />
                 </div>
 
@@ -2323,7 +2436,7 @@ export default function MerchantDashboard() {
                         const cleaned = e.target.value.replace(/[^\d.]/g, '');
                         setModalForm(prev => ({ ...prev, gst: cleaned }));
                       }}
-                      className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                      className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
                     />
                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">%</span>
                   </div>
@@ -2338,12 +2451,12 @@ export default function MerchantDashboard() {
                       const cleaned = e.target.value.replace(/[^\d.]/g, '');
                       setModalForm(prev => ({ ...prev, otherCharges: cleaned }));
                     }}
-                    className="flex-1 bg-transparent px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
+                    className="flex-1 bg-transparent px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
                   />
                   <select
                     value={modalForm.otherChargesType}
                     onChange={(e) => setModalForm(prev => ({ ...prev, otherChargesType: e.target.value }))}
-                    className="bg-muted border-l border-input px-3 py-3 text-xs font-bold text-foreground focus:outline-none cursor-pointer outline-none"
+                    className="bg-muted border-l border-input px-3 py-2.5 text-xs font-bold text-foreground focus:outline-none cursor-pointer outline-none"
                   >
                     <option value="percentage">%</option>
                     <option value="rupees">₹</option>
@@ -2355,7 +2468,7 @@ export default function MerchantDashboard() {
                     placeholder="Brief description about the dish..."
                     value={modalForm.description}
                     onChange={(e) => setModalForm(prev => ({ ...prev, description: e.target.value }))}
-                    className="w-full h-24 bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                    className="w-full h-20 bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
                   />
                 </div>
 
@@ -2363,7 +2476,7 @@ export default function MerchantDashboard() {
                   <select
                     value={modalForm.category}
                     onChange={(e) => setModalForm(prev => ({ ...prev, category: e.target.value }))}
-                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer"
+                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer"
                   >
                     {menuCategories.map(cat => (
                       <option key={cat} value={cat} className="bg-card text-foreground">
@@ -2373,7 +2486,7 @@ export default function MerchantDashboard() {
                   </select>
                 </div>
 
-                <div className="flex items-center space-x-2 pt-2">
+                <div className="flex items-center space-x-2 pt-1">
                   <input
                     type="checkbox"
                     id="modalItemAvailable"
@@ -2387,122 +2500,156 @@ export default function MerchantDashboard() {
                 </div>
               </div>
 
-              {/* Right Column - Image Upload and Preview */}
+              {/* Right Column - Image Upload & Food Preference */}
               <div className="flex flex-col justify-between space-y-4">
-                <div className="relative w-full h-44 overflow-hidden rounded-xl border border-border/40 bg-muted/30 dark:bg-black/40 flex items-center justify-center shrink-0">
-                  {modalForm.imageUrl ? (
-                    <div className="w-full h-full overflow-hidden">
-                      <img
-                        src={resolveMediaUrl(modalForm.imageUrl)}
-                        alt="Preview"
-                        style={{ transform: `scale(${zoomFactor / 100})` }}
-                        className="w-full h-full object-cover transition-transform"
-                      />
-                    </div>
-                  ) : (
-                    <div className="text-center text-muted-foreground text-xs p-4 font-semibold uppercase">
-                      <UtensilsCrossed className="w-10 h-10 mx-auto mb-2 opacity-50" />
-                      <span className="text-foreground/70">No Cover Photo</span>
-                    </div>
-                  )}
-
-                  {/* Pencil and Delete overlay */}
-                  <div className="absolute top-3 right-3 flex space-x-2 bg-black/40 backdrop-blur-sm p-1 rounded-lg">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="p-1 hover:text-primary text-white transition-colors"
-                      title="Edit Image"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    {modalForm.imageUrl && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm("Are you sure you want to delete this cover image?")) {
-                            setModalForm(prev => ({ ...prev, imageUrl: '' }));
-                          }
-                        }}
-                        className="p-1 hover:text-destructive text-white transition-colors"
-                        title="Delete Image"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                <div className="space-y-4">
+                  <div className="relative w-full h-36 overflow-hidden rounded-xl border border-border/40 bg-muted/30 dark:bg-black/40 flex items-center justify-center shrink-0">
+                    {modalForm.imageUrl ? (
+                      <div className="w-full h-full overflow-hidden">
+                        <img
+                          src={resolveMediaUrl(modalForm.imageUrl)}
+                          alt="Preview"
+                          style={{ transform: `scale(${zoomFactor / 100})` }}
+                          className="w-full h-full object-cover transition-transform"
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-center text-muted-foreground text-xs p-3 font-semibold uppercase">
+                        <UtensilsCrossed className="w-8 h-8 mx-auto mb-1 opacity-50" />
+                        <span className="text-foreground/70">No Cover Photo</span>
+                      </div>
                     )}
-                  </div>
-                </div>
 
-                {/* Upload Tab Navigation */}
-                <div className="border-b border-border/40">
-                  <div className="flex space-x-4 text-xs font-bold">
-                    <button
-                      type="button"
-                      onClick={() => setImageTab('upload')}
-                      className={`pb-2 border-b-2 transition-all uppercase ${imageTab === 'upload' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-                    >
-                      Upload File
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setImageTab('url')}
-                      className={`pb-2 border-b-2 transition-all uppercase ${imageTab === 'url' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
-                    >
-                      Direct URL Link
-                    </button>
-                  </div>
-                </div>
-
-                {/* Upload Inputs */}
-                <div className="min-h-[48px] flex items-center">
-                  {imageTab === 'upload' ? (
-                    <div className="w-full">
-                      <input
-                        type="file"
-                        ref={fileInputRef}
-                        accept="image/*"
-                        onChange={handleModalImageUpload}
-                        className="hidden"
-                      />
+                    {/* Pencil and Delete overlay */}
+                    <div className="absolute top-2 right-2 flex space-x-1.5 bg-black/50 backdrop-blur-sm p-1 rounded-lg">
                       <button
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
-                        className="w-full bg-background hover:bg-muted border border-input rounded-xl py-2.5 text-xs font-semibold text-foreground transition-all cursor-pointer text-center uppercase"
+                        className="p-1 hover:text-primary text-white transition-colors"
+                        title="Edit Image"
                       >
-                        Choose Cover Image
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      {modalForm.imageUrl && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm("Are you sure you want to delete this cover image?")) {
+                              setModalForm(prev => ({ ...prev, imageUrl: '' }));
+                            }
+                          }}
+                          className="p-1 hover:text-destructive text-white transition-colors"
+                          title="Delete Image"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Upload Tab Navigation */}
+                  <div className="border-b border-border/40">
+                    <div className="flex space-x-4 text-xs font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setImageTab('upload')}
+                        className={`pb-1.5 border-b-2 transition-all uppercase ${imageTab === 'upload' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                      >
+                        Upload File
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImageTab('url')}
+                        className={`pb-1.5 border-b-2 transition-all uppercase ${imageTab === 'url' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                      >
+                        Direct URL Link
                       </button>
                     </div>
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder="Direct Image URL"
-                      value={modalForm.imageUrl}
-                      onChange={(e) => setModalForm(prev => ({ ...prev, imageUrl: e.target.value }))}
-                      className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                    />
-                  )}
-                </div>
-
-                {/* Zoom Factor Slider */}
-                {modalForm.imageUrl && (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[10px] font-bold text-muted-foreground uppercase">
-                      <span>Zoom Factor</span>
-                      <span className="text-primary">{zoomFactor}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="100"
-                      max="200"
-                      value={zoomFactor}
-                      onChange={(e) => setZoomFactor(parseInt(e.target.value, 10))}
-                      className="w-full h-1 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
-                    />
                   </div>
-                )}
 
-                <div className="text-center text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">
-                  Catalog cover photo
+                  {/* Upload Inputs */}
+                  <div className="min-h-[40px] flex items-center">
+                    {imageTab === 'upload' ? (
+                      <div className="w-full">
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          accept="image/*"
+                          onChange={handleModalImageUpload}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="w-full bg-background hover:bg-muted border border-input rounded-xl py-2 text-xs font-semibold text-foreground transition-all cursor-pointer text-center uppercase"
+                        >
+                          Choose Cover Image
+                        </button>
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="https://example.com/image.jpg"
+                        value={modalForm.imageUrl.startsWith('http') ? modalForm.imageUrl : (imageTab === 'url' ? (modalForm.imageUrl.startsWith('/') ? '' : modalForm.imageUrl) : '')}
+                        onChange={(e) => setModalForm(prev => ({ ...prev, imageUrl: e.target.value }))}
+                        className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-3.5 py-2 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all exclude-uppercase"
+                      />
+                    )}
+                  </div>
+
+                  {/* Zoom Factor Slider */}
+                  {modalForm.imageUrl && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-bold text-muted-foreground uppercase">
+                        <span>Zoom Factor</span>
+                        <span className="text-primary">{zoomFactor}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="100"
+                        max="200"
+                        value={zoomFactor}
+                        onChange={(e) => setZoomFactor(parseInt(e.target.value, 10))}
+                        className="w-full h-1 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                      />
+                    </div>
+                  )}
+
+                  {/* Relocated Dietary Preference Selector (Right Column under Image Upload) */}
+                  <div className="space-y-2 pt-3 border-t border-border/40">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-muted-foreground block">Food Preference</span>
+                    <div className="flex items-center space-x-6">
+                      {/* Veg Radio Option */}
+                      <label className="flex items-center space-x-2.5 cursor-pointer select-none">
+                        <input
+                          type="radio"
+                          name="modalIsVeg"
+                          checked={modalForm.isVeg === true}
+                          onChange={() => setModalForm(prev => ({ ...prev, isVeg: true }))}
+                          className="w-4 h-4 accent-emerald-500 cursor-pointer"
+                        />
+                        <div className="w-5 h-5 border-2 border-emerald-600 rounded flex items-center justify-center bg-emerald-500/10 shrink-0">
+                          <div className="w-2.5 h-2.5 bg-emerald-600 rounded-full" />
+                        </div>
+                        <span className="text-xs font-bold text-foreground">Veg</span>
+                      </label>
+
+                      {/* Non-Veg Radio Option */}
+                      <label className="flex items-center space-x-2.5 cursor-pointer select-none">
+                        <input
+                          type="radio"
+                          name="modalIsVeg"
+                          checked={modalForm.isVeg === false}
+                          onChange={() => setModalForm(prev => ({ ...prev, isVeg: false }))}
+                          className="w-4 h-4 accent-red-500 cursor-pointer"
+                        />
+                        <div className="w-5 h-5 border-2 border-red-600 rounded flex items-center justify-center bg-red-500/10 shrink-0">
+                          <div className="w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-b-[9px] border-b-red-600" />
+                        </div>
+                        <span className="text-xs font-bold text-foreground">Non-Veg</span>
+                      </label>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2614,6 +2761,82 @@ export default function MerchantDashboard() {
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Password Authorization Modal for UPI Configuration */}
+      {showPasswordModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in exclude-uppercase">
+          <div className="w-full max-w-md bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative space-y-5">
+            <button
+              type="button"
+              onClick={() => {
+                setShowPasswordModal(false);
+                setConfirmPasswordInput('');
+                setPasswordVerifyError('');
+              }}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 text-amber-500">
+                <Lock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-outfit text-base font-bold text-foreground">Security Verification</h3>
+                <p className="text-[11px] text-muted-foreground font-semibold mt-0.5">Confirm account password to configure payout details</p>
+              </div>
+            </div>
+
+            {passwordVerifyError && (
+              <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-xl text-xs text-destructive font-bold text-left animate-fade-in">
+                {passwordVerifyError}
+              </div>
+            )}
+
+            <form onSubmit={handleVerifyPasswordSubmit} className="space-y-4">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1 block">Account Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter your account password"
+                  value={confirmPasswordInput}
+                  onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                  className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex space-x-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={isVerifyingPassword}
+                  className="flex-1 bg-[#0069a8] hover:bg-[#005b94] disabled:opacity-50 text-white font-bold py-3 rounded-xl transition-all text-xs cursor-pointer shadow-md flex items-center justify-center space-x-2"
+                >
+                  {isVerifyingPassword ? (
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <span>Confirm & Continue</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPasswordModal(false);
+                    setConfirmPasswordInput('');
+                    setPasswordVerifyError('');
+                  }}
+                  disabled={isVerifyingPassword}
+                  className="px-5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -2897,6 +3120,16 @@ export default function MerchantDashboard() {
                       setMenuDefaultGst(gstVal);
                       setMenuDefaultOtherCharges(otherVal);
                       setMenuDefaultOtherChargesType(globalOtherChargesType);
+
+                      originalMenuRef.current = JSON.stringify({
+                        items: menuItems,
+                        categories: menuCategories,
+                        defaultGst: gstVal,
+                        defaultOtherCharges: otherVal,
+                        defaultOtherChargesType: globalOtherChargesType
+                      });
+                      setMenuItems([...menuItems]);
+
                       showToast('Global taxes applied successfully!', 'success');
                       setShowGlobalTaxesModal(false);
                     } catch (err) {
@@ -2986,56 +3219,58 @@ export default function MerchantDashboard() {
                 </div>
               )}
 
-              <div className="space-y-2">
-                <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Device Type</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <label className={`flex items-center justify-center space-x-2 p-3 rounded-xl border cursor-pointer select-none transition-all ${reqDeviceType === 'screen'
-                    ? 'bg-blue-500/10 border-blue-500 text-blue-500'
-                    : 'border-border/40 hover:bg-muted text-muted-foreground'
-                    }`}>
-                    <input
-                      type="radio"
-                      name="deviceType"
-                      value="screen"
-                      checked={reqDeviceType === 'screen'}
-                      onChange={() => setReqDeviceType('screen')}
-                      className="sr-only"
-                    />
-                    <Tv className="w-4 h-4" />
-                    <span>Screens</span>
-                  </label>
+              <div className="space-y-3 border-t border-border/60 pt-4">
+                <span className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Select Devices to Request</span>
 
-                  <label className={`flex items-center justify-center space-x-2 p-3 rounded-xl border cursor-pointer select-none transition-all ${reqDeviceType === 'tabletop'
-                    ? 'bg-blue-500/10 border-blue-500 text-blue-500'
-                    : 'border-border/40 hover:bg-muted text-muted-foreground'
-                    }`}>
-                    <input
-                      type="radio"
-                      name="deviceType"
-                      value="tabletop"
-                      checked={reqDeviceType === 'tabletop'}
-                      onChange={() => setReqDeviceType('tabletop')}
-                      className="sr-only"
-                    />
-                    <Tablet className="w-4 h-4" />
-                    <span>Tabletops</span>
-                  </label>
+                <div className="grid grid-cols-1 gap-4">
+                  {/* Tablet Checkbox and qty */}
+                  <div className="p-4 bg-background/50 rounded-2xl border border-border/40 space-y-3">
+                    <label className="flex items-center space-x-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={reqRequestTablet}
+                        onChange={(e) => setReqRequestTablet(e.target.checked)}
+                        className="w-4 h-4 rounded accent-primary cursor-pointer"
+                      />
+                      <span className="text-xs font-bold text-foreground">Tabletop Ordering Tablet</span>
+                    </label>
+                    {reqRequestTablet && (
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        placeholder="Quantity of Tablets"
+                        value={reqTabletQuantity}
+                        onChange={(e) => setReqTabletQuantity(e.target.value)}
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold"
+                      />
+                    )}
+                  </div>
+
+                  {/* Screen Checkbox and qty */}
+                  <div className="p-4 bg-background/50 rounded-2xl border border-border/40 space-y-3">
+                    <label className="flex items-center space-x-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={reqRequestScreen}
+                        onChange={(e) => setReqRequestScreen(e.target.checked)}
+                        className="w-4 h-4 rounded accent-primary cursor-pointer"
+                      />
+                      <span className="text-xs font-bold text-foreground">Large Wall Display Screen</span>
+                    </label>
+                    {reqRequestScreen && (
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        placeholder="Quantity of Screens"
+                        value={reqScreenQuantity}
+                        onChange={(e) => setReqScreenQuantity(e.target.value)}
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-semibold"
+                      />
+                    )}
+                  </div>
                 </div>
-              </div>
-
-              <div className="space-y-2">
-                <label htmlFor="deviceQty" className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">
-                  {reqDeviceType === 'screen' ? 'Number of screens expected' : 'Number of tabletops expected'}
-                </label>
-                <input
-                  id="deviceQty"
-                  type="number"
-                  min="1"
-                  required
-                  value={reqDeviceQty}
-                  onChange={(e) => setReqDeviceQty(e.target.value)}
-                  className="w-full bg-muted border border-border/40 px-3 py-3 rounded-xl focus:outline-none focus:border-blue-500 font-bold"
-                />
               </div>
 
               <div className="flex space-x-3 pt-2">

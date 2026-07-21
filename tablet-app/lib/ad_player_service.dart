@@ -103,7 +103,16 @@ class AdPlayerService {
     final videoPaths = _playlist
         .where((path) => !path.startsWith('static__') && path.isNotEmpty)
         .toList();
-    _channel.invokeMethod('setPlaylist', {'paths': videoPaths});
+    final currentSource = _currentSource;
+    int nativeIndex = 0;
+    if (!currentSource.startsWith('static__') && currentSource.isNotEmpty) {
+      nativeIndex = videoPaths.indexOf(currentSource);
+      if (nativeIndex < 0) nativeIndex = 0;
+    }
+    _channel.invokeMethod('setPlaylist', {
+      'paths': videoPaths,
+      'currentIndex': nativeIndex,
+    });
   }
 
   void _playCurrent() {

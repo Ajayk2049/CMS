@@ -48,7 +48,8 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "setPlaylist" -> {
                     val paths = call.argument<List<String>>("paths") ?: emptyList()
-                    activeVideoView?.setPlaylist(paths)
+                    val index = call.argument<Int>("currentIndex") ?: 0
+                    activeVideoView?.setPlaylist(paths, index)
                     result.success(null)
                 }
                 "play" -> {
@@ -104,8 +105,9 @@ class NativeVideoView(
         playerB.visibility = View.GONE
 
         val paths = creationParams?.get("paths") as? List<String> ?: emptyList()
+        val initialIndex = creationParams?.get("initialIndex") as? Int ?: 0
         if (paths.isNotEmpty()) {
-            setPlaylist(paths)
+            setPlaylist(paths, initialIndex)
         }
     }
 
@@ -113,7 +115,7 @@ class NativeVideoView(
         return this
     }
 
-    fun setPlaylist(paths: List<String>) {
+    fun setPlaylist(paths: List<String>, initialIndex: Int = 0) {
         val oldSource = if (playlist.isNotEmpty() && currentIndex >= 0 && currentIndex < playlist.size) {
             playlist[currentIndex]
         } else {
@@ -132,7 +134,7 @@ class NativeVideoView(
             currentIndex = newIndex
             preloadNext()
         } else {
-            currentIndex = 0
+            currentIndex = if (initialIndex >= 0 && initialIndex < playlist.size) initialIndex else 0
             if (isPlaying) {
                 playCurrent()
             } else {

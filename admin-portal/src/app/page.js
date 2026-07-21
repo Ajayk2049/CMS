@@ -72,6 +72,9 @@ export default function AdminPortal() {
   const [devices, setDevices] = useState([]);
   const [users, setUsers] = useState([]);
   const [reports, setReports] = useState([]);
+  const [deviceRequests, setDeviceRequests] = useState([]);
+  const [selectedDeviceReq, setSelectedDeviceReq] = useState(null);
+  const [deviceReqFilter, setDeviceReqFilter] = useState('all');
 
   // Detail Modal / Sidebar states
   const [selectedUser, setSelectedUser] = useState(null);
@@ -104,6 +107,8 @@ export default function AdminPortal() {
     amount: ''
   });
   const [editingRateId, setEditingRateId] = useState(null);
+  const [frequencyOption, setFrequencyOption] = useState('hourly');
+  const [customMinutes, setCustomMinutes] = useState('45');
 
   // Report Resolution Form
   const [reportActionForm, setReportActionForm] = useState({
@@ -289,13 +294,72 @@ export default function AdminPortal() {
     };
   }, []);
 
-  // Background polling for admin requests (every 15s)
+  // Real-time WebSocket updates for admin dashboard with exponential backoff reconnect
   useEffect(() => {
     if (!mounted || !isAuthenticated || !token) return;
-    const interval = setInterval(() => {
-      loadDashboardData(token);
-    }, 15000);
-    return () => clearInterval(interval);
+
+    let ws = null;
+    let reconnectTimeout = null;
+    let reconnectDelay = 1000;
+    const maxReconnectDelay = 30000;
+
+    const connectWebSocket = () => {
+      if (ws) {
+        try {
+          ws.close();
+        } catch (e) {}
+      }
+
+      console.log('[WebSocket] Connecting to admin feed...');
+      ws = new WebSocket(`${config.wsUrl}/ws/admin?token=${token}`);
+
+      ws.onopen = () => {
+        console.log('[WebSocket] Connected to admin live feed successfully');
+        reconnectDelay = 1000;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          console.log('[WebSocket] Received update alert:', payload);
+          if (['new_host_app', 'host_app_reviewed', 'new_campaign', 'campaign_reviewed', 'report_updated', 'new_device_request', 'device_request_reviewed'].includes(payload.event)) {
+            console.log('[WebSocket] Triggering dynamic dashboard refresh...');
+            loadDashboardData(token);
+          }
+        } catch (e) {
+          console.error('[WebSocket] Failed parsing message:', e.message);
+        }
+      };
+
+      ws.onclose = (event) => {
+        console.log(`[WebSocket] Closed (code: ${event.code}). Attempting reconnect in ${reconnectDelay}ms...`);
+        reconnectTimeout = setTimeout(() => {
+          reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+          connectWebSocket();
+        }, reconnectDelay);
+      };
+
+      ws.onerror = (err) => {
+        console.error('[WebSocket] Connection error:', err.message || err);
+        try {
+          ws.close();
+        } catch (e) {}
+      };
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (ws) {
+        ws.onclose = null;
+        try {
+          ws.close();
+        } catch (e) {}
+      }
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
+    };
   }, [mounted, isAuthenticated, token]);
 
   const getNotificationsList = () => {
@@ -506,6 +570,33 @@ export default function AdminPortal() {
     fetchDevices(authToken);
     fetchUsers(authToken);
     fetchReports(authToken);
+    fetchDeviceRequests(authToken);
+  };
+
+  const fetchDeviceRequests = async (authToken) => {
+    try {
+      const res = await axios.get(`${API_BASE}/admin/device-requests`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      setDeviceRequests(res.data.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleReviewDeviceRequest = async (requestId, action) => {
+    try {
+      await axios.post(
+        `${API_BASE}/admin/device-requests/review`,
+        { requestId, action },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      showNotification('success', `Device request ${action}ed successfully`);
+      loadDashboardData(token);
+      setSelectedDeviceReq(null);
+    } catch (err) {
+      showNotification('error', err.response?.data?.message || 'Action failed');
+    }
   };
 
   const fetchStats = async (authToken) => {
@@ -654,8 +745,27 @@ export default function AdminPortal() {
     }
   };
 
+  const getFrequencyLabel = (freq) => {
+    if (!freq) return 'Unknown';
+    const f = freq.toLowerCase();
+    if (f === 'continuous') return 'Continuous Loop';
+    if (f === 'hourly') return 'Once Every Hour';
+    if (f === 'every_15_mins') return 'Once Every 15 Mins';
+    if (f === 'every_30_mins') return 'Once Every 30 Mins';
+    if (f === 'every_2_hours') return 'Once Every 2 Hours';
+    const numMatch = f.match(/\d+/);
+    if (numMatch) {
+      return `Once Every ${numMatch[0]} Mins`;
+    }
+    return freq;
+  };
+
   const handleCreateRate = async (e) => {
     e.preventDefault();
+    let finalFrequency = frequencyOption;
+    if (frequencyOption === 'custom') {
+      finalFrequency = `${customMinutes}_mins`;
+    }
     try {
       await axios.post(
         `${API_BASE}/admin/rates`,
@@ -663,7 +773,7 @@ export default function AdminPortal() {
           rateId: rateForm.rateId,
           deviceType: rateForm.deviceType,
           durationDays: parseInt(rateForm.durationDays, 10),
-          frequency: rateForm.frequency,
+          frequency: finalFrequency,
           amount: parseInt(rateForm.amount, 10) * 100 // convert INR to paise
         },
         { headers: { Authorization: `Bearer ${token}` } }
@@ -677,6 +787,8 @@ export default function AdminPortal() {
         frequency: 'hourly',
         amount: ''
       });
+      setFrequencyOption('hourly');
+      setCustomMinutes('45');
       setEditingRateId(null);
     } catch (err) {
       showNotification('error', err.response?.data?.message || 'Failed to save pricing plan');
@@ -774,6 +886,18 @@ export default function AdminPortal() {
       frequency: rate.frequency,
       amount: (rate.amount / 100).toString()
     });
+    const standardOptions = ['continuous', 'every_15_mins', 'every_30_mins', 'hourly', 'every_2_hours'];
+    if (standardOptions.includes(rate.frequency)) {
+      setFrequencyOption(rate.frequency);
+    } else {
+      setFrequencyOption('custom');
+      const numMatch = (rate.frequency || '').match(/\d+/);
+      if (numMatch) {
+        setCustomMinutes(numMatch[0]);
+      } else {
+        setCustomMinutes('45');
+      }
+    }
   };
 
   const handleDeleteRate = async (rateId) => {
@@ -917,8 +1041,8 @@ export default function AdminPortal() {
 
               {/* Logo and Brand */}
               <div className="flex items-center justify-center space-x-3 mb-6">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
-                  <Tv className="w-5 h-5 text-white" />
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0 overflow-hidden p-1">
+                  <img src="/brandicon.png" alt="DigiAds Logo" className="w-full h-full object-contain rounded-lg" />
                 </div>
                 <div className="text-left">
                   <h2 className="font-outfit text-lg font-bold tracking-tight brandLogo">
@@ -1077,6 +1201,19 @@ export default function AdminPortal() {
     );
   });
 
+  const filteredDeviceReqs = deviceRequests.filter(r => {
+    const isFilterMatch = deviceReqFilter === 'all' || r.status === deviceReqFilter;
+    if (!isFilterMatch) return false;
+    if (!searchQuery) return true;
+    const query = searchQuery.trim().toLowerCase();
+    return (
+      r._id.toLowerCase().includes(query) ||
+      (r.userId?.name || '').toLowerCase().includes(query) ||
+      (r.userId?.phone || '').includes(query) ||
+      (r.hostApplicationId?.outletName || '').toLowerCase().includes(query)
+    );
+  });
+
   // NAVIGATION BAR ITEMS
   const navItems = [
     { id: 'stats', label: 'Dashboard', icon: <TrendingUp className="w-4 h-4" /> },
@@ -1102,9 +1239,9 @@ export default function AdminPortal() {
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
               className="relative group w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shrink-0 shadow-md shadow-blue-500/20 cursor-pointer overflow-hidden transition-all duration-300"
             >
-              {/* Tv Icon */}
-              <div className="transition-all duration-300 transform group-hover:scale-0 group-hover:opacity-0 flex items-center justify-center">
-                <Tv className="w-5 h-5 text-white" />
+              {/* Brand Icon */}
+              <div className="transition-all duration-300 transform group-hover:scale-0 group-hover:opacity-0 flex items-center justify-center p-1">
+                <img src="/brandicon.png" alt="DigiAds Logo" className="w-full h-full object-contain rounded-lg" />
               </div>
               {/* Chevron Icon */}
               <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 transform scale-50 group-hover:scale-100">
@@ -1147,6 +1284,34 @@ export default function AdminPortal() {
                       <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="truncate">
                         {item.label}
                       </motion.span>
+
+                      {/* Alert Badge for pending items */}
+                      {item.id === 'requests' && (() => {
+                        const pendingHosts = hosts.filter(h => h.status === 'pending').length;
+                        const pendingCampaigns = campaigns.filter(c => c.paymentStatus === 'completed' && c.approvalStatus === 'pending').length;
+                        const pendingDevices = deviceRequests.filter(r => r.status === 'pending').length;
+                        const count = pendingHosts + pendingCampaigns + pendingDevices;
+                        if (count > 0) {
+                          return (
+                            <span className="bg-red-600 text-white font-black text-[10px] px-1.5 py-0.5 rounded-full min-w-[18px] text-center shadow-sm pointer-events-none select-none">
+                              {count}
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
+
+                      {item.id === 'reports' && (() => {
+                        const count = reports.filter(r => r.status !== 'resolved').length;
+                        if (count > 0) {
+                          return (
+                            <span className="bg-red-600 text-white font-black text-[10px] px-1.5 py-0.5 rounded-full min-w-[18px] text-center shadow-sm pointer-events-none select-none">
+                              {count}
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                   )}
                 </button>
@@ -1210,7 +1375,7 @@ export default function AdminPortal() {
                   const unreadCount = notifications.filter(item => !readNotifications.includes(item.id)).length;
                   if (unreadCount > 0) {
                     return (
-                      <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-destructive text-[10px] font-black text-destructive-foreground flex items-center justify-center border border-card shadow-sm animate-pulse">
+                      <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-red-600 text-[11px] font-black text-white flex items-center justify-center border-2 border-card shadow-md select-none pointer-events-none">
                         {unreadCount}
                       </span>
                     );
@@ -1899,6 +2064,15 @@ export default function AdminPortal() {
                     >
                       Venue Applications
                     </button>
+                    <button
+                      onClick={() => {
+                        setRequestsSubTab('devices');
+                      }}
+                      className={`px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-all ${requestsSubTab === 'devices' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                      Device Requests
+                    </button>
                   </div>
 
                   {requestsSubTab === 'hosts' && (
@@ -1930,6 +2104,26 @@ export default function AdminPortal() {
                             setAdFilter(filter);
                           }}
                           className={`text-[10px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${adFilter === filter
+                            ? 'bg-primary text-primary-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                          {filter}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {requestsSubTab === 'devices' && (
+                    <div className="flex space-x-2 bg-muted/30 p-1 rounded-xl border border-border/60">
+                      {['all', 'pending', 'approved', 'rejected'].map((filter) => (
+                        <button
+                          key={filter}
+                          onClick={() => {
+                            setDeviceReqFilter(filter);
+                            setSelectedDeviceReq(null);
+                          }}
+                          className={`text-[10px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-lg transition-all cursor-pointer ${deviceReqFilter === filter
                             ? 'bg-primary text-primary-foreground shadow-sm'
                             : 'text-muted-foreground hover:text-foreground'
                             }`}
@@ -2066,7 +2260,7 @@ export default function AdminPortal() {
                       </div>
                     )}
                   </div>
-                ) : (
+                ) : requestsSubTab === 'hosts' ? (
                   <div className="grid lg:grid-cols-12 gap-8 items-start">
                     {/* Left Column: Applications List */}
                     <div className={`${selectedHostApp ? 'lg:col-span-6' : 'lg:col-span-12'} mx-1 mt-2 overflow-x-auto animate-fade-in`}>
@@ -2192,7 +2386,7 @@ export default function AdminPortal() {
                             {/* Contact details */}
                             <div className="space-y-2 border-t border-border/40 pt-4">
                               <span className="text-[10px] font-black text-muted-foreground uppercase">Contact Information</span>
-                              <div className="grid grid-cols-2 gap-4">
+                              <div className="grid grid-cols-2 gap-4 mt-2">
                                 <div>
                                   <span className="text-[9px] text-muted-foreground">Person</span>
                                   <p className="text-foreground">{selectedHostApp.contactPerson}</p>
@@ -2233,6 +2427,163 @@ export default function AdminPortal() {
                                 </button>
                                 <button
                                   onClick={() => handleReviewHost(selectedHostApp._id, 'reject')}
+                                  className="w-full bg-destructive hover:bg-destructive/90 text-white font-bold py-3 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center space-x-1.5"
+                                >
+                                  <X className="w-4 h-4" />
+                                  <span>Reject Request</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid lg:grid-cols-12 gap-8 items-start">
+                    {/* Left Column: Device Requests List */}
+                    <div className={`${selectedDeviceReq ? 'lg:col-span-6' : 'lg:col-span-12'} mx-1 mt-2 overflow-x-auto animate-fade-in`}>
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-border/80 text-muted-foreground font-bold uppercase tracking-wider bg-card/10">
+                            <th className="p-4 pl-6">Venue Outlet</th>
+                            <th className="p-4">Merchant</th>
+                            <th className="p-4">Requested Devices</th>
+                            <th className="p-4">Status</th>
+                            <th className="p-4 text-right pr-6">Date</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border/40">
+                          {filteredDeviceReqs.length === 0 ? (
+                            <tr>
+                              <td colSpan="5" className="p-12 text-center text-muted-foreground font-medium italic">
+                                No device requests found.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredDeviceReqs.map((req) => (
+                              <tr
+                                key={req._id}
+                                onClick={() => setSelectedDeviceReq(req)}
+                                className={`hover:bg-muted/10 cursor-pointer transition-all ${selectedDeviceReq?._id === req._id ? 'bg-primary/5' : ''
+                                  }`}
+                              >
+                                <td className="p-4 pl-6 font-bold text-foreground">
+                                  <div className="flex items-center space-x-2">
+                                    <Building className="w-3.5 h-3.5 text-primary shrink-0" />
+                                    <span>{req.hostApplicationId?.outletName || 'Outlet'}</span>
+                                  </div>
+                                  <div className="text-[10px] text-muted-foreground font-medium pl-5.5">
+                                    {req.hostApplicationId?.city}, {req.hostApplicationId?.state}
+                                  </div>
+                                </td>
+                                <td className="p-4 font-semibold text-foreground">
+                                  <div>{req.userId?.name || 'N/A'}</div>
+                                  <div className="text-[10px] text-muted-foreground">{req.userId?.phone}</div>
+                                </td>
+                                <td className="p-4">
+                                  <div className="text-[11px] space-y-0.5 font-bold">
+                                    {req.requestTablet && (
+                                      <div className="text-foreground">Tablet (Qty: {req.tabletQuantity})</div>
+                                    )}
+                                    {req.requestScreen && (
+                                      <div className="text-foreground">Screen (Qty: {req.screenQuantity})</div>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="p-4">
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded capitalize ${req.status === 'approved'
+                                    ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                                    : req.status === 'rejected'
+                                      ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                                      : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'
+                                    }`}>
+                                    {req.status}
+                                  </span>
+                                </td>
+                                <td className="p-4 text-right pr-6 text-muted-foreground font-medium">
+                                  {new Date(req.createdAt).toLocaleDateString()}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Right Column: Detailed review pane */}
+                    {selectedDeviceReq && (
+                      <div className="lg:col-span-6 animate-slide-in">
+                        <div className="p-6 rounded-2xl bg-card/10 border border-border/40 space-y-6 relative">
+                          <button
+                            onClick={() => setSelectedDeviceReq(null)}
+                            className="absolute right-4 top-4 p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+
+                          <div>
+                            <span className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20">
+                              Device Request Details
+                            </span>
+                            <h3 className="font-outfit text-lg font-bold text-slate-200 mt-3">{selectedDeviceReq.hostApplicationId?.outletName || 'Outlet'}</h3>
+                            <p className="text-xs text-muted-foreground font-medium mt-1">Submitted on {new Date(selectedDeviceReq.createdAt).toLocaleString()}</p>
+                          </div>
+
+                          <div className="space-y-4 text-xs font-semibold">
+                            {/* Merchant details */}
+                            <div className="space-y-1 bg-background/30 p-4 rounded-2xl border border-border/40">
+                              <span className="text-[10px] font-black text-muted-foreground uppercase">Merchant Information</span>
+                              <div className="grid grid-cols-2 gap-4 mt-2">
+                                <div>
+                                  <span className="text-[9px] text-muted-foreground">Name</span>
+                                  <p className="text-foreground">{selectedDeviceReq.userId?.name || 'N/A'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-[9px] text-muted-foreground">Phone</span>
+                                  <p className="text-foreground">{selectedDeviceReq.userId?.phone}</p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Device quantities requests */}
+                            <div className="space-y-1 bg-background/30 p-4 rounded-2xl border border-border/40">
+                              <span className="text-[10px] font-black text-muted-foreground uppercase">Device Quantities Requested</span>
+                              <div className="text-foreground capitalize font-bold mt-2 space-y-1">
+                                {selectedDeviceReq.requestTablet && (
+                                  <div>Tablet Display (Qty: {selectedDeviceReq.tabletQuantity})</div>
+                                )}
+                                {selectedDeviceReq.requestScreen && (
+                                  <div>Screen Display (Qty: {selectedDeviceReq.screenQuantity})</div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Request status */}
+                            <div className="border-t border-border/40 pt-4 flex items-center justify-between">
+                              <span className="text-[10px] font-black text-muted-foreground uppercase">Current Request Status</span>
+                              <span className={`text-[10px] font-bold px-3 py-1 rounded-full capitalize ${selectedDeviceReq.status === 'approved'
+                                ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                                : selectedDeviceReq.status === 'rejected'
+                                  ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                                  : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'
+                                }`}>
+                                {selectedDeviceReq.status}
+                              </span>
+                            </div>
+
+                            {/* Actions */}
+                            {selectedDeviceReq.status === 'pending' && (
+                              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-border/40">
+                                <button
+                                  onClick={() => handleReviewDeviceRequest(selectedDeviceReq._id, 'approve')}
+                                  className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center space-x-1.5"
+                                >
+                                  <Check className="w-4 h-4" />
+                                  <span>Approve Request</span>
+                                </button>
+                                <button
+                                  onClick={() => handleReviewDeviceRequest(selectedDeviceReq._id, 'reject')}
                                   className="w-full bg-destructive hover:bg-destructive/90 text-white font-bold py-3 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center space-x-1.5"
                                 >
                                   <X className="w-4 h-4" />
@@ -2312,7 +2663,7 @@ export default function AdminPortal() {
                         </div>
                       </div>
 
-                      <div className="grid md:grid-cols-3 gap-6">
+                      <div className={`grid ${frequencyOption === 'custom' ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6 transition-all`}>
                         <div>
                           <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Duration (Days)</label>
                           <input
@@ -2328,14 +2679,32 @@ export default function AdminPortal() {
                         <div>
                           <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Loop Frequency</label>
                           <select
-                            value={rateForm.frequency}
-                            onChange={(e) => setRateForm({ ...rateForm, frequency: e.target.value })}
+                            value={frequencyOption}
+                            onChange={(e) => setFrequencyOption(e.target.value)}
                             className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
                           >
-                            <option value="hourly">Once Every Hour</option>
                             <option value="continuous">Continuous Loop</option>
+                            <option value="every_15_mins">Once Every 15 Mins</option>
+                            <option value="every_30_mins">Once Every 30 Mins</option>
+                            <option value="hourly">Once Every Hour</option>
+                            <option value="every_2_hours">Once Every 2 Hours</option>
+                            <option value="custom">Custom Minutes...</option>
                           </select>
                         </div>
+                        {frequencyOption === 'custom' && (
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Custom Minutes</label>
+                            <input
+                              type="number"
+                              required
+                              min="1"
+                              placeholder="45"
+                              value={customMinutes}
+                              onChange={(e) => setCustomMinutes(e.target.value)}
+                              className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                          </div>
+                        )}
                         <div>
                           <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Price Amount (INR)</label>
                           <input
@@ -2391,7 +2760,7 @@ export default function AdminPortal() {
                           <div>
                             <span className="text-[9px] text-blue-500 font-black uppercase tracking-widest">{rate.rateId}</span>
                             <h4 className="font-bold text-foreground text-xs mt-1 capitalize">{rate.deviceType} Display</h4>
-                            <p className="text-[10px] text-muted-foreground mt-0.5">{rate.durationDays} Days / {rate.frequency}</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">{rate.durationDays} Days / {getFrequencyLabel(rate.frequency)}</p>
                           </div>
 
                           <div className="flex items-center space-x-2">

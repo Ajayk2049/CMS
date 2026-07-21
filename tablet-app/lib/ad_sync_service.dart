@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -312,11 +313,18 @@ class AdSyncService {
           progress.value = const SyncProgress.idle();
         }
 
-        // 2. Persist playlist to cache (fire-and-forget)
-        SharedPreferences.getInstance().then((prefs) {
-          prefs.setStringList(kPlaylistCacheKey, newLocalPaths);
-          prefs.setString(kLastSyncTimeKey, DateTime.now().toIso8601String());
-        });
+        // 2. Persist playlist and frequencies to cache
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setStringList(kPlaylistCacheKey, newLocalPaths);
+        await prefs.setString(kLastSyncTimeKey, DateTime.now().toIso8601String());
+        
+        final Map<String, int> frequencies = {};
+        for (final ad in serverAds) {
+          final bookingId = ad['bookingId'] as String? ?? 'unknown';
+          final freqMin = ad['frequencyMinutes'] as int? ?? 0;
+          frequencies[bookingId] = freqMin;
+        }
+        await prefs.setString('ad_frequencies_map', jsonEncode(frequencies));
 
         // 3. Cleanup deleted ads from disk
         await _cleanupOldFiles(activeFileNames);

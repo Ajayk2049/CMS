@@ -32,6 +32,10 @@ const MenuItemSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  isVeg: {
+    type: Boolean,
+    default: true
+  },
   gst: {
     type: Number,
     default: null

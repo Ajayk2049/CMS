@@ -54,7 +54,7 @@ class LandscapeAdScreenApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Landscape Ad Screen',
+      title: 'DigiAds Screen',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -387,6 +387,11 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
   // ---------- Storage directory ----------
   late String _adsDirectory;
 
+  // ---------- Ad scheduling & frequency ----------
+  List<String> _masterAdPlaylist = [];
+  Map<String, int> _adFrequencies = {};
+  Map<String, int> _lastPlayedTimes = {};
+
   @override
   void initState() {
     super.initState();
@@ -413,6 +418,26 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
 
     // 4. Attempt server sync in background (won't block playback)
     _attemptSync();
+
+    // Local timer to check for ad unlocks periodically when the playlist is empty
+    Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        if (_playerState != PlayerState.booting && _localPlaylist.isEmpty && _masterAdPlaylist.isNotEmpty) {
+          final eligible = _getEligiblePlaylist(_masterAdPlaylist);
+          if (eligible.isNotEmpty) {
+            print('[SCHEDULER] Ads unlocked! Resuming ad loop.');
+            setState(() {
+              _localPlaylist = eligible;
+              _playerState = PlayerState.playing;
+              _statusMessage = '';
+            });
+            _startPlaybackLoop();
+          }
+        }
+      } else {
+        timer.cancel();
+      }
+    });
   }
 
   Future<void> _ensureStorageReady() async {
@@ -456,8 +481,11 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
 
       if (validFiles.isNotEmpty) {
         print('[BOOT] Found ${validFiles.length} cached ads on disk. Starting playback.');
+        _masterAdPlaylist = List.from(validFiles);
+        await _loadFrequenciesAndTimestamps();
+        final eligible = _getEligiblePlaylist(_masterAdPlaylist);
         setState(() {
-          _localPlaylist = validFiles;
+          _localPlaylist = eligible;
           _playerState = PlayerState.playing;
           _statusMessage = '';
         });
@@ -478,8 +506,11 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
         final recovered = files.map((f) => f.path).toList();
         print('[BOOT] Recovered ${recovered.length} video files from disk scan.');
         await prefs.setStringList('local_playlist', recovered);
+        _masterAdPlaylist = List.from(recovered);
+        await _loadFrequenciesAndTimestamps();
+        final eligible = _getEligiblePlaylist(_masterAdPlaylist);
         setState(() {
-          _localPlaylist = recovered;
+          _localPlaylist = eligible;
           _playerState = PlayerState.playing;
           _statusMessage = '';
         });
@@ -622,6 +653,16 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
     }
 
     try {
+      // Save frequencies mapping to cache
+      final prefs = await SharedPreferences.getInstance();
+      final Map<String, int> frequencies = {};
+      for (final ad in serverAds) {
+        final bookingId = ad['bookingId'] as String? ?? 'unknown';
+        final freqMin = ad['frequencyMinutes'] as int? ?? 0;
+        frequencies[bookingId] = freqMin;
+      }
+      await prefs.setString('ad_frequencies_map', jsonEncode(frequencies));
+
       final List<String> newLocalPaths = [];
       final List<String> activeFileNames = [];
 
@@ -683,9 +724,13 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
     await prefs.setStringList('local_playlist', newPlaylist);
     await prefs.setString('last_sync_time', DateTime.now().toIso8601String());
 
+    _masterAdPlaylist = List.from(newPlaylist);
+    await _loadFrequenciesAndTimestamps();
+    final eligible = _getEligiblePlaylist(_masterAdPlaylist);
+
     if (!mounted) return;
 
-    if (newPlaylist.isEmpty) {
+    if (eligible.isEmpty) {
       print('[PLAYER] New playlist is empty. Stopping playback.');
       _stopPlaybackMonitoring();
       _disposeActiveController();
@@ -705,7 +750,7 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
     if (!isPlaying) {
       // Not playing yet (waiting or booting) -> start loop
       setState(() {
-        _localPlaylist = newPlaylist;
+        _localPlaylist = eligible;
         _playerState = PlayerState.playing;
         _statusMessage = '';
       });
@@ -719,13 +764,13 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
         ? _localPlaylist[_currentAdIndex]
         : '';
 
-    final currentPlayingIndexInNew = newPlaylist.indexOf(currentPlayingSource);
+    final currentPlayingIndexInNew = eligible.indexOf(currentPlayingSource);
 
     if (currentPlayingIndexInNew != -1) {
       // Currently playing ad is still valid. Just update playlist and index
       print('[PLAYER] Playlist updated. Currently playing ad is still valid.');
       setState(() {
-        _localPlaylist = newPlaylist;
+        _localPlaylist = eligible;
         _currentAdIndex = currentPlayingIndexInNew;
         _downloadProgress = '';
       });
@@ -736,8 +781,8 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
       
       _cleanupOldFiles(activeFileNames);
     } else {
-      // Currently playing ad was revoked/deleted!
-      print('[PLAYER] Currently playing ad was revoked! Stopping and advancing.');
+      // Currently playing ad was revoked/deleted or is now scheduled out!
+      print('[PLAYER] Currently playing ad is no longer active. Stopping and advancing.');
       
       // 1. Stop active playback & dispose so the file is unlocked
       _stopPlaybackMonitoring();
@@ -747,8 +792,8 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
 
       // 2. Update playlist in state
       setState(() {
-        _localPlaylist = newPlaylist;
-        _currentAdIndex = _currentAdIndex % newPlaylist.length;
+        _localPlaylist = eligible;
+        _currentAdIndex = _currentAdIndex % eligible.length;
         _downloadProgress = '';
       });
 
@@ -1029,6 +1074,119 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
     }
   }
 
+  Future<void> _loadFrequenciesAndTimestamps() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final freqStr = prefs.getString('ad_frequencies_map');
+      if (freqStr != null) {
+        final decoded = jsonDecode(freqStr) as Map<String, dynamic>;
+        _adFrequencies = decoded.map((k, v) => MapEntry(k, v as int));
+      }
+      final timesStr = prefs.getString('ad_last_played_times');
+      if (timesStr != null) {
+        final decoded = jsonDecode(timesStr) as Map<String, dynamic>;
+        _lastPlayedTimes = decoded.map((k, v) => MapEntry(k, v as int));
+      }
+    } catch (e) {
+      print('Error loading ad schedules: $e');
+    }
+  }
+
+  Future<void> _saveLastPlayedTimes() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('ad_last_played_times', jsonEncode(_lastPlayedTimes));
+    } catch (e) {
+      print('Error saving last played times: $e');
+    }
+  }
+
+  String _getBookingId(String path) {
+    if (path.startsWith('static__')) {
+      final parts = path.split('__');
+      if (parts.length >= 2) return parts[1];
+    } else {
+      final fileName = path.split('/').last.split('\\').last;
+      if (fileName.startsWith('ad_')) {
+        return fileName.replaceAll('ad_', '').split('.').first;
+      }
+    }
+    return '';
+  }
+
+  List<String> _getEligiblePlaylist(List<String> master) {
+    if (master.isEmpty) return [];
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final eligible = <String>[];
+    for (final path in master) {
+      final bookingId = _getBookingId(path);
+      if (bookingId.isEmpty) {
+        eligible.add(path);
+        continue;
+      }
+      final freqMin = _adFrequencies[bookingId] ?? 0;
+      if (freqMin == 0) {
+        eligible.add(path);
+        continue;
+      }
+      int bufferMin = 5;
+      if (freqMin <= 30) {
+        bufferMin = 3;
+      } else if (freqMin > 120) {
+        bufferMin = 15;
+      }
+      final cooldownMs = (freqMin - bufferMin) * 60 * 1000;
+      final lastPlayed = _lastPlayedTimes[bookingId] ?? 0;
+      if (now - lastPlayed >= cooldownMs) {
+        eligible.add(path);
+      }
+    }
+    // Fallback: if all ads are blocked by cooldowns, check if we have any continuous loop ads
+    // in the master list. If there are no continuous loop ads at all, we bypass the filter
+    // so the hourly ads loop continuously. If continuous ads do exist, we return empty/standby.
+    if (eligible.isEmpty) {
+      bool hasContinuous = false;
+      for (final path in master) {
+        final bookingId = _getBookingId(path);
+        final freqMin = _adFrequencies[bookingId] ?? 0;
+        if (freqMin == 0) {
+          hasContinuous = true;
+          break;
+        }
+      }
+      if (!hasContinuous) {
+        print('[SCHEDULER] All hourly ads on cooldown and no continuous loop ads exist. Bypassing filter.');
+        return List.from(master);
+      }
+      print('[SCHEDULER] All eligible ads on cooldown. Transitioning to standby screen.');
+      return [];
+    }
+    return eligible;
+  }
+
+  void _rebuildAndApplyPlaylist() {
+    final eligible = _getEligiblePlaylist(_masterAdPlaylist);
+    setState(() {
+      _localPlaylist = eligible;
+    });
+    if (eligible.isEmpty) {
+      // Stop playback and go to standby state
+      _stopPlaybackMonitoring();
+      _disposeActiveController();
+      _preloadedController?.dispose();
+      _preloadedController = null;
+      setState(() {
+        _playerState = PlayerState.waiting;
+        _statusMessage = 'Standby. Waiting for scheduled ad slot...';
+      });
+    } else {
+      // Re-preload the next ad in case it changed
+      _preloadedController?.dispose();
+      _preloadedController = null;
+      _preloadNextAd();
+    }
+  }
+
   // =====================================================================
   // TELEMETRY
   // =====================================================================
@@ -1042,6 +1200,12 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
       if (fileName.startsWith('ad_')) {
         bookingId = fileName.replaceAll('ad_', '').split('.').first;
       }
+    }
+
+    if (bookingId != 'unknown' && bookingId.isNotEmpty) {
+      _lastPlayedTimes[bookingId] = DateTime.now().millisecondsSinceEpoch;
+      _saveLastPlayedTimes();
+      _rebuildAndApplyPlaylist();
     }
 
     // Fire-and-forget telemetry

@@ -19,6 +19,7 @@ message MenuItem {
   string category = 5;
   bool isAvailable = 6;
   string imageUrl = 7;
+  bool isVeg = 8;
 }
 
 message GetMenuResponse {

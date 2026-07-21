@@ -130,8 +130,8 @@ export default function LandingPage() {
               transition={{ duration: 0.5 }}
               className="flex items-center space-x-2"
             >
-              <div className="w-7 h-7 rounded-lg bg-[#0069a8] flex items-center justify-center shadow-md shadow-[#0069a8]/20 shrink-0">
-                <Tv className="w-3.5 h-3.5 text-white" />
+              <div className="w-7 h-7 rounded-lg bg-[#0069a8] flex items-center justify-center shadow-md shadow-[#0069a8]/20 shrink-0 overflow-hidden p-0.5">
+                <img src="/brandicon.png" alt="DigiAds Logo" className="w-full h-full object-contain rounded-md" />
               </div>
               <span className="font-outfit text-lg font-bold tracking-tight text-foreground leading-none brandLogo">
                 Digi<span className="text-[#0069a8]">Ads</span>
@@ -552,8 +552,8 @@ export default function LandingPage() {
       <footer className="border-t border-border bg-card py-12 px-6">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-sm text-muted-foreground">
           <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-lg bg-[#0069a8] flex items-center justify-center shadow-md shadow-[#0069a8]/20">
-              <Tv className="w-4 h-4 text-white" />
+            <div className="w-8 h-8 rounded-lg bg-[#0069a8] flex items-center justify-center shadow-md shadow-[#0069a8]/20 overflow-hidden p-0.5">
+              <img src="/brandicon.png" alt="DigiAds Logo" className="w-full h-full object-contain rounded-md" />
             </div>
             <span className="font-outfit font-bold text-foreground brandLogo">DigiAds</span>
           </div>

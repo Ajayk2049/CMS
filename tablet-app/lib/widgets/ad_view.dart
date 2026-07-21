@@ -23,7 +23,12 @@ class AdViewWidget extends StatelessWidget {
     return ValueListenableBuilder<AdPlayerState>(
       valueListenable: playerState,
       builder: (context, state, _) {
-        if (state.playlist.isEmpty) return _buildWaitingView();
+        if (state.playlist.isEmpty) {
+          if (adCampaigns.isNotEmpty) {
+            return _buildStandbyView();
+          }
+          return _buildWaitingView();
+        }
 
         final isStatic = state.currentSource.startsWith('static__');
         final isTransitioning = state.isTransitioning;
@@ -34,6 +39,63 @@ class AdViewWidget extends StatelessWidget {
 
         return Container(color: Colors.black);
       },
+    );
+  }
+
+  Widget _buildStandbyView() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF1E1B4B), // Premium dark indigo
+            Color(0xFF0F0C20),
+          ],
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.1),
+                ),
+              ),
+              child: const Icon(
+                Icons.restaurant_menu_rounded,
+                size: 80,
+                color: Colors.amberAccent,
+              ),
+            ),
+            const SizedBox(height: 32),
+            const Text(
+              "WELCOME",
+              style: TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.w900,
+                color: Colors.white,
+                letterSpacing: 8,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "TAP ANYWHERE TO ORDER",
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.white.withValues(alpha: 0.6),
+                letterSpacing: 2,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -85,6 +147,13 @@ class AdViewWidget extends StatelessWidget {
         .where((path) => !path.startsWith('static__') && path.isNotEmpty)
         .toList();
 
+    final currentSource = playerState.value.currentSource;
+    int initialIndex = 0;
+    if (!currentSource.startsWith('static__') && currentSource.isNotEmpty) {
+      initialIndex = videoPaths.indexOf(currentSource);
+      if (initialIndex < 0) initialIndex = 0;
+    }
+
     return RepaintBoundary(
       child: ClipRect(
         child: OverflowBox(
@@ -104,6 +173,7 @@ class AdViewWidget extends StatelessWidget {
                   viewType: 'native_video_view',
                   creationParams: {
                     'paths': videoPaths,
+                    'initialIndex': initialIndex,
                   },
                   creationParamsCodec: const StandardMessageCodec(),
                 ),

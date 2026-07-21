@@ -119,6 +119,10 @@ class AdminController {
           }
         }
 
+        if (global.broadcastToAdmins) {
+          global.broadcastToAdmins('host_app_reviewed', { applicationId: app._id, status: app.status });
+        }
+
         return res.status(200).send({
           success: true,
           message: `Application approved. Created ${devices.length} device credentials.`,
@@ -127,6 +131,10 @@ class AdminController {
       } else {
         app.status = 'rejected';
         await app.save();
+
+        if (global.broadcastToAdmins) {
+          global.broadcastToAdmins('host_app_reviewed', { applicationId: app._id, status: app.status });
+        }
 
         return res.status(200).send({
           success: true,
@@ -205,6 +213,10 @@ class AdminController {
       }
       
       await booking.save();
+
+      if (global.broadcastToAdmins) {
+        global.broadcastToAdmins('campaign_reviewed', { bookingId: booking.bookingId, status: booking.approvalStatus });
+      }
 
       const obj = booking.toObject();
       obj.mediaUrl = resolveMediaUrl(obj.mediaUrl, req.headers.host);
@@ -481,6 +493,10 @@ class AdminController {
         report.actionTaken = actionTaken;
       }
       await report.save();
+
+      if (global.broadcastToAdmins) {
+        global.broadcastToAdmins('report_updated', { reportId: report.reportId, status: report.status });
+      }
 
       return res.status(200).send({
         success: true,
@@ -806,6 +822,124 @@ class AdminController {
     } catch (error) {
       console.error('revokeBooking Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to revoke booking: ' + error.message });
+    }
+  }
+
+  /**
+   * Get all device requests
+   */
+  async getDeviceRequests(req, res) {
+    const { status } = req.query || {};
+    const query = {};
+    if (status) {
+      query.status = status;
+    }
+
+    try {
+      const DeviceRequest = require('../models/DeviceRequest');
+      const reqs = await DeviceRequest.find(query)
+        .populate('userId', 'phone name email')
+        .populate('hostApplicationId', 'outletName city state')
+        .sort({ createdAt: -1 });
+      return res.status(200).send({ success: true, data: reqs });
+    } catch (error) {
+      console.error('admin getDeviceRequests Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch device requests' });
+    }
+  }
+
+  /**
+   * Review device request (Approve / Reject)
+   */
+  async reviewDeviceRequest(req, res) {
+    const { requestId, action } = req.body || {};
+
+    if (!requestId || !action || !['approve', 'reject'].includes(action)) {
+      return res.status(400).send({ success: false, message: 'requestId and action (approve/reject) are required' });
+    }
+
+    try {
+      const DeviceRequest = require('../models/DeviceRequest');
+      const deviceReq = await DeviceRequest.findById(requestId);
+      if (!deviceReq) {
+        return res.status(404).send({ success: false, message: 'Device request not found' });
+      }
+
+      if (deviceReq.status !== 'pending') {
+        return res.status(400).send({ success: false, message: `Request is already ${deviceReq.status}` });
+      }
+
+      if (action === 'approve') {
+        deviceReq.status = 'approved';
+        await deviceReq.save();
+
+        const devices = [];
+
+        const app = await HostApplication.findById(deviceReq.hostApplicationId);
+        if (app) {
+          if (deviceReq.requestTablet && deviceReq.tabletQuantity > 0) {
+            app.requestTablet = true;
+            app.tabletQuantity = (app.tabletQuantity || 0) + deviceReq.tabletQuantity;
+            
+            for (let i = 0; i < deviceReq.tabletQuantity; i++) {
+              const deviceId = await generateDeviceId('TAB');
+              const device = new Device({
+                deviceId,
+                deviceType: 'tablet',
+                hostApplicationId: app._id,
+                status: 'offline'
+              });
+              await device.save();
+              devices.push(device);
+            }
+          }
+
+          if (deviceReq.requestScreen && deviceReq.screenQuantity > 0) {
+            app.requestScreen = true;
+            app.screenQuantity = (app.screenQuantity || 0) + deviceReq.screenQuantity;
+            
+            for (let i = 0; i < deviceReq.screenQuantity; i++) {
+              const deviceId = await generateDeviceId('SCR');
+              const device = new Device({
+                deviceId,
+                deviceType: 'screen',
+                hostApplicationId: app._id,
+                status: 'offline'
+              });
+              await device.save();
+              devices.push(device);
+            }
+          }
+
+          await app.save();
+        }
+
+        if (global.broadcastToAdmins) {
+          global.broadcastToAdmins('device_request_reviewed', { requestId: deviceReq._id, status: deviceReq.status });
+        }
+
+        return res.status(200).send({
+          success: true,
+          message: `Request approved. Created ${devices.length} device credentials.`,
+          data: { deviceRequest: deviceReq, devices }
+        });
+      } else {
+        deviceReq.status = 'rejected';
+        await deviceReq.save();
+
+        if (global.broadcastToAdmins) {
+          global.broadcastToAdmins('device_request_reviewed', { requestId: deviceReq._id, status: deviceReq.status });
+        }
+
+        return res.status(200).send({
+          success: true,
+          message: 'Request rejected.',
+          data: deviceReq
+        });
+      }
+    } catch (error) {
+      console.error('reviewDeviceRequest Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to review device request: ' + error.message });
     }
   }
 

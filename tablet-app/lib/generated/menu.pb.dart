@@ -92,6 +92,7 @@ class MenuItem extends $pb.GeneratedMessage {
     $core.String? category,
     $core.bool? isAvailable,
     $core.String? imageUrl,
+    $core.bool? isVeg,
   }) {
     final result = create();
     if (itemId != null) result.itemId = itemId;
@@ -101,6 +102,7 @@ class MenuItem extends $pb.GeneratedMessage {
     if (category != null) result.category = category;
     if (isAvailable != null) result.isAvailable = isAvailable;
     if (imageUrl != null) result.imageUrl = imageUrl;
+    if (isVeg != null) result.isVeg = isVeg;
     return result;
   }
 
@@ -124,6 +126,7 @@ class MenuItem extends $pb.GeneratedMessage {
     ..aOS(5, _omitFieldNames ? '' : 'category')
     ..aOB(6, _omitFieldNames ? '' : 'isAvailable', protoName: 'isAvailable')
     ..aOS(7, _omitFieldNames ? '' : 'imageUrl', protoName: 'imageUrl')
+    ..aOB(8, _omitFieldNames ? '' : 'isVeg', protoName: 'isVeg')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -206,6 +209,15 @@ class MenuItem extends $pb.GeneratedMessage {
   $core.bool hasImageUrl() => $_has(6);
   @$pb.TagNumber(7)
   void clearImageUrl() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.bool get isVeg => $_getBF(7);
+  @$pb.TagNumber(8)
+  set isVeg($core.bool value) => $_setBool(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasIsVeg() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearIsVeg() => $_clearField(8);
 }
 
 class GetMenuResponse extends $pb.GeneratedMessage {

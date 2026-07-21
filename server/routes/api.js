@@ -28,12 +28,23 @@ function registerRoutes(fastify, options, done) {
     };
   });
 
+  // Strict rate limit config for sensitive public authentication endpoints (100 req/min in prod)
+  const isDevEnv = process.env.NODE_ENV === 'development' || process.env.DEMO_MODE === 'true';
+  const authRateLimitConfig = {
+    config: {
+      rateLimit: {
+        max: isDevEnv ? 500 : 100,
+        timeWindow: '1 minute'
+      }
+    }
+  };
+
   // Public Auth Routes
-  fastify.post('/auth/send-otp', authController.sendOtp);
-  fastify.post('/auth/verify-otp', authController.verifyOtp);
-  fastify.post('/auth/register', authController.register);
-  fastify.post('/auth/login', authController.login);
-  fastify.post('/auth/reset-password', authController.resetPassword);
+  fastify.post('/auth/send-otp', authRateLimitConfig, authController.sendOtp);
+  fastify.post('/auth/verify-otp', authRateLimitConfig, authController.verifyOtp);
+  fastify.post('/auth/register', authRateLimitConfig, authController.register);
+  fastify.post('/auth/login', authRateLimitConfig, authController.login);
+  fastify.post('/auth/reset-password', authRateLimitConfig, authController.resetPassword);
   fastify.post('/auth/device/activate', deviceAuthController.activateDevice);
   fastify.get('/auth/device/ads', { preHandler: authenticate }, deviceAuthController.getDeviceAds);
   fastify.post('/auth/add-role', { preHandler: authenticate }, authController.addRole);
@@ -64,6 +75,7 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.post('/host/orders/payment-received', hostController.markPaymentReceived);
     merchantRoutes.post('/host/orders/service-waiter', hostController.serviceWaiter);
     merchantRoutes.post('/host/request-more-devices', hostController.requestMoreDevices);
+    merchantRoutes.post('/host/verify-password', hostController.verifyPassword);
     next();
   });
 
@@ -112,6 +124,8 @@ function registerRoutes(fastify, options, done) {
     adminRoutes.delete('/admin/users/:userId', adminController.deleteUser);
     adminRoutes.get('/admin/reports', adminController.getReports);
     adminRoutes.patch('/admin/reports/:reportId', adminController.updateReport);
+    adminRoutes.get('/admin/device-requests', adminController.getDeviceRequests);
+    adminRoutes.post('/admin/device-requests/review', adminController.reviewDeviceRequest);
     next();
   });
 

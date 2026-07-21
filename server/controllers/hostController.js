@@ -197,6 +197,10 @@ class HostController {
 
       await application.save();
 
+      if (global.broadcastToAdmins) {
+        global.broadcastToAdmins('new_host_app', { outletName });
+      }
+
       return res.status(201).send({
         success: true,
         message: 'Host application submitted successfully. It is now pending admin approval',
@@ -795,21 +799,35 @@ class HostController {
   }
 
   /**
-   * Request more devices (screens / tabletops) for a venue
+   * Request more devices (screens and/or tabletops) for a venue
    */
   async requestMoreDevices(req, res) {
-    const { hostApplicationId, deviceType, quantity } = req.body || {};
-    if (!hostApplicationId || !deviceType || !quantity) {
-      return res.status(400).send({ success: false, message: 'hostApplicationId, deviceType, and quantity are required' });
+    const { hostApplicationId, requestTablet, tabletQuantity, requestScreen, screenQuantity } = req.body || {};
+    if (!hostApplicationId) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId is required' });
     }
 
-    const qty = parseInt(quantity, 10);
-    if (isNaN(qty) || qty < 1) {
-      return res.status(400).send({ success: false, message: 'Quantity must be a positive number' });
+    const isRequestingTablet = !!requestTablet;
+    const isRequestingScreen = !!requestScreen;
+
+    if (!isRequestingTablet && !isRequestingScreen) {
+      return res.status(400).send({ success: false, message: 'You must select at least one device type (Tablet or Screen)' });
     }
 
-    if (deviceType !== 'screen' && deviceType !== 'tabletop') {
-      return res.status(400).send({ success: false, message: 'Device type must be screen or tabletop' });
+    let parsedTabletQty = 0;
+    if (isRequestingTablet) {
+      parsedTabletQty = parseInt(tabletQuantity, 10);
+      if (isNaN(parsedTabletQty) || parsedTabletQty < 1) {
+        return res.status(400).send({ success: false, message: 'Tablet quantity must be at least 1' });
+      }
+    }
+
+    let parsedScreenQty = 0;
+    if (isRequestingScreen) {
+      parsedScreenQty = parseInt(screenQuantity, 10);
+      if (isNaN(parsedScreenQty) || parsedScreenQty < 1) {
+        return res.status(400).send({ success: false, message: 'Screen quantity must be at least 1' });
+      }
     }
 
     try {
@@ -820,15 +838,57 @@ class HostController {
       const deviceReq = new DeviceRequest({
         hostApplicationId,
         userId: req.user.uid,
-        deviceType,
-        quantity: qty
+        requestTablet: isRequestingTablet,
+        tabletQuantity: parsedTabletQty,
+        requestScreen: isRequestingScreen,
+        screenQuantity: parsedScreenQty
       });
       await deviceReq.save();
+
+      if (global.broadcastToAdmins) {
+        global.broadcastToAdmins('new_device_request', { outletName: app.outletName });
+      }
 
       return res.status(200).send({ success: true, message: 'Request submitted successfully' });
     } catch (error) {
       console.error('requestMoreDevices Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to submit device request' });
+    }
+  }
+
+  /**
+   * Verify merchant account password for security-sensitive actions (e.g. UPI payment config)
+   */
+  async verifyPassword(req, res) {
+    const { password } = req.body || {};
+    if (!password) {
+      return res.status(400).send({ success: false, message: 'Password is required' });
+    }
+
+    try {
+      const crypto = require('crypto');
+      const User = require('../models/User');
+      const user = await User.findById(req.user.uid);
+      if (!user || !user.password) {
+        return res.status(404).send({ success: false, message: 'User account not found' });
+      }
+
+      const [salt, originalHash] = user.password.split(':');
+      if (!salt || !originalHash) {
+        return res.status(400).send({ success: false, message: 'Invalid password format' });
+      }
+
+      const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
+      const isValid = crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+
+      if (!isValid) {
+        return res.status(401).send({ success: false, message: 'Incorrect account password' });
+      }
+
+      return res.status(200).send({ success: true, message: 'Password verified successfully' });
+    } catch (error) {
+      console.error('verifyPassword Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to verify password' });
     }
   }
 }

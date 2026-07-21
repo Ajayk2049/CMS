@@ -52,7 +52,7 @@ class _TabletopOrderingAppState extends State<TabletopOrderingApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Tabletop Ordering Kiosk',
+      title: 'DigiAds TableTop',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.light,
       theme: _lightTheme,

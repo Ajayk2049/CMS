@@ -92,9 +92,15 @@ class _KioskScreenState extends State<KioskScreen> {
 
   // ── Close table / payment state ──
   Map<String, dynamic>? _tableSession;
+  bool _showOrderDetailsModal = false;
 
   // ── Timers ──
   Timer? _inactivityTimer;
+
+  // ── Ad scheduling & frequency ──
+  List<String> _masterAdPlaylist = [];
+  Map<String, int> _adFrequencies = {};
+  Map<String, int> _lastPlayedTimes = {};
 
   // ── Controllers ──
   final _passwordController = TextEditingController();
@@ -129,6 +135,21 @@ class _KioskScreenState extends State<KioskScreen> {
     await _fetchMenu();
     await _bootAds();
     _initWebSocket();
+
+    // Local timer to check for ad unlocks periodically when the playlist is empty
+    Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        if (_isIdle && _adPlayer.state.value.playlist.isEmpty && _masterAdPlaylist.isNotEmpty) {
+          final eligible = _getEligiblePlaylist(_masterAdPlaylist);
+          if (eligible.isNotEmpty) {
+            debugPrint('[SCHEDULER] Ads unlocked! Resuming ad loop.');
+            _adPlayer.startLoop(eligible);
+          }
+        }
+      } else {
+        timer.cancel();
+      }
+    });
 
     if (mounted) {
       setState(() {
@@ -392,6 +413,118 @@ class _KioskScreenState extends State<KioskScreen> {
 
   // ────────────────── Ad lifecycle ──────────────────
 
+  Future<void> _loadFrequenciesAndTimestamps() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Load frequencies map
+      final freqStr = prefs.getString('ad_frequencies_map');
+      if (freqStr != null) {
+        final decoded = jsonDecode(freqStr) as Map<String, dynamic>;
+        _adFrequencies = decoded.map((k, v) => MapEntry(k, v as int));
+        debugPrint('Loaded ${_adFrequencies.length} ad frequencies from cache');
+      }
+      
+      // Load last played times map
+      final timesStr = prefs.getString('ad_last_played_times');
+      if (timesStr != null) {
+        final decoded = jsonDecode(timesStr) as Map<String, dynamic>;
+        _lastPlayedTimes = decoded.map((k, v) => MapEntry(k, v as int));
+        debugPrint('Loaded ${_lastPlayedTimes.length} last played times from cache');
+      }
+    } catch (e) {
+      debugPrint('Error loading ad schedules from cache: $e');
+    }
+  }
+
+  Future<void> _saveLastPlayedTimes() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(_lastPlayedTimes);
+      await prefs.setString('ad_last_played_times', encoded);
+    } catch (e) {
+      debugPrint('Error saving last played times: $e');
+    }
+  }
+
+  String _getBookingId(String path) {
+    if (path.startsWith('static__')) {
+      final parts = path.split('__');
+      if (parts.length >= 2) return parts[1];
+    } else {
+      final fileName = path.split('/').last.split('\\').last;
+      if (fileName.startsWith('ad_')) {
+        return fileName.replaceAll('ad_', '').split('.').first;
+      }
+    }
+    return '';
+  }
+
+  List<String> _getEligiblePlaylist(List<String> master) {
+    if (master.isEmpty) return [];
+    
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final eligible = <String>[];
+    
+    for (final path in master) {
+      final bookingId = _getBookingId(path);
+      if (bookingId.isEmpty) {
+        eligible.add(path);
+        continue;
+      }
+      
+      final freqMin = _adFrequencies[bookingId] ?? 0;
+      if (freqMin == 0) {
+        // Continuous loop
+        eligible.add(path);
+        continue;
+      }
+      
+      // Calculate buffer
+      int bufferMin = 5;
+      if (freqMin <= 30) {
+        bufferMin = 3;
+      } else if (freqMin > 120) {
+        bufferMin = 15;
+      }
+      
+      final cooldownMs = (freqMin - bufferMin) * 60 * 1000;
+      final lastPlayed = _lastPlayedTimes[bookingId] ?? 0;
+      
+      if (now - lastPlayed >= cooldownMs) {
+        eligible.add(path);
+      }
+    }
+    
+    // Fallback: if all ads are blocked by cooldowns, check if we have any continuous loop ads
+    // in the master list. If there are no continuous loop ads at all, we bypass the filter
+    // so the hourly ads loop continuously. If continuous ads do exist, we return empty/standby.
+    if (eligible.isEmpty) {
+      bool hasContinuous = false;
+      for (final path in master) {
+        final bookingId = _getBookingId(path);
+        final freqMin = _adFrequencies[bookingId] ?? 0;
+        if (freqMin == 0) {
+          hasContinuous = true;
+          break;
+        }
+      }
+      if (!hasContinuous) {
+        debugPrint('[SCHEDULER] All hourly ads on cooldown and no continuous loop ads exist. Bypassing filter.');
+        return List.from(master);
+      }
+      debugPrint('[SCHEDULER] All eligible ads on cooldown. Transitioning to standby screen.');
+      return [];
+    }
+    
+    return eligible;
+  }
+
+  void _rebuildAndApplyPlaylist() {
+    final eligible = _getEligiblePlaylist(_masterAdPlaylist);
+    _adPlayer.updatePlaylist(eligible);
+  }
+
   Future<void> _bootAds() async {
     debugPrint('[BOOT] Starting sync sequence...');
 
@@ -406,18 +539,27 @@ class _KioskScreenState extends State<KioskScreen> {
     }
 
     final cachedPlaylist = await _adSync.boot();
-    if (cachedPlaylist.isNotEmpty && _isIdle) {
-      _adPlayer.startLoop(cachedPlaylist);
+    _masterAdPlaylist = List.from(cachedPlaylist);
+    await _loadFrequenciesAndTimestamps();
+    
+    final eligible = _getEligiblePlaylist(_masterAdPlaylist);
+    if (eligible.isNotEmpty && _isIdle) {
+      _adPlayer.startLoop(eligible);
     }
   }
 
   void _onPlaylistUpdated(
-      List<String> newPlaylist, List<String> activeFileNames) {
+      List<String> newPlaylist, List<String> activeFileNames) async {
     if (!mounted) return;
-    if (_adPlayer.state.value.playlist.isEmpty && newPlaylist.isNotEmpty) {
-      if (_isIdle) _adPlayer.startLoop(newPlaylist);
+    _masterAdPlaylist = List.from(newPlaylist);
+    await _loadFrequenciesAndTimestamps();
+    
+    final eligible = _getEligiblePlaylist(_masterAdPlaylist);
+    
+    if (_adPlayer.state.value.playlist.isEmpty && eligible.isNotEmpty) {
+      if (_isIdle) _adPlayer.startLoop(eligible);
     } else {
-      _adPlayer.updatePlaylist(newPlaylist);
+      _adPlayer.updatePlaylist(eligible);
     }
     _adSync.setProtectedPaths(_adPlayer.activeFilePaths);
   }
@@ -433,6 +575,14 @@ class _KioskScreenState extends State<KioskScreen> {
         bookingId = fileName.replaceAll('ad_', '').split('.').first;
       }
     }
+    
+    // Update dynamic playback tracker
+    if (bookingId != 'unknown' && bookingId.isNotEmpty) {
+      _lastPlayedTimes[bookingId] = DateTime.now().millisecondsSinceEpoch;
+      _saveLastPlayedTimes();
+      _rebuildAndApplyPlaylist();
+    }
+    
     try {
       final req = AdImpressionRequest()
         ..deviceId = widget.deviceId
@@ -814,6 +964,9 @@ class _KioskScreenState extends State<KioskScreen> {
     return Listener(
       onPointerDown: (_) {
         if (_backOnlineVisible) _dismissBackOnlineBanner();
+        if (_showOrderDetailsModal) {
+          setState(() => _showOrderDetailsModal = false);
+        }
         _resetIdleTimer();
       },
       child: Scaffold(
@@ -839,6 +992,8 @@ class _KioskScreenState extends State<KioskScreen> {
               DownloadProgressIndicator(progress: _adSync.progress),
               // Non-blocking back-online banner (auto-dismisses in 3s, tap anywhere)
               if (_backOnlineVisible) _buildBackOnlineBanner(),
+              // Order Items List Popup Modal (No amounts, touch anywhere or OK to dismiss)
+              if (_showOrderDetailsModal) _buildOrderDetailsModal(),
             ],
           ),
         ),
@@ -1226,47 +1381,52 @@ class _KioskScreenState extends State<KioskScreen> {
                 IconData iconData;
                 switch (cat.toLowerCase()) {
                   case 'starters':
-                    iconData = Icons.local_florist_outlined;
+                    iconData = Icons.fastfood;
                     break;
                   case 'main course':
-                    iconData = Icons.dinner_dining_outlined;
+                    iconData = Icons.ramen_dining;
                     break;
                   case 'dessert':
                   case 'desserts':
-                    iconData = Icons.icecream_outlined;
+                    iconData = Icons.cookie;
                     break;
                   case 'beverages':
                   case 'drinks':
-                    iconData = Icons.local_bar_outlined;
+                    iconData = Icons.local_cafe;
                     break;
                   default:
-                    iconData = Icons.restaurant_menu_rounded;
+                    iconData = Icons.restaurant;
                 }
 
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedCategory = cat),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-                    decoration: BoxDecoration(
-                      color: isSelected ? kAccentBlue : kCardBg,
-                      borderRadius: kCardBorderRadius,
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Colors.black12,
-                          blurRadius: 4,
-                          offset: Offset(0, 2),
-                        )
-                      ],
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(iconData, color: isSelected ? Colors.white : kTextDark, size: 26),
-                        const SizedBox(height: 8),
-                        Text(cat,
+                return Material(
+                  color: isSelected ? kAccentBlue : kCardBg,
+                  borderRadius: kCardBorderRadius,
+                  elevation: isSelected ? 3 : 1,
+                  shadowColor: Colors.black.withOpacity(0.1),
+                  child: InkWell(
+                    borderRadius: kCardBorderRadius,
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _selectedCategory = cat);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(iconData, color: isSelected ? Colors.white : kTextDark, size: 26),
+                          const SizedBox(height: 8),
+                          Text(
+                            cat,
                             textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isSelected ? Colors.white : kTextDark)),
-                      ],
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: isSelected ? Colors.white : kTextDark,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 );
@@ -1454,7 +1614,7 @@ class _KioskScreenState extends State<KioskScreen> {
 
         switch (orderStatus.toLowerCase()) {
           case 'placed':
-            iconData = Icons.pending_actions_rounded;
+            iconData = Icons.watch_later_outlined;
             iconColor = Colors.amber.shade600;
             statusTitle = 'Order Placed';
             statusSubtitle = 'Waiting for kitchen confirmation…';
@@ -1466,7 +1626,7 @@ class _KioskScreenState extends State<KioskScreen> {
             statusSubtitle = 'Preparing your food shortly…';
             break;
           case 'cooking':
-            iconData = Icons.soup_kitchen_rounded;
+            iconData = Icons.soup_kitchen;
             iconColor = Colors.blue.shade600;
             statusTitle = 'Preparing & Cooking';
             statusSubtitle = 'Chefs are working on your food!';
@@ -1494,78 +1654,281 @@ class _KioskScreenState extends State<KioskScreen> {
           bottom: 24,
           left: 144,
           right: 24,
-          child: Container(
-            height: 76,
-            decoration: BoxDecoration(
-              color: kAccentBlue,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
               borderRadius: kFloatingCartBorderRadius,
-              border: Border.all(color: const Color(0xFF1E1B4B), width: 3.0),
-              boxShadow: const [
-                BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4)),
-              ],
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                setState(() => _showOrderDetailsModal = true);
+              },
+              child: Container(
+                height: 76,
+                decoration: BoxDecoration(
+                  color: kAccentBlue,
+                  borderRadius: kFloatingCartBorderRadius,
+                  border: Border.all(color: const Color(0xFF1E1B4B), width: 3.0),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4)),
+                  ],
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Container(
-                      decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
-                      padding: const EdgeInsets.all(10),
-                      child: Icon(iconData, color: Colors.white, size: 22),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.2), shape: BoxShape.circle),
+                            padding: const EdgeInsets.all(10),
+                            child: Icon(iconData, color: Colors.white, size: 22),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  statusTitle,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                    color: Colors.white,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  statusSubtitle,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.white.withValues(alpha: 0.85),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(width: 16),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    const SizedBox(width: 12),
+                    Row(
                       children: [
-                        Text(
-                          statusTitle,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                            color: Colors.white,
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                'Total: ₹$amountFormatted',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 15,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Text(
+                                'ID: ${orderId.length > 4 ? "${orderId.substring(0, 4)}..." : orderId}',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  color: Colors.white.withValues(alpha: 0.75),
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        Text(
-                          statusSubtitle,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.white.withValues(alpha: 0.85),
-                          ),
-                        ),
+                        const Icon(Icons.chevron_right_rounded, color: Colors.white, size: 22),
                       ],
                     ),
                   ],
                 ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'Total: ₹$amountFormatted',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w900,
-                        fontSize: 15,
-                        color: Colors.white,
-                      ),
-                    ),
-                    Text(
-                      'ID: $orderId',
-                      style: TextStyle(
-                        fontSize: 9,
-                        color: Colors.white.withValues(alpha: 0.75),
-                        fontFamily: 'monospace',
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+              ),
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildOrderDetailsModal() {
+    if (!_showOrderDetailsModal || _tableSession == null) {
+      return const SizedBox.shrink();
+    }
+
+    final rawItems = _tableSession!['items'] as List<dynamic>? ?? [];
+    final orderId = _tableSession!['orderId'] as String? ?? '';
+    final orderStatus = _tableSession!['orderStatus'] as String? ?? 'placed';
+
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          setState(() => _showOrderDetailsModal = false);
+        },
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.65),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.all(24),
+          child: GestureDetector(
+            onTap: () {
+              setState(() => _showOrderDetailsModal = false);
+            },
+            child: Material(
+              color: kCardBg,
+              borderRadius: kCardBorderRadius,
+              elevation: 12,
+              clipBehavior: Clip.hardEdge,
+              child: Container(
+                width: 480,
+                constraints: const BoxConstraints(maxHeight: 500),
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Header
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: kAccentBlue.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(Icons.restaurant_menu_rounded, color: kAccentBlue, size: 22),
+                            ),
+                            const SizedBox(width: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  "Ordered Food Items",
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: kTextDark),
+                                ),
+                                Text(
+                                  "Status: ${orderStatus.toUpperCase()} • ID: $orderId",
+                                  style: const TextStyle(fontSize: 11, color: kTextGrey, fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, color: kTextGrey),
+                          onPressed: () => setState(() => _showOrderDetailsModal = false),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Divider(height: 1, color: Colors.black12),
+                    const SizedBox(height: 16),
+
+                    // Food Items List (NO PRICES / NO AMOUNTS SHOWN)
+                    Flexible(
+                      child: rawItems.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 24),
+                              child: Center(
+                                child: Text("No items found in active order.", style: TextStyle(color: kTextGrey)),
+                              ),
+                            )
+                          : ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: rawItems.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final item = rawItems[index];
+                                final name = item['name'] as String? ?? 'Item';
+                                final qty = item['quantity'] as int? ?? 1;
+
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    color: kScaffoldBg,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          name,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                            color: kTextDark,
+                                          ),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                                        decoration: BoxDecoration(
+                                          color: kAccentBlue.withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: Text(
+                                          "x $qty",
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w900,
+                                            fontSize: 13,
+                                            color: kAccentBlue,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // OK Button at Bottom
+                    SizedBox(
+                      height: 46,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: kAccentBlue,
+                          foregroundColor: Colors.white,
+                          elevation: 2,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        onPressed: () {
+                          HapticFeedback.selectionClick();
+                          setState(() => _showOrderDetailsModal = false);
+                        },
+                        child: const Text(
+                          "OK",
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 15,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

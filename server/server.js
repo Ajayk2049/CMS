@@ -29,6 +29,7 @@ const HostApplication = require('./models/HostApplication');
 const merchantSockets = new Map();
 global.merchantSockets = merchantSockets;
 global.deviceSockets = new Map();
+global.adminSockets = new Map();
 
 // ----------------------------------------------------
 // Fastify Setup (REST & WebSocket)
@@ -65,9 +66,10 @@ async function startFastify() {
     done();
   });
 
-  // Global IP rate limiting (150 requests per minute per IP)
+  // Global IP rate limiting (500 requests per minute per IP, increased to 2000 in dev/demo mode)
+  const isDev = config.env === 'development' || config.demoMode;
   await fastify.register(rateLimit, {
-    max: 150,
+    max: isDev ? 2000 : 500,
     timeWindow: '1 minute',
     exclusionRules: (req) => {
       // Exclude websockets and static uploads from rate limiting to prevent playback/sync cuts
@@ -78,6 +80,7 @@ async function startFastify() {
       message: 'Too many requests, please try again later.'
     })
   });
+
 
   // WebSocket routes for Merchant & Device
   fastify.register(async function (fastifyInstance) {
@@ -162,7 +165,62 @@ async function startFastify() {
         }
       }
     });
+    fastifyInstance.get('/ws/admin', { websocket: true }, (connection, req) => {
+      const token = req.query.token;
+      const socket = connection.socket || connection;
+      if (!token) {
+        socket.send(JSON.stringify({ error: 'Authentication token is required' }));
+        socket.close();
+        return;
+      }
+
+      try {
+        const decoded = jwt.verify(token, config.jwtSecret);
+        if (decoded.role !== 'admin') {
+          socket.send(JSON.stringify({ error: 'Access denied: Admin role required' }));
+          socket.close();
+          return;
+        }
+
+        const adminId = decoded.uid || 'admin_session_' + Math.random().toString(36).substring(2, 7);
+        global.adminSockets.set(adminId, socket);
+        console.log(`[WS] Admin connected: ${adminId}`);
+
+        socket.send(JSON.stringify({ event: 'connected', message: 'Connected to Admin Live Feed' }));
+
+        socket.on('close', () => {
+          global.adminSockets.delete(adminId);
+          console.log(`[WS] Admin disconnected: ${adminId}`);
+        });
+
+      } catch (err) {
+        console.error('[WS] Admin connection error:', err);
+        if (socket) {
+          try {
+            socket.send(JSON.stringify({ error: 'Invalid authentication token' }));
+            socket.close();
+          } catch (wsErr) {
+            console.error('[WS] Failed to close admin socket:', wsErr);
+          }
+        }
+      }
+    });
   });
+
+  // Helper to broadcast event to all active admin websocket clients
+  global.broadcastToAdmins = (event, data = {}) => {
+    if (!global.adminSockets || global.adminSockets.size === 0) return;
+    const payload = JSON.stringify({ event, data });
+    console.log(`[WS] Broadcasting ${event} to ${global.adminSockets.size} admin(s)`);
+    for (const [adminId, socket] of global.adminSockets.entries()) {
+      try {
+        socket.send(payload);
+      } catch (err) {
+        console.error(`[WS] Failed to send broadcast to admin ${adminId}:`, err.message);
+        global.adminSockets.delete(adminId);
+      }
+    }
+  };
 
   // Register raw buffer parser for videos and images
   fastify.addContentTypeParser(
@@ -245,6 +303,7 @@ async function startFastify() {
   // Run boot-time cleanup of orphaned temporary upload files
   (() => {
     try {
+      const fs = require('fs');
       const os = require('os');
       const tempDir = os.tmpdir();
       const files = fs.readdirSync(tempDir);
@@ -497,7 +556,12 @@ const deviceServiceHandlers = {
           tableNumber: activeOrder.tableNumber,
           waiterCallStatus: activeOrder.waiterCallStatus || 'none',
           waiterCallCount: activeOrder.waiterCallCount || 0,
-          waiterCallOption: activeOrder.waiterCallOption || ''
+          waiterCallOption: activeOrder.waiterCallOption || '',
+          items: (activeOrder.items || []).map(i => ({
+            name: i.name,
+            quantity: i.quantity,
+            price: i.price
+          }))
         };
 
         if (activeOrder.tableStatus === 'close_table' && activeOrder.items && activeOrder.items.length > 0) {
@@ -619,7 +683,8 @@ const menuServiceHandlers = {
         price: parseInt(item.price, 10),
         category: item.category,
         isAvailable: item.isAvailable,
-        imageUrl: item.imageUrl || ''
+        imageUrl: item.imageUrl || '',
+        isVeg: item.isVeg !== undefined ? item.isVeg : true
       })) : [];
 
       callback(null, {
@@ -822,9 +887,17 @@ async function main() {
 // localtunnel helper
 const localtunnel = require("localtunnel");
 
+let tunnelInstance = null;
+
 async function startLocalTunnel() {
   try {
+    if (tunnelInstance) {
+      try {
+        tunnelInstance.close();
+      } catch (e) {}
+    }
     const tunnel = await localtunnel({ port: config.port || 4200 });
+    tunnelInstance = tunnel;
     const publicCallbackUrl = `${tunnel.url}/api/v1/payments/callback`;
 
     // Dynamically override the callback URL in config
@@ -834,12 +907,21 @@ async function startLocalTunnel() {
     console.log(`\x1b[32m[localtunnel] PhonePe Callback URL set to: ${publicCallbackUrl}\x1b[0m`);
 
     tunnel.on('close', () => {
-      console.log('[localtunnel] Tunnel closed. Reverting callback to .env value.');
+      console.log('[localtunnel] Tunnel closed. Attempting reconnect in 10s...');
       config.phonePe.callbackUrl = process.env.PHONEPE_CALLBACK_URL;
+      setTimeout(startLocalTunnel, 10000);
+    });
+
+    tunnel.on('error', (err) => {
+      console.error('[localtunnel] Tunnel socket error:', err.message);
+      try {
+        tunnel.close();
+      } catch (e) {}
     });
   } catch (err) {
     console.error('[localtunnel] Failed to start tunnel:', err.message);
     console.warn('[localtunnel] Falling back to .env callback URL:', config.phonePe.callbackUrl);
+    setTimeout(startLocalTunnel, 10000);
   }
 }
 

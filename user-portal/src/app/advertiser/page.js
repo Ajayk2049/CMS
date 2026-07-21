@@ -95,6 +95,37 @@ export default function AdvertiserDashboard() {
   const [quantity, setQuantity] = useState('1');
   const [adDurationDays, setAdDurationDays] = useState(7);
   const [frequency, setFrequency] = useState('hourly');
+
+  const getFrequencyLabel = (freq) => {
+    if (!freq) return 'Unknown';
+    const f = freq.toLowerCase();
+    if (f === 'continuous') return 'Continuous Loop';
+    if (f === 'hourly') return 'Once Every Hour';
+    if (f === 'every_15_mins') return 'Once Every 15 Mins';
+    if (f === 'every_30_mins') return 'Once Every 30 Mins';
+    if (f === 'every_2_hours') return 'Once Every 2 Hours';
+    const numMatch = f.match(/\d+/);
+    if (numMatch) {
+      return `Once Every ${numMatch[0]} Mins`;
+    }
+    return freq;
+  };
+
+  const getAvailableFrequencies = () => {
+    const deviceRates = rates.filter((r) => r.deviceType === selectedDeviceType);
+    const uniqFrequencies = Array.from(new Set(deviceRates.map((r) => r.frequency)));
+    if (uniqFrequencies.length === 0) {
+      return ['continuous', 'hourly'];
+    }
+    return uniqFrequencies;
+  };
+
+  useEffect(() => {
+    const avail = getAvailableFrequencies();
+    if (avail.length > 0 && !avail.includes(frequency)) {
+      setFrequency(avail[0]);
+    }
+  }, [selectedDeviceType, rates]);
   const [computedAmount, setComputedAmount] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [rateTab, setRateTab] = useState('tablet');
@@ -484,8 +515,8 @@ export default function AdvertiserDashboard() {
       {/* Top Header Navbar - Universal styled shadcn preset */}
       <header className="border-b border-border/40 bg-card px-5 sm:px-6 py-3.5 flex items-center justify-between shadow-sm sticky top-0 z-30">
         <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
-            <Tv className="w-5 h-5 text-white" />
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-900 to-blue-600 flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0 overflow-hidden p-1">
+            <img src="/brandicon.png" alt="DigiAds Logo" className="w-full h-full object-contain rounded-lg" />
           </div>
           <span className="font-outfit text-md font-bold text-foreground brandLogo">Advertiser Portal</span>
         </div>
@@ -691,7 +722,7 @@ export default function AdvertiserDashboard() {
                             <td className="py-4 pr-4">
                               <div className="flex items-center space-x-1.5 font-semibold text-foreground">
                                 <Calendar className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                                <span>{booking.adDurationDays} Days / {booking.frequency}</span>
+                                <span>{booking.adDurationDays} Days / {getFrequencyLabel(booking.frequency)}</span>
                               </div>
                             </td>
                             <td className="py-4 pr-4">
@@ -890,7 +921,7 @@ export default function AdvertiserDashboard() {
                             </div>
                           </td>
                           <td className="py-3 pr-2 font-semibold capitalize text-foreground">
-                            {rate.frequency}
+                            {getFrequencyLabel(rate.frequency)}
                           </td>
                           <td className="py-3 font-extrabold text-foreground text-right">
                             ₹{rate.amount / 100}
@@ -1055,8 +1086,11 @@ export default function AdvertiserDashboard() {
                       onChange={(e) => setFrequency(e.target.value)}
                       className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
                     >
-                      <option value="hourly">Once Every Hour</option>
-                      <option value="continuous">Continuous Loop</option>
+                      {getAvailableFrequencies().map((freq) => (
+                        <option key={freq} value={freq}>
+                          {getFrequencyLabel(freq)}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>

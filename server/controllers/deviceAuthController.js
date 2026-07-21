@@ -128,9 +128,33 @@ class DeviceAuthController {
 
       const ads = activeBookings.map(b => {
         const absoluteUrl = resolveMediaUrl(b.mediaUrl, req.headers.host);
+        let frequencyMinutes = 0; // Default 0 means continuous loop
+        const freq = (b.frequency || '').toLowerCase().trim();
+        if (freq === 'continuous') {
+          frequencyMinutes = 0;
+        } else if (freq === 'hourly' || freq === '1_per_hour' || freq === 'once_hourly') {
+          frequencyMinutes = 60;
+        } else {
+          const parsed = parseInt(freq, 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            frequencyMinutes = parsed;
+          } else {
+            const match = freq.match(/(\d+)\s*(?:min|minute|hr|hour)/);
+            if (match) {
+              const val = parseInt(match[1], 10);
+              if (freq.includes('hr') || freq.includes('hour')) {
+                frequencyMinutes = val * 60;
+              } else {
+                frequencyMinutes = val;
+              }
+            }
+          }
+        }
+
         return {
           bookingId: b.bookingId,
           mediaUrl: absoluteUrl,
+          frequencyMinutes: frequencyMinutes,
           durationSeconds: 15,
           title: `Campaign ${b.bookingId}`,
           mediaType: (absoluteUrl.endsWith('.mp4') || absoluteUrl.endsWith('.webm')) ? 'video' : 'static'
