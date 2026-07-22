@@ -61,6 +61,7 @@ function registerRoutes(fastify, options, done) {
 
     merchantRoutes.post('/host/apply', hostController.applyForHost);
     merchantRoutes.get('/host/applications', hostController.getMyApplications);
+    merchantRoutes.put('/host/applications/:applicationId', hostController.updateApplication);
     merchantRoutes.get('/host/menu', hostController.getMenu);
     merchantRoutes.post('/host/menu', hostController.updateMenu);
     merchantRoutes.post('/host/menu/upload-image', { bodyLimit: 5242880 }, hostController.uploadImage);
@@ -92,6 +93,7 @@ function registerRoutes(fastify, options, done) {
     advertiserRoutes.get('/ads/bookings', adController.getMyBookings);
     advertiserRoutes.post('/ads/verify-payment/:bookingId', adController.verifyPayment);
     advertiserRoutes.post('/ads/upload', { bodyLimit: 104857600 }, adController.uploadVideo);
+    advertiserRoutes.post('/ads/upload-image', { bodyLimit: 10485760 }, adController.uploadImage);
     next();
   });
 

@@ -230,25 +230,76 @@ async function startFastify() {
     }
   );
 
-  // Serve uploaded files statically
-  fastify.get('/uploads/*', (req, res) => {
-    const fs = require('fs');
-    const path = require('path');
-    const subpath = req.params['*'];
-    const filePath = path.join(__dirname, 'uploads', subpath);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).send({ error: 'File not found' });
-    }
-    const ext = path.extname(subpath).toLowerCase();
-    let contentType = 'application/octet-stream';
-    if (ext === '.mp4') contentType = 'video/mp4';
-    else if (ext === '.webm') contentType = 'video/webm';
-    else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
-    else if (ext === '.png') contentType = 'image/png';
-    else if (ext === '.webp') contentType = 'image/webp';
+  // Serve uploaded files statically with CORS, Content-Length, and Range support
+  fastify.route({
+    method: ['GET', 'HEAD', 'OPTIONS'],
+    url: '/uploads/*',
+    handler: (req, res) => {
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+      res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.header('Cross-Origin-Embedder-Policy', 'unsafe-none');
 
-    res.header('Content-Type', contentType);
-    return res.send(fs.createReadStream(filePath));
+      if (req.method === 'OPTIONS') {
+        return res.status(204).send();
+      }
+
+      const fs = require('fs');
+      const path = require('path');
+      const rawSubpath = req.params['*'] || '';
+      
+      // Alias 'creative/' or 'media/' to 'ads/' so ad-blocker extensions don't block preview requests containing '/ads/'
+      let subpath = rawSubpath;
+      if (rawSubpath.startsWith('creative/')) {
+        subpath = rawSubpath.replace(/^creative\//, 'ads/');
+      } else if (rawSubpath.startsWith('media/')) {
+        subpath = rawSubpath.replace(/^media\//, 'ads/');
+      }
+
+      let filePath = path.join(__dirname, 'uploads', subpath);
+      if (!fs.existsSync(filePath)) {
+        filePath = path.join(__dirname, 'uploads', rawSubpath);
+      }
+
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).send({ error: 'File not found' });
+      }
+
+      const stat = fs.statSync(filePath);
+      const ext = path.extname(subpath).toLowerCase();
+      let contentType = 'application/octet-stream';
+      if (ext === '.mp4') contentType = 'video/mp4';
+      else if (ext === '.webm') contentType = 'video/webm';
+      else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+      else if (ext === '.png') contentType = 'image/png';
+      else if (ext === '.webp') contentType = 'image/webp';
+      else if (ext === '.gif') contentType = 'image/gif';
+      else if (ext === '.svg') contentType = 'image/svg+xml';
+
+      res.header('Content-Type', contentType);
+      res.header('Accept-Ranges', 'bytes');
+
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+        const chunksize = (end - start) + 1;
+        const fileStream = fs.createReadStream(filePath, { start, end });
+        res.status(206);
+        res.header('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+        res.header('Content-Length', chunksize);
+        return res.send(fileStream);
+      }
+
+      res.header('Content-Length', stat.size);
+      if (req.method === 'HEAD') {
+        return res.status(200).send();
+      }
+
+      return res.send(fs.createReadStream(filePath));
+    }
   });
 
   // REST API Routes

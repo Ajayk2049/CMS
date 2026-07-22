@@ -448,9 +448,9 @@ class _KioskScreenState extends State<KioskScreen> {
   }
 
   String _getBookingId(String path) {
-    if (path.startsWith('static__')) {
+    if (path.startsWith('static__') || path.startsWith('img__')) {
       final parts = path.split('__');
-      if (parts.length >= 2) return parts[1];
+      if (parts.length >= 2) return parts[1].split('_').first;
     } else {
       final fileName = path.split('/').last.split('\\').last;
       if (fileName.startsWith('ad_')) {
@@ -493,6 +493,9 @@ class _KioskScreenState extends State<KioskScreen> {
       
       if (now - lastPlayed >= cooldownMs) {
         eligible.add(path);
+      } else {
+        final remainingMins = ((cooldownMs - (now - lastPlayed)) / (60 * 1000)).toStringAsFixed(1);
+        debugPrint('[SCHEDULER] Ad $bookingId is on cooldown for $remainingMins more mins.');
       }
     }
     
@@ -566,9 +569,9 @@ class _KioskScreenState extends State<KioskScreen> {
 
   void _trackAdImpression(String adSource) async {
     String bookingId = 'unknown';
-    if (adSource.startsWith('static__')) {
+    if (adSource.startsWith('static__') || adSource.startsWith('img__')) {
       final parts = adSource.split('__');
-      if (parts.length >= 2) bookingId = parts[1];
+      if (parts.length >= 2) bookingId = parts[1].split('_').first;
     } else {
       final fileName = adSource.split('/').last.split('\\').last;
       if (fileName.startsWith('ad_')) {
@@ -1171,23 +1174,57 @@ class _KioskScreenState extends State<KioskScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 _showCart
-                    ? Text(
-                        "$_outletName (Table $_tableNumber)".toUpperCase(),
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                          color: kAccentBlue,
-                          letterSpacing: 1.5,
+                    ? Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: "${_outletName.toUpperCase()} ",
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w900,
+                                color: kAccentBlue,
+                                letterSpacing: 1.5,
+                              ),
+                            ),
+                            TextSpan(
+                              text: "(Table $_tableNumber)",
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.normal,
+                                color: kTextGrey,
+                              ),
+                            ),
+                          ],
                         ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       )
-                    : Text(
-                        "$_outletName  •  Table $_tableNumber",
-                        style: const TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.w800,
-                          color: kTextDark,
-                          letterSpacing: 0.5,
+                    : Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: _outletName,
+                              style: const TextStyle(
+                                fontSize: 26,
+                                fontWeight: FontWeight.w800,
+                                color: kTextDark,
+                                letterSpacing: 0.5,
+                                height: 1.15,
+                              ),
+                            ),
+                            TextSpan(
+                              text: "   •   Table $_tableNumber",
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.normal,
+                                color: kTextGrey,
+                                height: 1.15,
+                              ),
+                            ),
+                          ],
                         ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
                 if (_showCart) ...[
                   const SizedBox(height: 2),
@@ -1203,6 +1240,7 @@ class _KioskScreenState extends State<KioskScreen> {
               ],
             ),
           ),
+          const SizedBox(width: 16),
           ElevatedButton.icon(
             onPressed: _showCallWaiterDialog,
             icon: const Icon(Icons.room_service_rounded, color: Colors.white, size: 20),

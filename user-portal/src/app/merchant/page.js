@@ -39,9 +39,28 @@ const API_BASE = config.apiUrl;
 
 const resolveMediaUrl = (url) => {
   if (!url) return '';
-  if (url.startsWith('http')) return url;
+  if (url.startsWith('data:')) return url;
   const base = API_BASE.split('/api/v1')[0];
-  return `${base}${url}`;
+  let subpath = url;
+  if (url.includes('/uploads/')) {
+    subpath = `/uploads/${url.split('/uploads/')[1]}`;
+  } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    subpath = url.startsWith('/') ? url : `/${url}`;
+  } else {
+    try {
+      const parsed = new URL(url);
+      subpath = parsed.pathname;
+    } catch (e) {
+      subpath = url;
+    }
+  }
+  if (subpath.includes('/uploads/ads/')) {
+    subpath = subpath.replace('/uploads/ads/', '/uploads/creative/');
+  }
+  if (subpath.startsWith('http://') || subpath.startsWith('https://')) {
+    return subpath;
+  }
+  return `${base}${subpath}`;
 };
 
 const INDIAN_STATES = [
@@ -159,6 +178,23 @@ export default function MerchantDashboard() {
   const [roleActionLoading, setRoleActionLoading] = useState(false);
   const [showBecomeAdvertiserModal, setShowBecomeAdvertiserModal] = useState(false);
   const [showGetMoreDevicesModal, setShowGetMoreDevicesModal] = useState(false);
+  const [showEditApplicationModal, setShowEditApplicationModal] = useState(false);
+  const [editingApplicationId, setEditingApplicationId] = useState('');
+  const [editAppForm, setEditAppForm] = useState({
+    outletName: '',
+    outletDescription: '',
+    doorNo: '',
+    street: '',
+    city: '',
+    state: '',
+    zipCode: '',
+    contactPerson: '',
+    phone: '',
+    email: ''
+  });
+  const [editAppZipError, setEditAppZipError] = useState('');
+  const [editAppLoading, setEditAppLoading] = useState(false);
+  const [editAppError, setEditAppError] = useState('');
   const [reqRequestTablet, setReqRequestTablet] = useState(false);
   const [reqTabletQuantity, setReqTabletQuantity] = useState('1');
   const [reqRequestScreen, setReqRequestScreen] = useState(false);
@@ -1323,6 +1359,110 @@ export default function MerchantDashboard() {
     return JSON.stringify(currentMenu) !== originalMenuRef.current;
   };
 
+  const openEditApplicationModal = (targetApp) => {
+    const appToEdit = targetApp || applications[0];
+    if (!appToEdit) return;
+    setEditingApplicationId(appToEdit._id);
+    setEditAppForm({
+      outletName: appToEdit.outletName || '',
+      outletDescription: appToEdit.outletDescription || '',
+      doorNo: appToEdit.doorNo || '',
+      street: appToEdit.street || '',
+      city: appToEdit.city || '',
+      state: appToEdit.state || '',
+      zipCode: appToEdit.zipCode || '',
+      contactPerson: appToEdit.contactPerson || '',
+      phone: appToEdit.phone || '',
+      email: appToEdit.email || ''
+    });
+    setEditAppZipError('');
+    setEditAppError('');
+    setShowEditApplicationModal(true);
+  };
+
+  const handleEditAppPhoneChange = (val) => {
+    const cleaned = val.replace(/\D/g, '');
+    if (cleaned.length > 10) return;
+    if (cleaned.length > 0 && !/^[6-9]/.test(cleaned)) return;
+    setEditAppForm(prev => ({ ...prev, phone: cleaned }));
+  };
+
+  const handleEditAppZipCodeChange = async (val) => {
+    const cleaned = val.replace(/\D/g, '');
+    if (cleaned.length > 6) return;
+    setEditAppForm(prev => ({ ...prev, zipCode: cleaned }));
+
+    if (cleaned.length < 6) {
+      setEditAppZipError('');
+    }
+
+    if (cleaned.length === 6) {
+      try {
+        const response = await axios.get(`https://api.postalpincode.in/pincode/${cleaned}`);
+        if (response && response.data && response.data[0]) {
+          const status = response.data[0].Status;
+          if (status === 'Success') {
+            const postOffices = response.data[0].PostOffice;
+            if (postOffices && postOffices.length > 0) {
+              const { State, District } = postOffices[0];
+              const matchedState = normalizeAndMatchState(State);
+
+              setEditAppForm(prev => ({
+                ...prev,
+                state: matchedState,
+                city: District || prev.city
+              }));
+              setEditAppZipError('');
+            } else {
+              setEditAppZipError('Wrong pincode');
+            }
+          } else {
+            setEditAppZipError('Wrong pincode');
+          }
+        } else {
+          setEditAppZipError('Wrong pincode');
+        }
+      } catch (err) {
+        console.error('Failed to auto-populate location details from pincode:', err);
+        setEditAppZipError('Wrong pincode');
+      }
+    }
+  };
+
+  const handleSaveEditedApplication = async (e) => {
+    e.preventDefault();
+    setEditAppError('');
+
+    if (editAppForm.phone.length !== 10) {
+      setEditAppError('Mobile number must be exactly 10 digits');
+      return;
+    }
+
+    if (editAppForm.zipCode.length !== 6) {
+      setEditAppError('ZIP code must be exactly 6 digits');
+      return;
+    }
+
+    if (editAppZipError) {
+      setEditAppError('Please resolve the wrong pincode error before saving');
+      return;
+    }
+
+    setEditAppLoading(true);
+    try {
+      await axios.put(`${API_BASE}/host/applications/${editingApplicationId}`, editAppForm, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      showToast('Application details updated successfully!', 'success');
+      setShowEditApplicationModal(false);
+      fetchApplications(token);
+    } catch (err) {
+      setEditAppError(err.response?.data?.message || 'Failed to update application details.');
+    } finally {
+      setEditAppLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground font-sans flex flex-col transition-all duration-300">
 
@@ -1462,6 +1602,17 @@ export default function MerchantDashboard() {
 
                 {applications.length > 0 && (
                   <div className="p-1.5 space-y-1 border-b border-border/40">
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        openEditApplicationModal(applications[0]);
+                      }}
+                      className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                    >
+                      <Pencil className="w-4 h-4 text-amber-500" />
+                      <span>Edit Venue Details</span>
+                    </button>
+
                     <button
                       onClick={() => {
                         setUserMenuOpen(false);
@@ -1756,15 +1907,24 @@ export default function MerchantDashboard() {
                           <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Venue / Outlet</span>
                           <h4 className="font-bold text-foreground text-sm tracking-wide mt-0.5">{app.outletName}</h4>
                         </div>
-                        <span className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-full flex items-center ${app.status === 'approved'
-                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                          : app.status === 'rejected'
-                            ? 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20'
-                            : 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20'
-                          }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${app.status === 'approved' ? 'bg-emerald-500' : app.status === 'rejected' ? 'bg-red-500' : 'bg-orange-500'}`} />
-                          {app.status}
-                        </span>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => openEditApplicationModal(app)}
+                            className="p-1.5 rounded-lg bg-card hover:bg-muted border border-border/40 text-muted-foreground hover:text-foreground transition-all cursor-pointer"
+                            title="Edit Application Details"
+                          >
+                            <Pencil className="w-3.5 h-3.5 text-amber-500" />
+                          </button>
+                          <span className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-full flex items-center ${app.status === 'approved'
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                            : app.status === 'rejected'
+                              ? 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20'
+                              : 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20'
+                            }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${app.status === 'approved' ? 'bg-emerald-500' : app.status === 'rejected' ? 'bg-red-500' : 'bg-orange-500'}`} />
+                            {app.status}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="space-y-3 text-xs">
@@ -1972,7 +2132,7 @@ export default function MerchantDashboard() {
                     <Plus className="w-4 h-4" />
                     <span>Add Item</span>
                   </button>
-                   <button
+                  <button
                     onClick={handleSaveMenu}
                     disabled={!hasMenuChanges()}
                     className="bg-primary hover:bg-primary/95 disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none text-primary-foreground font-bold text-xs px-6 py-2.5 rounded-xl transition-all shadow-md cursor-pointer glow-hover"
@@ -2029,7 +2189,7 @@ export default function MerchantDashboard() {
                                       e.stopPropagation();
                                       openEditModal(item, originalIndex);
                                     }}
-                                    className="p-1.5 bg-black hover:bg-muted border border-border/40 rounded-lg text-foreground transition-all cursor-pointer shadow-sm"
+                                    className="p-1.5 bg-white dark:bg-black hover:bg-muted border border-border/40 rounded-lg text-foreground transition-all cursor-pointer shadow-sm"
                                   >
                                     <Pencil className="w-4 h-4" />
                                   </button>
@@ -3285,6 +3445,187 @@ export default function MerchantDashboard() {
                   type="button"
                   onClick={() => setShowGetMoreDevicesModal(false)}
                   disabled={reqDeviceLoading}
+                  className="px-5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Host Application Details Modal */}
+      {showEditApplicationModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in overflow-y-auto">
+          <div className="w-full max-w-xl bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative space-y-5 my-8">
+            <div className="flex items-center justify-between border-b border-border/40 pb-4">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/20 shrink-0">
+                  <Pencil className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-outfit text-md font-bold tracking-tight">Edit Venue & Application Details</h3>
+                  <p className="text-[11px] text-muted-foreground font-semibold">Update contact person, mobile number, address or outlet details.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowEditApplicationModal(false)}
+                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditedApplication} className="space-y-4 text-xs font-semibold text-foreground">
+              {editAppError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl">
+                  {editAppError}
+                </div>
+              )}
+
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">Outlet Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Outlet Name"
+                    value={editAppForm.outletName}
+                    onChange={(e) => setEditAppForm({ ...editAppForm, outletName: e.target.value })}
+                    className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">Contact Person Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Contact Person Name"
+                    value={editAppForm.contactPerson}
+                    onChange={(e) => setEditAppForm({ ...editAppForm, contactPerson: e.target.value })}
+                    className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">Outlet Description</label>
+                <textarea
+                  required
+                  placeholder="Outlet Description"
+                  value={editAppForm.outletDescription}
+                  onChange={(e) => setEditAppForm({ ...editAppForm, outletDescription: e.target.value })}
+                  className="w-full h-20 bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                />
+              </div>
+
+              <div className="grid md:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">Door / Shop No</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Door / Shop No"
+                    value={editAppForm.doorNo}
+                    onChange={(e) => setEditAppForm({ ...editAppForm, doorNo: e.target.value })}
+                    className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">Street / Location</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Street / Location"
+                    value={editAppForm.street}
+                    onChange={(e) => setEditAppForm({ ...editAppForm, street: e.target.value })}
+                    className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">ZIP Code</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="ZIP Code"
+                    value={editAppForm.zipCode}
+                    onChange={(e) => handleEditAppZipCodeChange(e.target.value)}
+                    className={`w-full bg-background border ${editAppZipError ? 'border-destructive focus:ring-destructive' : 'border-input focus:ring-primary'} rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 transition-all`}
+                  />
+                  {editAppZipError && (
+                    <p className="text-[10px] text-destructive font-semibold mt-1.5 ml-1">{editAppZipError}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">City</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="City"
+                    value={editAppForm.city}
+                    onChange={(e) => setEditAppForm({ ...editAppForm, city: e.target.value })}
+                    className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">State</label>
+                  <select
+                    required
+                    value={editAppForm.state}
+                    onChange={(e) => setEditAppForm({ ...editAppForm, state: e.target.value })}
+                    className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all cursor-pointer"
+                  >
+                    <option value="" disabled>Select State</option>
+                    {INDIAN_STATES.map((state) => (
+                      <option key={state} value={state} className="bg-background text-foreground">
+                        {state}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">Mobile Number</label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="Phone Number"
+                    value={editAppForm.phone}
+                    onChange={(e) => handleEditAppPhoneChange(e.target.value)}
+                    className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider block mb-1">Email Address</label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="Email Address"
+                    value={editAppForm.email}
+                    onChange={(e) => setEditAppForm({ ...editAppForm, email: e.target.value })}
+                    className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="flex space-x-3 pt-4 border-t border-border/40">
+                <button
+                  type="submit"
+                  disabled={editAppLoading}
+                  className="flex-1 bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3 rounded-xl transition-all text-xs cursor-pointer shadow-lg flex items-center justify-center space-x-2"
+                >
+                  <span>{editAppLoading ? 'Saving Changes...' : 'Save Changes'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEditApplicationModal(false)}
+                  disabled={editAppLoading}
                   className="px-5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
                 >
                   Cancel

@@ -156,12 +156,19 @@ class AdSyncService {
       for (final path in cached) {
         if (path.startsWith('static__')) {
           validFiles.add(path);
+        } else if (path.startsWith('img__')) {
+          final parts = path.split('__');
+          final filePath = parts.length > 2 ? parts[2] : '';
+          final file = File(filePath);
+          if (await file.exists() && (await file.length()) >= kMinValidFileSize) {
+            validFiles.add(path);
+          }
         } else {
           final file = File(path);
           final exists = await file.exists();
           if (exists) {
             final length = await file.length();
-            if (length > kMinValidFileSize) {
+            if (length >= kMinValidFileSize) {
               validFiles.add(path);
             }
           }
@@ -225,20 +232,33 @@ class AdSyncService {
         final List<String> newLocalPaths = [];
         final List<String> activeFileNames = [];
 
-        // First pass: identify which files need downloading
+        // First pass: identify which files need downloading (both videos and images)
         final List<Map<String, dynamic>> filesToDownload = [];
         for (final ad in serverAds) {
-          final mediaUrl = ad['mediaUrl'] as String? ?? '';
           final bookingId = ad['bookingId'] as String? ?? 'unknown';
+          final List rawMediaUrls = ad['mediaUrls'] is List ? ad['mediaUrls'] : [];
+          if (rawMediaUrls.isEmpty && ad['mediaUrl'] != null) {
+            rawMediaUrls.add(ad['mediaUrl']);
+          }
 
-          if (mediaUrl.isNotEmpty &&
-              (mediaUrl.endsWith('.mp4') || mediaUrl.endsWith('.webm'))) {
-            final absoluteUrl = mediaUrl.startsWith('http')
-                ? mediaUrl
-                : 'http://$serverHost:4200$mediaUrl';
+          for (int imgIdx = 0; imgIdx < rawMediaUrls.length; imgIdx++) {
+            final mediaUrl = rawMediaUrls[imgIdx] as String? ?? '';
+            if (mediaUrl.isEmpty) continue;
 
+            String absoluteUrl;
+            if (mediaUrl.contains('/uploads/')) {
+              final sub = mediaUrl.split('/uploads/')[1];
+              absoluteUrl = 'http://$serverHost:4200/uploads/$sub';
+            } else if (mediaUrl.startsWith('http')) {
+              absoluteUrl = mediaUrl;
+            } else {
+              final cleanPath = mediaUrl.startsWith('/') ? mediaUrl : '/$mediaUrl';
+              absoluteUrl = 'http://$serverHost:4200$cleanPath';
+            }
+
+            final isVideo = mediaUrl.endsWith('.mp4') || mediaUrl.endsWith('.webm');
             final fileExt = mediaUrl.split('.').last;
-            final fileName = 'ad_$bookingId.$fileExt';
+            final fileName = isVideo ? 'ad_$bookingId.$fileExt' : 'img_${bookingId}_$imgIdx.$fileExt';
             final localFile = File('$adsDirectory/$fileName');
             activeFileNames.add(fileName);
 
@@ -256,11 +276,13 @@ class AdSyncService {
                 'name': fileName,
               });
             }
-            newLocalPaths.add(localFile.path);
-          } else {
-            newLocalPaths.add(
-              'static__${ad['bookingId']}__${ad['title'] ?? ''}__${ad['subtitle'] ?? ad['description'] ?? ''}',
-            );
+
+            if (isVideo) {
+              newLocalPaths.add(localFile.path);
+            } else {
+              // Format static image path entry
+              newLocalPaths.add('img__${bookingId}_${imgIdx}__${localFile.path}');
+            }
           }
         }
 
@@ -344,7 +366,7 @@ class AdSyncService {
       if (freshPlaylist != null) {
         final List<String> activeFileNames = [];
         for (final path in freshPlaylist) {
-          if (!path.startsWith('static__')) {
+          if (!path.startsWith('static__') && !path.startsWith('img__')) {
             activeFileNames.add(path.split('/').last.split('\\').last);
           }
         }

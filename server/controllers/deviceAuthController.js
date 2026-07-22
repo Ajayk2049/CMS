@@ -7,14 +7,13 @@ const { deviceActivationSchema } = require('../utils/zodSchemas');
 
 const resolveMediaUrl = (mediaUrl, host) => {
   if (!mediaUrl) return '';
-  if (mediaUrl.startsWith('http')) {
-    if (mediaUrl.includes('localhost:') || mediaUrl.includes('127.0.0.1:')) {
-      const parts = mediaUrl.split('/uploads/');
-      return `http://${host}/uploads/${parts[1]}`;
-    }
-    return mediaUrl;
+  if (mediaUrl.includes('/uploads/')) {
+    const parts = mediaUrl.split('/uploads/');
+    return `http://${host}/uploads/${parts[1]}`;
   }
-  return `http://${host}${mediaUrl}`;
+  if (mediaUrl.startsWith('http')) return mediaUrl;
+  const cleanUrl = mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`;
+  return `http://${host}${cleanUrl}`;
 };
 
 // Helper to hash passwords using pbkdf2 (same as authController.js)
@@ -127,37 +126,37 @@ class DeviceAuthController {
       });
 
       const ads = activeBookings.map(b => {
-        const absoluteUrl = resolveMediaUrl(b.mediaUrl, req.headers.host);
         let frequencyMinutes = 0; // Default 0 means continuous loop
         const freq = (b.frequency || '').toLowerCase().trim();
-        if (freq === 'continuous') {
+        if (freq.includes('continuous') || freq === '0') {
           frequencyMinutes = 0;
-        } else if (freq === 'hourly' || freq === '1_per_hour' || freq === 'once_hourly') {
+        } else if (freq.includes('hourly') || freq === '1_per_hour' || freq === 'once_hourly') {
           frequencyMinutes = 60;
         } else {
-          const parsed = parseInt(freq, 10);
-          if (!isNaN(parsed) && parsed > 0) {
-            frequencyMinutes = parsed;
-          } else {
-            const match = freq.match(/(\d+)\s*(?:min|minute|hr|hour)/);
-            if (match) {
-              const val = parseInt(match[1], 10);
-              if (freq.includes('hr') || freq.includes('hour')) {
-                frequencyMinutes = val * 60;
-              } else {
-                frequencyMinutes = val;
-              }
+          const match = freq.match(/(\d+)\s*(?:min|minute|hr|hour)/);
+          if (match) {
+            const val = parseInt(match[1], 10);
+            if (freq.includes('hr') || freq.includes('hour')) {
+              frequencyMinutes = val * 60;
+            } else {
+              frequencyMinutes = val;
             }
           }
         }
 
+        const rawUrls = (b.mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean);
+        const resolvedUrls = rawUrls.map(u => resolveMediaUrl(u, req.headers.host));
+        const firstUrl = resolvedUrls[0] || '';
+        const isVideo = firstUrl.endsWith('.mp4') || firstUrl.endsWith('.webm');
+
         return {
           bookingId: b.bookingId,
-          mediaUrl: absoluteUrl,
+          mediaUrl: firstUrl,
+          mediaUrls: resolvedUrls,
           frequencyMinutes: frequencyMinutes,
-          durationSeconds: 15,
+          durationSeconds: isVideo ? 15 : 6,
           title: `Campaign ${b.bookingId}`,
-          mediaType: (absoluteUrl.endsWith('.mp4') || absoluteUrl.endsWith('.webm')) ? 'video' : 'static'
+          mediaType: isVideo ? 'video' : 'static'
         };
       });
 

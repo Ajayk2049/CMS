@@ -13,14 +13,17 @@ const { v4: uuidv4 } = require('uuid');
 
 const resolveMediaUrl = (mediaUrl, host) => {
   if (!mediaUrl) return '';
-  if (mediaUrl.startsWith('http')) {
-    if (mediaUrl.includes('localhost:') || mediaUrl.includes('127.0.0.1:')) {
-      const parts = mediaUrl.split('/uploads/');
+  const urls = mediaUrl.split(',').map(s => s.trim()).filter(Boolean);
+  const resolved = urls.map(url => {
+    if (url.includes('/uploads/')) {
+      const parts = url.split('/uploads/');
       return `http://${host}/uploads/${parts[1]}`;
     }
-    return mediaUrl;
-  }
-  return `http://${host}${mediaUrl}`;
+    if (url.startsWith('http')) return url;
+    const cleanUrl = url.startsWith('/') ? url : `/${url}`;
+    return `http://${host}${cleanUrl}`;
+  });
+  return resolved.join(',');
 };
 
 function verifyPassword(password, storedPassword) {

@@ -7,11 +7,13 @@ class AdPlayerState {
   final String currentSource;
   final List<String> playlist;
   final bool isTransitioning;
+  final String transitionType; // 'same_campaign_top' or 'new_campaign_left'
 
   const AdPlayerState({
     this.currentSource = '',
     this.playlist = const [],
     this.isTransitioning = false,
+    this.transitionType = 'new_campaign_left',
   });
 }
 
@@ -29,6 +31,7 @@ class AdPlayerService {
 
   List<String> _playlist = [];
   int _currentIndex = 0;
+  String _previousSource = '';
   Timer? _staticTimer;
   bool _isPaused = false;
   bool _disposed = false;
@@ -36,7 +39,7 @@ class AdPlayerService {
   List<String> get activeFilePaths {
     if (_playlist.isEmpty) return [];
     final path = _currentSource;
-    if (path.startsWith('static__')) return [];
+    if (path.startsWith('static__') || path.startsWith('img__')) return [];
     return [path];
   }
 
@@ -101,11 +104,11 @@ class AdPlayerService {
 
   void _sendPlaylistToNative() {
     final videoPaths = _playlist
-        .where((path) => !path.startsWith('static__') && path.isNotEmpty)
+        .where((path) => !path.startsWith('static__') && !path.startsWith('img__') && path.isNotEmpty)
         .toList();
     final currentSource = _currentSource;
     int nativeIndex = 0;
-    if (!currentSource.startsWith('static__') && currentSource.isNotEmpty) {
+    if (!currentSource.startsWith('static__') && !currentSource.startsWith('img__') && currentSource.isNotEmpty) {
       nativeIndex = videoPaths.indexOf(currentSource);
       if (nativeIndex < 0) nativeIndex = 0;
     }
@@ -124,7 +127,7 @@ class AdPlayerService {
       return;
     }
 
-    if (source.startsWith('static__')) {
+    if (source.startsWith('static__') || source.startsWith('img__')) {
       _staticTimer?.cancel();
       _channel.invokeMethod('pause');
       _emitState();
@@ -143,6 +146,7 @@ class AdPlayerService {
 
   void _advance() {
     if (_disposed || _playlist.isEmpty || _isPaused) return;
+    _previousSource = _currentSource;
     _currentIndex = (_currentIndex + 1) % _playlist.length;
     _playCurrent();
   }
@@ -169,12 +173,33 @@ class AdPlayerService {
     }
   }
 
+  String _extractCampaignId(String src) {
+    if (src.isEmpty) return '';
+    final filename = src.split('/').last.split('\\').last;
+    if (filename.startsWith('img_')) {
+      final parts = filename.split('_');
+      if (parts.length >= 3) return '${parts[1]}_${parts[2]}';
+    }
+    if (filename.startsWith('ad_')) {
+      return filename.replaceAll('ad_', '').split('.').first;
+    }
+    return filename;
+  }
+
   void _emitState() {
     if (_disposed) return;
+    final prevCamp = _extractCampaignId(_previousSource);
+    final currCamp = _extractCampaignId(_currentSource);
+
+    final transitionType = (prevCamp.isNotEmpty && currCamp.isNotEmpty && prevCamp == currCamp)
+        ? 'same_campaign_top'
+        : 'new_campaign_left';
+
     state.value = AdPlayerState(
       currentSource: _currentSource,
       playlist: List.unmodifiable(_playlist),
       isTransitioning: false,
+      transitionType: transitionType,
     );
   }
 }

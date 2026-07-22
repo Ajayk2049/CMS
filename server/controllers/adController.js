@@ -9,14 +9,13 @@ const { v4: uuidv4 } = require('uuid');
 
 const resolveMediaUrl = (mediaUrl, host) => {
   if (!mediaUrl) return '';
-  if (mediaUrl.startsWith('http')) {
-    if (mediaUrl.includes('localhost:') || mediaUrl.includes('127.0.0.1:')) {
-      const parts = mediaUrl.split('/uploads/');
-      return `http://${host}/uploads/${parts[1]}`;
-    }
-    return mediaUrl;
+  if (mediaUrl.includes('/uploads/')) {
+    const parts = mediaUrl.split('/uploads/');
+    return `http://${host}/uploads/${parts[1]}`;
   }
-  return `http://${host}${mediaUrl}`;
+  if (mediaUrl.startsWith('http')) return mediaUrl;
+  const cleanUrl = mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`;
+  return `http://${host}${cleanUrl}`;
 };
 
 const deleteMediaFile = (mediaUrl) => {
@@ -697,6 +696,106 @@ class AdController {
       }
 
       return res.status(500).send({ success: false, message: 'Failed to upload and transcode video: ' + error.message });
+    }
+  }
+
+  /**
+   * Upload image raw binary payload, optimize via sharp and save to disk
+   */
+  async uploadImage(req, res) {
+    const fs = require('fs');
+    const path = require('path');
+    const sharp = require('sharp');
+    const { v4: uuidv4 } = require('uuid');
+    const MediaLog = require('../models/MediaLog');
+
+    const filenameHeader = req.headers['x-filename'] || req.headers['X-Filename'] || 'image.png';
+    const ext = path.extname(filenameHeader).toLowerCase();
+
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+      return res.status(400).send({ success: false, message: 'Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.' });
+    }
+
+    const deviceType = req.query.deviceType;
+    if (!deviceType || !['tablet', 'screen'].includes(deviceType)) {
+      return res.status(400).send({
+        success: false,
+        message: 'deviceType query parameter is required and must be "tablet" or "screen"'
+      });
+    }
+
+    // Resolution map: tablet = 800x1280 (vertical), screen = 1920x1080 (horizontal)
+    const dimensionsMap = {
+      tablet: { width: 800, height: 1280 },
+      screen: { width: 1920, height: 1080 }
+    };
+    const targetDim = dimensionsMap[deviceType];
+
+    let mediaLog;
+    try {
+      mediaLog = new MediaLog({
+        originalFilename: filenameHeader,
+        status: 'processing'
+      });
+      await mediaLog.save();
+    } catch (dbErr) {
+      console.error('Failed to create MediaLog:', dbErr.message);
+      return res.status(500).send({ success: false, message: 'Failed to initialize upload tracking' });
+    }
+
+    const uniqueFilename = `img_${uuidv4().replace(/-/g, '').slice(0, 16)}.webp`;
+    const uploadsDir = path.join(__dirname, '..', 'uploads', 'ads', 'images', deviceType);
+
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const filePath = path.join(uploadsDir, uniqueFilename);
+
+    let imageBuffer = req.body;
+    if (imageBuffer && typeof imageBuffer.pipe === 'function') {
+      const chunks = [];
+      for await (const chunk of imageBuffer) {
+        chunks.push(chunk);
+      }
+      imageBuffer = Buffer.concat(chunks);
+    }
+
+    try {
+      await sharp(imageBuffer)
+        .resize(targetDim.width, targetDim.height, {
+          fit: 'inside',
+          withoutEnlargement: false
+        })
+        .webp({ quality: 85 })
+        .toFile(filePath);
+
+      mediaLog.status = 'completed';
+      mediaLog.finalizedFilename = uniqueFilename;
+      mediaLog.outputPath = filePath;
+      await mediaLog.save();
+
+      const fileUrl = `/uploads/ads/images/${deviceType}/${uniqueFilename}`;
+
+      return res.status(200).send({
+        success: true,
+        message: 'Image uploaded and optimized successfully',
+        data: {
+          filename: uniqueFilename,
+          url: fileUrl
+        }
+      });
+    } catch (error) {
+      console.error('uploadImage Sharp Error:', error.message);
+      if (mediaLog) {
+        mediaLog.status = 'failed';
+        mediaLog.errorMessage = error.message;
+        await mediaLog.save();
+      }
+      return res.status(500).send({
+        success: false,
+        message: `Image optimization failed: ${error.message}`
+      });
     }
   }
 

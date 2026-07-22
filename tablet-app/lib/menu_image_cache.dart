@@ -53,8 +53,13 @@ class MenuImageCache {
   /// Build the absolute http URL for a server-relative imageUrl.
   String _resolveUrl(String imageUrl) {
     if (imageUrl.isEmpty) return '';
+    if (imageUrl.contains('/uploads/')) {
+      final sub = imageUrl.split('/uploads/')[1];
+      return 'http://$serverHost:$httpPort/uploads/$sub';
+    }
     if (imageUrl.startsWith('http')) return imageUrl;
-    return 'http://$serverHost:$httpPort$imageUrl';
+    final cleanPath = imageUrl.startsWith('/') ? imageUrl : '/$imageUrl';
+    return 'http://$serverHost:$httpPort$cleanPath';
   }
 
   /// Local on-disk file for a given item, or null if not yet cached.

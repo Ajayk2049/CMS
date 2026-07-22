@@ -40,9 +40,28 @@ const API_BASE = config.apiUrl;
 
 const resolveMediaUrl = (url) => {
   if (!url) return '';
-  if (url.startsWith('http')) return url;
+  if (url.startsWith('data:')) return url;
   const base = API_BASE.split('/api/v1')[0];
-  return `${base}${url}`;
+  let subpath = url;
+  if (url.includes('/uploads/')) {
+    subpath = `/uploads/${url.split('/uploads/')[1]}`;
+  } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    subpath = url.startsWith('/') ? url : `/${url}`;
+  } else {
+    try {
+      const parsed = new URL(url);
+      subpath = parsed.pathname;
+    } catch (e) {
+      subpath = url;
+    }
+  }
+  if (subpath.includes('/uploads/ads/')) {
+    subpath = subpath.replace('/uploads/ads/', '/uploads/creative/');
+  }
+  if (subpath.startsWith('http://') || subpath.startsWith('https://')) {
+    return subpath;
+  }
+  return `${base}${subpath}`;
 };
 
 export default function AdvertiserDashboard() {
@@ -129,6 +148,8 @@ export default function AdvertiserDashboard() {
   const [computedAmount, setComputedAmount] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [rateTab, setRateTab] = useState('tablet');
+  const [mediaTypeTab, setMediaTypeTab] = useState('videos'); // 'videos' or 'images'
+  const [uploadedImages, setUploadedImages] = useState([]); // array of up to 2 image URLs
   const [uploadProgress, setUploadProgress] = useState(0);
 
   // Bookings list
@@ -363,6 +384,78 @@ export default function AdvertiserDashboard() {
     }
   };
 
+  // Upload image raw binary payload and save to local disk via sharp
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!selectedDeviceType) {
+      showToast('error', 'Please select a Display Type (Tablet or Screen) before uploading.');
+      return;
+    }
+
+    if (uploadedImages.length >= 2) {
+      showToast('error', 'You can upload a maximum of 2 images per campaign.');
+      return;
+    }
+
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+      showToast('error', 'Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.');
+      return;
+    }
+
+    let contentType = file.type || 'application/octet-stream';
+    if (!file.type || file.type === '') {
+      if (ext === '.png') contentType = 'image/png';
+      else if (ext === '.webp') contentType = 'image/webp';
+      else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+    }
+
+    setUploading(true);
+    setUploadProgress(0);
+
+    try {
+      const response = await axios.post(`${API_BASE}/ads/upload-image${selectedDeviceType ? '?deviceType=' + selectedDeviceType : ''}`, file, {
+        headers: {
+          'Content-Type': contentType,
+          'X-Filename': file.name,
+          'Authorization': `Bearer ${token}`
+        },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadProgress(percentCompleted);
+        }
+      });
+
+      if (response.data.success && response.data.data.url) {
+        const serverUrl = response.data.data.url;
+        // Create instant local object URL for preview fallback
+        const localPreviewUrl = URL.createObjectURL(file);
+        const newImageItems = [...uploadedImages, { serverUrl, previewUrl: localPreviewUrl }];
+        setUploadedImages(newImageItems);
+        setMediaUrl(newImageItems.map(item => typeof item === 'string' ? item : item.serverUrl).join(','));
+        showToast('success', `Image ${newImageItems.length}/2 uploaded & optimized successfully!`);
+      } else {
+        showToast('error', response.data.message || 'Image upload failed.');
+      }
+    } catch (err) {
+      showToast('error', err.response?.data?.message || 'Failed to upload image file.');
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+      if (e && e.target) {
+        e.target.value = '';
+      }
+    }
+  };
+
+  const removeUploadedImage = (index) => {
+    const newImages = uploadedImages.filter((_, i) => i !== index);
+    setUploadedImages(newImages);
+    setMediaUrl(newImages.map(item => typeof item === 'string' ? item : item.serverUrl).join(','));
+  };
+
   // Dynamic pricing calculation
   useEffect(() => {
     if (!selectedOutlet) {
@@ -397,9 +490,16 @@ export default function AdvertiserDashboard() {
       return;
     }
 
-    if (!mediaUrl || !mediaUrl.trim()) {
-      showToast('error', 'Please upload a video file or provide a video URL before proceeding.');
-      return;
+    if (mediaTypeTab === 'images') {
+      if (uploadedImages.length === 0 && (!mediaUrl || !mediaUrl.trim())) {
+        showToast('error', 'Please upload at least 1 image (max 2) or paste an image URL before proceeding.');
+        return;
+      }
+    } else {
+      if (!mediaUrl || !mediaUrl.trim()) {
+        showToast('error', 'Please upload a video file or provide a video URL before proceeding.');
+        return;
+      }
     }
 
     const bookingQty = parseInt(quantity, 10);
@@ -1095,86 +1195,214 @@ export default function AdvertiserDashboard() {
                   </div>
                 </div>
 
-                {/* Right Column: Video Upload, URL input, and Aspect-Ratio Preview (col-span-7) */}
+                {/* Right Column: Tabbed Media File Asset Upload (col-span-7) */}
                 <div className="md:col-span-7 space-y-4">
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Media File Asset</label>
+                    {/* Tab Selector: Videos vs Images */}
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Media Creative Type</label>
+                      <div className="flex bg-muted p-1 rounded-xl border border-border/40 text-[10px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMediaTypeTab('videos');
+                            setMediaUrl('');
+                            setUploadedImages([]);
+                          }}
+                          className={`px-3 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${mediaTypeTab === 'videos'
+                            ? 'bg-background text-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                          <Video className="w-3 h-3 text-blue-500" />
+                          <span>Videos</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMediaTypeTab('images');
+                            setMediaUrl('');
+                            setUploadedImages([]);
+                          }}
+                          className={`px-3 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${mediaTypeTab === 'images'
+                            ? 'bg-background text-foreground shadow-sm'
+                            : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                          <Upload className="w-3 h-3 text-amber-500" />
+                          <span>Images</span>
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="space-y-3">
-                      {/* Compact upload box */}
                       {!selectedDeviceType ? (
-                        <div className="flex flex-col items-center justify-center border border-dashed border-border/40 rounded-xl py-4 opacity-50 cursor-not-allowed text-center bg-card/5">
+                        <div className="flex flex-col items-center justify-center border border-dashed border-border/40 rounded-xl py-6 opacity-50 cursor-not-allowed text-center bg-card/5">
                           <Upload className="w-4 h-4 text-muted-foreground mb-1" />
-                          <span className="text-[10px] font-bold text-foreground">Select Display Type first to upload</span>
+                          <span className="text-[10px] font-bold text-foreground">Select Target Display Type first to upload media</span>
                         </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <label className="flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-4 cursor-pointer transition-all text-center bg-card/5">
-                            <Upload className="w-4 h-4 text-muted-foreground mb-1" />
-                            <span className="text-[10px] font-bold text-foreground">
-                              {uploading ? (
-                                uploadProgress < 100
-                                  ? `Uploading (${uploadProgress}%)...`
-                                  : 'Processing Video...'
-                              ) : (
-                                'Upload Video File (.mp4, .webm)'
-                              )}
-                            </span>
-                            <input
-                              type="file"
-                              accept="video/mp4,video/webm"
-                              onChange={handleFileUpload}
-                              disabled={uploading}
-                              className="hidden"
-                            />
-                          </label>
-                          {uploading && (
-                            <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
-                              <div
-                                className={`h-1.5 rounded-full transition-all duration-300 ${uploadProgress === 100
-                                  ? 'bg-primary animate-pulse w-full'
-                                  : 'bg-primary'
-                                  }`}
-                                style={{ width: uploadProgress === 100 ? '100%' : `${uploadProgress}%` }}
+                      ) : mediaTypeTab === 'videos' ? (
+                        /* VIDEO UPLOADER ROUTINE */
+                        <div className="space-y-3">
+                          <div className="space-y-2">
+                            <label className="flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-4 cursor-pointer transition-all text-center bg-card/5">
+                              <Video className="w-5 h-5 text-blue-500 mb-1" />
+                              <span className="text-[10px] font-bold text-foreground">
+                                {uploading ? (
+                                  uploadProgress < 100
+                                    ? `Uploading (${uploadProgress}%)...`
+                                    : 'Processing Video...'
+                                ) : (
+                                  'Upload Video File (.mp4, .webm)'
+                                )}
+                              </span>
+                              <input
+                                type="file"
+                                accept="video/mp4,video/webm"
+                                onChange={handleFileUpload}
+                                disabled={uploading}
+                                className="hidden"
                               />
+                            </label>
+                            {uploading && (
+                              <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className={`h-1.5 rounded-full transition-all duration-300 ${uploadProgress === 100
+                                    ? 'bg-primary animate-pulse w-full'
+                                    : 'bg-primary'
+                                    }`}
+                                  style={{ width: uploadProgress === 100 ? '100%' : `${uploadProgress}%` }}
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          <input
+                            type="text"
+                            placeholder="Or, paste video URL"
+                            value={mediaUrl}
+                            onChange={(e) => setMediaUrl(e.target.value)}
+                            className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                          />
+
+                          {mediaUrl && (
+                            <div className="space-y-1.5 animate-fade-in pt-1">
+                              <div className="flex items-center justify-between">
+                                <p className="text-[9px] font-bold text-muted-foreground uppercase">Video Aspect-Ratio Preview</p>
+                                <button
+                                  type="button"
+                                  onClick={() => setMediaUrl('')}
+                                  className="text-[9px] font-bold text-destructive hover:underline cursor-pointer flex items-center space-x-1"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  <span>Remove Video</span>
+                                </button>
+                              </div>
+                              <div className={`mx-auto w-full max-w-[200px] rounded-xl border border-border/40 bg-black overflow-hidden relative shadow-md ${selectedDeviceType === 'tablet'
+                                ? 'aspect-[3/4]'
+                                : 'aspect-[16/9]'
+                                }`}>
+                                <video
+                                  src={resolveMediaUrl(mediaUrl)}
+                                  controls
+                                  className="w-full h-full object-contain"
+                                />
+                              </div>
+                              <p className="text-[8px] text-primary font-semibold truncate text-center mt-1">{mediaUrl}</p>
                             </div>
                           )}
                         </div>
-                      )}
+                      ) : (
+                        /* IMAGE UPLOADER ROUTINE (UP TO 2 IMAGES) */
+                        <div className="space-y-3">
+                          {uploadedImages.length < 2 && (
+                            <div className="space-y-2">
+                              <label className="flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-4 cursor-pointer transition-all text-center bg-card/5">
+                                <Upload className="w-5 h-5 text-amber-500 mb-1" />
+                                <span className="text-[10px] font-bold text-foreground">
+                                  {uploading ? (
+                                    uploadProgress < 100
+                                      ? `Uploading (${uploadProgress}%)...`
+                                      : 'Optimizing Image via Sharp...'
+                                  ) : (
+                                    `Upload Image File ${uploadedImages.length + 1}/2 (.png, .jpg, .webp)`
+                                  )}
+                                </span>
+                                <input
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/jpg,image/webp"
+                                  onChange={handleImageUpload}
+                                  disabled={uploading}
+                                  className="hidden"
+                                />
+                              </label>
+                              {uploading && (
+                                <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                                  <div
+                                    className={`h-1.5 rounded-full transition-all duration-300 ${uploadProgress === 100
+                                      ? 'bg-amber-500 animate-pulse w-full'
+                                      : 'bg-amber-500'
+                                      }`}
+                                    style={{ width: uploadProgress === 100 ? '100%' : `${uploadProgress}%` }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
 
-                      {/* URL input */}
-                      <input
-                        type="text"
-                        placeholder="Or, paste video URL"
-                        value={mediaUrl}
-                        onChange={(e) => setMediaUrl(e.target.value)}
-                        className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                      />
+                          <input
+                            type="text"
+                            placeholder="Or, paste image URL"
+                            value={uploadedImages.length === 0 ? mediaUrl : ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setMediaUrl(val);
+                              if (val) setUploadedImages([val]);
+                              else setUploadedImages([]);
+                            }}
+                            className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
+                          />
 
-                      {/* Video preview with device responsive aspect ratio */}
-                      {mediaUrl && (
-                        <div className="space-y-1.5 animate-fade-in">
-                          <div className="flex items-center justify-between">
-                            <p className="text-[9px] font-bold text-muted-foreground uppercase">Aspect-Ratio Preview</p>
-                            <button
-                              type="button"
-                              onClick={() => setMediaUrl('')}
-                              className="text-[9px] font-bold text-destructive hover:underline cursor-pointer flex items-center space-x-1"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                              <span>Remove Video</span>
-                            </button>
-                          </div>
-                          <div className={`mx-auto w-full max-w-[200px] rounded-xl border border-border/40 bg-black overflow-hidden relative shadow-md ${selectedDeviceType === 'tablet'
-                            ? 'aspect-[3/4]'
-                            : 'aspect-[16/9]'
-                            }`}>
-                            <video
-                              src={resolveMediaUrl(mediaUrl)}
-                              controls
-                              className="w-full h-full object-contain"
-                            />
-                          </div>
-                          <p className="text-[8px] text-primary font-semibold truncate text-center mt-1">{mediaUrl}</p>
+                          {/* Image Cards Preview Grid */}
+                          {uploadedImages.length > 0 && (
+                            <div className="space-y-2 animate-fade-in pt-1">
+                              <p className="text-[9px] font-bold text-muted-foreground uppercase">Image Asset Previews ({uploadedImages.length}/2)</p>
+                              <div className="grid grid-cols-2 gap-3">
+                                {uploadedImages.map((imgItem, idx) => {
+                                  const imgSrc = typeof imgItem === 'string'
+                                    ? resolveMediaUrl(imgItem)
+                                    : (imgItem.previewUrl || resolveMediaUrl(imgItem.serverUrl));
+                                  return (
+                                    <div key={idx} className="relative group border border-border/40 rounded-xl overflow-hidden bg-muted/20 p-2 space-y-2">
+                                      <div className={`w-full rounded-lg bg-black overflow-hidden relative shadow-sm ${selectedDeviceType === 'tablet'
+                                        ? 'aspect-[3/4]'
+                                        : 'aspect-[16/9]'
+                                        }`}>
+                                        <img
+                                          src={imgSrc}
+                                          alt={`Creative ${idx + 1}`}
+                                          className="w-full h-full object-contain"
+                                        />
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[9px] font-bold text-foreground">
+                                          {idx === 0 ? 'Front (Image 1)' : 'Back (Image 2)'}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => removeUploadedImage(idx)}
+                                          className="p-1 text-destructive hover:bg-destructive/10 rounded transition-colors cursor-pointer"
+                                          title="Remove Image"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

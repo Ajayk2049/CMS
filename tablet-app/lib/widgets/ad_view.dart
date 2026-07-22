@@ -1,6 +1,7 @@
 /// Ad view widget — native Android platform view integration for 60fps.
 library;
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../ad_player_service.dart';
@@ -30,15 +31,72 @@ class AdViewWidget extends StatelessWidget {
           return _buildWaitingView();
         }
 
-        final isStatic = state.currentSource.startsWith('static__');
+        final source = state.currentSource;
+        final isImgFile = source.startsWith('img__');
+        final isStatic = source.startsWith('static__');
         final isTransitioning = state.isTransitioning;
-        final hasVideo = !isStatic && !isTransitioning && state.currentSource.isNotEmpty;
+        final hasVideo = !isImgFile && !isStatic && !isTransitioning && source.isNotEmpty;
 
-        if (hasVideo) return _buildVideoView(state.currentSource);
-        if (isStatic) return _buildStaticAdCard(state.currentSource);
+        if (hasVideo) return _buildVideoView(source);
 
-        return Container(color: Colors.black);
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 600),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            final isTopTransition = state.transitionType == 'same_campaign_top';
+            final beginOffset = isTopTransition ? const Offset(0.0, -0.4) : const Offset(-0.4, 0.0);
+
+            final slideAnimation = Tween<Offset>(
+              begin: beginOffset,
+              end: Offset.zero,
+            ).animate(animation);
+
+            final fadeAnimation = Tween<double>(
+              begin: 0.0,
+              end: 1.0,
+            ).animate(animation);
+
+            return SlideTransition(
+              position: slideAnimation,
+              child: FadeTransition(
+                opacity: fadeAnimation,
+                child: child,
+              ),
+            );
+          },
+          child: KeyedSubtree(
+            key: ValueKey(source),
+            child: isImgFile
+                ? _buildImageAdCard(source)
+                : _buildStaticAdCard(source),
+          ),
+        );
       },
+    );
+  }
+
+  Widget _buildImageAdCard(String adSource) {
+    // Format: img__<bookingId>_<imgIdx>__<localFilePath>
+    final parts = adSource.split('__');
+    final filePath = parts.length > 2 ? parts[2] : '';
+    final imgFile = File(filePath);
+
+    return Container(
+      color: Colors.black,
+      width: double.infinity,
+      height: double.infinity,
+      child: imgFile.existsSync()
+          ? Image.file(
+              imgFile,
+              fit: BoxFit.cover,
+              width: double.infinity,
+              height: double.infinity,
+              errorBuilder: (context, error, stackTrace) {
+                return _buildStaticAdCard(adSource);
+              },
+            )
+          : _buildStaticAdCard(adSource),
     );
   }
 

@@ -39,13 +39,39 @@ import {
   ShieldAlert,
   Edit,
   Trash2,
-  Bell
+  Bell,
+  Upload
 } from 'lucide-react';
 import { config } from '@/config';
 
 const API_BASE = config.apiUrl;
 
-
+const resolveMediaUrl = (url) => {
+  if (!url) return '';
+  if (url.startsWith('data:')) return url;
+  const base = API_BASE.split('/api/v1')[0];
+  let subpath = url;
+  if (url.includes('/uploads/')) {
+    subpath = `/uploads/${url.split('/uploads/')[1]}`;
+  } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    subpath = url.startsWith('/') ? url : `/${url}`;
+  } else {
+    try {
+      const parsed = new URL(url);
+      subpath = parsed.pathname;
+    } catch (e) {
+      subpath = url;
+    }
+  }
+  // Replace '/uploads/ads/' with '/uploads/creative/' to bypass browser ad-blocker filters (uBlock/AdBlock)
+  if (subpath.includes('/uploads/ads/')) {
+    subpath = subpath.replace('/uploads/ads/', '/uploads/creative/');
+  }
+  if (subpath.startsWith('http://') || subpath.startsWith('https://')) {
+    return subpath;
+  }
+  return `${base}${subpath}`;
+};
 
 export default function AdminPortal() {
   const [mounted, setMounted] = useState(false);
@@ -2182,11 +2208,16 @@ export default function AdminPortal() {
                                       setSelectedCampaign(booking);
                                       setActiveVideoUrl(booking.mediaUrl);
                                       setShowVideoModal(true);
+                                      setWatchedVideos(prev => new Set(prev).add(booking.bookingId));
                                     }}
                                     className="p-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 rounded-xl transition-all cursor-pointer border border-blue-500/20 inline-flex items-center justify-center shadow-sm"
-                                    title="Play video attachment"
+                                    title="Preview media attachment"
                                   >
-                                    <Video className="w-4 h-4" />
+                                    {(booking.mediaUrl || '').includes('.mp4') || (booking.mediaUrl || '').includes('.webm') ? (
+                                      <Video className="w-4 h-4" />
+                                    ) : (
+                                      <Upload className="w-4 h-4" />
+                                    )}
                                   </button>
                                 </td>
                                 <td className="p-4 text-center">
@@ -2207,14 +2238,14 @@ export default function AdminPortal() {
                                         <button
                                           onClick={() => handleReviewCampaign(booking.bookingId, 'approve')}
                                           disabled={!watchedVideos.has(booking.bookingId)}
-                                          title={!watchedVideos.has(booking.bookingId) ? 'You must watch the video before approving' : 'Approve this campaign'}
+                                          title={!watchedVideos.has(booking.bookingId) ? 'You must view/watch the media creative before approving' : 'Approve this campaign'}
                                           className={`px-3 py-1.5 border font-bold rounded-lg transition-all flex items-center space-x-1 ${watchedVideos.has(booking.bookingId)
                                             ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 border-emerald-500/20 hover:border-emerald-500 cursor-pointer'
                                             : 'bg-muted/50 text-muted-foreground border-border cursor-not-allowed opacity-50'
                                             }`}
                                         >
                                           <Check className="w-3.5 h-3.5" />
-                                          <span>{watchedVideos.has(booking.bookingId) ? 'Approve' : 'Watch First'}</span>
+                                          <span>{watchedVideos.has(booking.bookingId) ? 'Approve' : 'View First'}</span>
                                         </button>
                                         <button
                                           onClick={() => {
@@ -3027,12 +3058,12 @@ export default function AdminPortal() {
 
       {/* -------------------- ADMIN DIALOG MODAL OVERLAYS (RENDERED AT ROOT TO PREVENT TRANSFORM WHITE BAR ISSUES) -------------------- */}
 
-      {/* Video Player Modal */}
+      {/* Video / Image Creative Preview Modal */}
       {showVideoModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-card border border-border w-full max-w-3xl rounded-[32px] overflow-hidden shadow-2xl p-6 relative">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="font-outfit text-base font-bold text-foreground">Video Creative Preview</h3>
+              <h3 className="font-outfit text-base font-bold text-foreground">Media Creative Preview</h3>
               <button
                 onClick={() => {
                   setShowVideoModal(false);
@@ -3043,22 +3074,72 @@ export default function AdminPortal() {
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="aspect-video w-full rounded-2xl overflow-hidden bg-slate-950">
+            <div className="w-full min-h-[220px] rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center p-3">
               {activeVideoUrl ? (
-                <video
-                  key={activeVideoUrl}
-                  src={activeVideoUrl}
-                  controls
-                  className="w-full h-full object-contain bg-black"
-                  onPlay={() => {
-                    if (selectedCampaign) {
-                      setWatchedVideos(prev => new Set(prev).add(selectedCampaign.bookingId));
-                    }
-                  }}
-                />
+                (() => {
+                  const mediaUrls = activeVideoUrl.split(',').map(s => s.trim()).filter(Boolean);
+                  const firstUrl = mediaUrls[0] || '';
+                  const isVideo = firstUrl.endsWith('.mp4') || firstUrl.endsWith('.webm');
+
+                  if (isVideo) {
+                    return (
+                      <video
+                        key={firstUrl}
+                        src={resolveMediaUrl(firstUrl)}
+                        controls
+                        className="w-full h-full object-contain bg-black rounded-xl"
+                        onPlay={() => {
+                          if (selectedCampaign) {
+                            setWatchedVideos(prev => new Set(prev).add(selectedCampaign.bookingId));
+                          }
+                        }}
+                      />
+                    );
+                  }
+
+                  // Render Image / Dual-Image Preview Grid
+                  return (
+                    <div className="w-full flex justify-center items-center gap-4 py-4">
+                      {mediaUrls.map((rawUrl, idx) => {
+                        const resolvedUrl = resolveMediaUrl(rawUrl);
+                        return (
+                          <div key={idx} className="flex flex-col items-center">
+                            <div className="bg-black/80 rounded-xl border border-border/40 shadow-lg p-3 min-w-[200px] min-h-[160px] flex items-center justify-center">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={resolvedUrl}
+                                alt={`Creative ${idx + 1}`}
+                                style={{ maxWidth: mediaUrls.length > 1 ? '260px' : '400px', maxHeight: '320px', objectFit: 'contain', display: 'block' }}
+                                onLoad={() => {
+                                  if (selectedCampaign) {
+                                    setWatchedVideos(prev => new Set(prev).add(selectedCampaign.bookingId));
+                                  }
+                                }}
+                                onError={(e) => {
+                                  console.error('Image load failed for URL:', resolvedUrl);
+                                  const base = API_BASE.split('/api/v1')[0];
+                                  if (rawUrl.includes('/uploads/')) {
+                                    const sub = rawUrl.split('/uploads/')[1];
+                                    const fallbackUrl = `${base}/uploads/${sub}`;
+                                    if (e.target.src !== fallbackUrl) {
+                                      e.target.src = fallbackUrl;
+                                    }
+                                  }
+                                }}
+                              />
+                            </div>
+                            <span className="text-[10px] font-bold text-slate-300 mt-2">
+                              {mediaUrls.length > 1 ? (idx === 0 ? 'Front (Image 1)' : 'Back (Image 2)') : 'Image Creative'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()
               ) : (
                 <div className="flex items-center justify-center h-full text-muted-foreground font-semibold text-xs">
-                  No video URL provided
+                  No media URL provided
                 </div>
               )}
             </div>

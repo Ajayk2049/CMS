@@ -226,6 +226,81 @@ class HostController {
   }
 
   /**
+   * Update details of an existing host application
+   */
+  async updateApplication(req, res) {
+    const { applicationId } = req.params;
+    const {
+      outletName,
+      outletDescription,
+      doorNo,
+      street,
+      city,
+      state,
+      zipCode,
+      contactPerson,
+      phone,
+      email
+    } = req.body || {};
+
+    if (
+      !outletName ||
+      !outletDescription ||
+      !doorNo ||
+      !street ||
+      !city ||
+      !state ||
+      !zipCode ||
+      !contactPerson ||
+      !phone ||
+      !email
+    ) {
+      return res.status(400).send({ success: false, message: 'All venue fields are required' });
+    }
+
+    try {
+      const application = await HostApplication.findOne({ _id: applicationId, userId: req.user.uid });
+      if (!application) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+
+      application.outletName = outletName;
+      application.outletDescription = outletDescription;
+      application.doorNo = doorNo;
+      application.street = street;
+      application.city = city;
+      application.state = state;
+      application.zipCode = zipCode;
+      application.contactPerson = contactPerson;
+      application.phone = phone;
+      application.email = email;
+
+      await application.save();
+
+      // Notify connected tablet devices via WebSocket to update venue & menu details live
+      if (global.deviceSockets) {
+        const devices = await Device.find({ hostApplicationId: applicationId });
+        for (const device of devices) {
+          const socket = global.deviceSockets.get(device.deviceId);
+          if (socket) {
+            socket.send(JSON.stringify({ event: 'reload_menu' }));
+            console.log(`[WS] Sent reload_menu signal to Device ${device.deviceId} for updated application details`);
+          }
+        }
+      }
+
+      return res.status(200).send({
+        success: true,
+        message: 'Host application details updated successfully',
+        data: application
+      });
+    } catch (error) {
+      console.error('updateApplication Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to update application details' });
+    }
+  }
+
+  /**
    * Get restaurant menu (Merchant only)
    */
   async getMenu(req, res) {

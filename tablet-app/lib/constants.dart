@@ -21,7 +21,7 @@ const Duration kFadeDuration = Duration(milliseconds: 200);
 const Duration kTransitionBlackDuration = Duration(milliseconds: 350);
 
 /// Inactivity timeout before the kiosk returns to ad slideshow.
-const Duration kInactivityTimeout = Duration(seconds: 180);
+const Duration kInactivityTimeout = Duration(seconds: 90);
 
 /// Position poll frequency for video completion detection.
 const Duration kPositionPollInterval = Duration(milliseconds: 500);
