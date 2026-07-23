@@ -611,7 +611,7 @@ class AdController {
 
     // We output H.264 mp4 always for baseline compatibility
     const uniqueFilename = `vid_${uuidv4().replace(/-/g, '').slice(0, 16)}.mp4`;
-    const uploadsDir = path.join(__dirname, '..', 'uploads', 'ads', targetSubdir);
+    const uploadsDir = path.join(__dirname, '..', 'uploads', 'ads', 'videos', targetSubdir);
     
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
@@ -660,7 +660,7 @@ class AdController {
       await mediaLog.save();
 
       // Return relative server URL
-      const fileUrl = `/uploads/ads/${targetSubdir}/${uniqueFilename}`;
+      const fileUrl = `/uploads/ads/videos/${targetSubdir}/${uniqueFilename}`;
 
       return res.status(200).send({
         success: true,
@@ -901,6 +901,89 @@ class AdController {
     } catch (error) {
       console.error('verifyPayment Error:', error.message);
       return res.status(500).send({ success: false, message: 'Internal server error during verification' });
+    }
+  }
+
+  /**
+   * Get analytics for a specific ad campaign booking
+   */
+  async getCampaignAnalytics(req, res) {
+    const { bookingId } = req.params;
+    const userId = req.user.uid;
+
+    if (!bookingId) {
+      return res.status(400).send({ success: false, message: 'Booking ID is required' });
+    }
+
+    try {
+      const AdImpression = require('../models/AdImpression');
+      const HostApplication = require('../models/HostApplication');
+
+      const booking = await AdBooking.findOne({ 
+        bookingId, 
+        $or: [{ advertiserId: req.user.uid }, { userId: req.user.uid }] 
+      });
+      if (!booking) {
+        return res.status(404).send({ success: false, message: 'Ad campaign booking not found or access denied' });
+      }
+
+      if (booking.paymentStatus !== 'completed' || booking.approvalStatus !== 'approved') {
+        return res.status(403).send({ 
+          success: false, 
+          message: 'Analytics are only available for paid and approved ad campaigns.' 
+        });
+      }
+
+      // Fetch impressions for this booking
+      const impressions = await AdImpression.find({ bookingId })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean();
+
+      // Aggregate statistics
+      const totalPlays = impressions.length;
+      const uniqueDevices = new Set(impressions.map(imp => imp.deviceId).filter(Boolean));
+      const totalDurationSeconds = impressions.reduce((sum, imp) => sum + (imp.durationSeconds || 15), 0);
+      const totalClicks = impressions.reduce((sum, imp) => sum + (imp.interactiveClicks || 0), 0);
+
+      // Resolve venue details for recent impressions
+      const venueIds = [...new Set(impressions.map(imp => imp.hostApplicationId).filter(Boolean))];
+      const venues = await HostApplication.find({ _id: { $in: venueIds } }).select('outletName city state').lean();
+      const venueMap = {};
+      venues.forEach(v => {
+        venueMap[v._id.toString()] = v;
+      });
+
+      const formattedImpressions = impressions.map(imp => {
+        const venue = imp.hostApplicationId ? venueMap[imp.hostApplicationId.toString()] : null;
+        return {
+          id: imp._id,
+          deviceId: imp.deviceId || 'Tablet Kiosk',
+          outletName: venue ? venue.outletName : (booking.targetScreenType === 'screen' ? 'Digital Display Screen' : 'Venue Tablet'),
+          city: venue ? venue.city : '',
+          durationSeconds: imp.durationSeconds || 15,
+          interactiveClicks: imp.interactiveClicks || 0,
+          createdAt: imp.createdAt
+        };
+      });
+
+      return res.status(200).send({
+        success: true,
+        data: {
+          bookingId,
+          campaignName: booking.targetAudience || `Ad ${bookingId}`,
+          targetScreenType: booking.targetScreenType,
+          totalPlays,
+          uniqueDevicesCount: uniqueDevices.size,
+          totalDurationSeconds,
+          totalDurationMinutes: (totalDurationSeconds / 60).toFixed(1),
+          totalClicks,
+          recentImpressions: formattedImpressions
+        }
+      });
+    } catch (error) {
+      console.error('getCampaignAnalytics Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to retrieve campaign analytics' });
     }
   }
 }

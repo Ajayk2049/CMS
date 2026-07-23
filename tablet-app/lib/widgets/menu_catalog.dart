@@ -52,8 +52,11 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
           );
         }
 
-        // Filter items by selected category
+        // Filter items by selected category (Popular section shows items where isPopular == true)
         final categoryItems = menuState.items.where((item) {
+          if (widget.selectedCategory.toLowerCase() == 'popular') {
+            return item.isPopular;
+          }
           return item.category.toLowerCase() == widget.selectedCategory.toLowerCase();
         }).toList();
 

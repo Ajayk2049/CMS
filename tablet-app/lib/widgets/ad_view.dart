@@ -89,7 +89,7 @@ class AdViewWidget extends StatelessWidget {
       child: imgFile.existsSync()
           ? Image.file(
               imgFile,
-              fit: BoxFit.cover,
+              fit: BoxFit.contain,
               width: double.infinity,
               height: double.infinity,
               errorBuilder: (context, error, stackTrace) {

@@ -31,7 +31,8 @@ import {
   CheckCircle,
   AlertCircle,
   Percent,
-  Lock
+  Lock,
+  Star
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -266,7 +267,8 @@ export default function MerchantDashboard() {
     category: 'Starters',
     isAvailable: true,
     imageUrl: '',
-    isVeg: true
+    isVeg: true,
+    isPopular: false
   });
   const [zoomFactor, setZoomFactor] = useState(100);
   const [imageTab, setImageTab] = useState('upload');
@@ -1088,6 +1090,23 @@ export default function MerchantDashboard() {
     reader.readAsArrayBuffer(file);
   };
 
+  const togglePopular = (index) => {
+    const updated = [...menuItems];
+    const item = updated[index];
+    const nextPopularState = !item.isPopular;
+    updated[index] = {
+      ...item,
+      isPopular: nextPopularState
+    };
+    setMenuItems(updated);
+    showToast(
+      nextPopularState
+        ? `"${item.name}" featured in Popular section!`
+        : `"${item.name}" removed from Popular section.`,
+      'info'
+    );
+  };
+
   const openCreateModal = (category = 'Starters') => {
     setEditingItemIndex(-1);
     setModalForm({
@@ -1098,6 +1117,7 @@ export default function MerchantDashboard() {
       isAvailable: true,
       imageUrl: '',
       isVeg: true,
+      isPopular: false,
       gst: (menuDefaultGst || 0).toString(),
       otherCharges: (menuDefaultOtherCharges || 0).toString(),
       otherChargesType: menuDefaultOtherChargesType || 'percentage'
@@ -1117,6 +1137,7 @@ export default function MerchantDashboard() {
       isAvailable: item.isAvailable !== false,
       imageUrl: item.imageUrl || '',
       isVeg: item.isVeg !== false,
+      isPopular: item.isPopular || false,
       gst: item.gst !== undefined && item.gst !== null ? item.gst.toString() : (menuDefaultGst || 0).toString(),
       otherCharges: item.otherCharges !== undefined && item.otherCharges !== null ? item.otherCharges.toString() : (menuDefaultOtherCharges || 0).toString(),
       otherChargesType: (item.otherCharges !== undefined && item.otherCharges !== null) ? (item.otherChargesType || 'percentage') : (menuDefaultOtherChargesType || 'percentage')
@@ -1169,6 +1190,7 @@ export default function MerchantDashboard() {
         isAvailable: modalForm.isAvailable,
         imageUrl: modalForm.imageUrl,
         isVeg: modalForm.isVeg,
+        isPopular: modalForm.isPopular,
         gst: gstVal,
         otherCharges: otherChargesVal,
         otherChargesType: modalForm.otherChargesType
@@ -1186,6 +1208,7 @@ export default function MerchantDashboard() {
         isAvailable: modalForm.isAvailable,
         imageUrl: modalForm.imageUrl,
         isVeg: modalForm.isVeg,
+        isPopular: modalForm.isPopular,
         gst: gstVal,
         otherCharges: otherChargesVal,
         otherChargesType: modalForm.otherChargesType
@@ -2182,8 +2205,21 @@ export default function MerchantDashboard() {
                                 key={item.itemId}
                                 className="relative flex flex-col justify-between overflow-hidden rounded-2xl border border-border/40 bg-card/10 p-4 transition-all duration-300 hover:-translate-y-1 hover:border-primary/50 group"
                               >
-                                {/* Overlay Edit/Delete Controls */}
+                                {/* Overlay Edit/Delete/Star Controls */}
                                 <div className="absolute top-6 right-6 z-10 flex space-x-2">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      togglePopular(originalIndex);
+                                    }}
+                                    className={`p-1.5 rounded-lg border transition-all cursor-pointer shadow-sm ${item.isPopular
+                                      ? 'bg-amber-500 text-white border-amber-600 shadow-amber-500/20'
+                                      : 'bg-white dark:bg-black hover:bg-muted border-border/40 text-muted-foreground'
+                                      }`}
+                                    title={item.isPopular ? "Remove from Popular section" : "Add to Popular section"}
+                                  >
+                                    <Star className={`w-4 h-4 ${item.isPopular ? 'fill-white' : ''}`} />
+                                  </button>
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -2209,6 +2245,12 @@ export default function MerchantDashboard() {
                                   className="cursor-pointer flex-1 flex flex-col"
                                 >
                                   <div className="relative w-full h-40 overflow-hidden rounded-xl bg-muted/10 mb-4 shrink-0 border border-border/20">
+                                    {item.isPopular && (
+                                      <div className="absolute top-2 left-2 z-10 bg-amber-500/90 backdrop-blur-sm text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-md flex items-center space-x-1 shadow-md">
+                                        <Star className="w-3 h-3 fill-white" />
+                                        <span>POPULAR</span>
+                                      </div>
+                                    )}
                                     {item.imageUrl ? (
                                       <img
                                         src={resolveMediaUrl(item.imageUrl)}
@@ -2656,6 +2698,20 @@ export default function MerchantDashboard() {
                   />
                   <label htmlFor="modalItemAvailable" className="text-xs font-bold text-foreground cursor-pointer uppercase select-none">
                     Available for Ordering
+                  </label>
+                </div>
+
+                <div className="flex items-center space-x-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="modalItemPopular"
+                    checked={modalForm.isPopular}
+                    onChange={(e) => setModalForm(prev => ({ ...prev, isPopular: e.target.checked }))}
+                    className="w-4 h-4 rounded accent-amber-500 cursor-pointer border border-input"
+                  />
+                  <label htmlFor="modalItemPopular" className="text-xs font-bold text-foreground cursor-pointer uppercase select-none flex items-center space-x-1">
+                    <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500 inline mr-1" />
+                    <span>Feature in Popular Section</span>
                   </label>
                 </div>
               </div>

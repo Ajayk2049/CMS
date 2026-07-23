@@ -333,7 +333,7 @@ export default function AdminPortal() {
       if (ws) {
         try {
           ws.close();
-        } catch (e) {}
+        } catch (e) { }
       }
 
       console.log('[WebSocket] Connecting to admin feed...');
@@ -369,7 +369,7 @@ export default function AdminPortal() {
         console.error('[WebSocket] Connection error:', err.message || err);
         try {
           ws.close();
-        } catch (e) {}
+        } catch (e) { }
       };
     };
 
@@ -380,7 +380,7 @@ export default function AdminPortal() {
         ws.onclose = null;
         try {
           ws.close();
-        } catch (e) {}
+        } catch (e) { }
       }
       if (reconnectTimeout) {
         clearTimeout(reconnectTimeout);
@@ -1150,7 +1150,7 @@ export default function AdminPortal() {
   // Filtered campaigns for Pending Ads tab search and global search
   const filteredCampaigns = campaigns.filter(c => {
     if (c.paymentStatus !== 'completed') return false;
-    
+
     // Status filters
     if (adFilter === 'pending' && c.approvalStatus !== 'pending') return false;
     if (adFilter === 'approved' && c.approvalStatus !== 'approved') return false;
@@ -1457,16 +1457,14 @@ export default function AdminPortal() {
                             <button
                               key={item.id}
                               onClick={() => handleNotificationClick(item)}
-                              className={`w-full text-left p-3.5 hover:bg-muted/50 transition-all flex items-start space-x-3 cursor-pointer ${
-                                isUnread ? 'bg-primary/5' : ''
-                              }`}
+                              className={`w-full text-left p-3.5 hover:bg-muted/50 transition-all flex items-start space-x-3 cursor-pointer ${isUnread ? 'bg-primary/5' : ''
+                                }`}
                             >
                               {/* Icon Indicator */}
-                              <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
-                                item.type === 'host' ? 'bg-emerald-500' :
+                              <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${item.type === 'host' ? 'bg-emerald-500' :
                                 item.type === 'campaign' ? 'bg-blue-500' : 'bg-orange-500'
-                              }`} />
-                              
+                                }`} />
+
                               <div className="flex-1 space-y-0.5">
                                 <div className="flex justify-between items-start">
                                   <span className="text-xs font-bold text-foreground truncate">{item.title}</span>
@@ -1509,13 +1507,12 @@ export default function AdminPortal() {
           {/* Notifications alert (Opaque Toast Alert System) */}
           {notification.message && (
             <div
-              className={`fixed top-6 right-6 p-4 rounded-2xl shadow-2xl border text-xs font-bold z-[999] flex items-center justify-between space-x-3 text-white border-transparent animate-fade-in ${
-                notification.type === 'success'
-                  ? 'bg-emerald-600 shadow-emerald-500/20'
-                  : notification.type === 'error'
-                    ? 'bg-rose-600 shadow-rose-500/20'
-                    : 'bg-[#0069a8] shadow-[#0069a8]/20'
-              }`}
+              className={`fixed top-6 right-6 p-4 rounded-2xl shadow-2xl border text-xs font-bold z-[999] flex items-center justify-between space-x-3 text-white border-transparent animate-fade-in ${notification.type === 'success'
+                ? 'bg-emerald-600 shadow-emerald-500/20'
+                : notification.type === 'error'
+                  ? 'bg-rose-600 shadow-rose-500/20'
+                  : 'bg-[#0069a8] shadow-[#0069a8]/20'
+                }`}
             >
               <div className="flex items-center space-x-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
@@ -2168,17 +2165,17 @@ export default function AdminPortal() {
                       <div className="text-center py-20 border border-border rounded-[32px] text-xs text-muted-foreground glassmorphism bg-card/20 animate-fade-in">
                         <UserCheck className="w-8 h-8 text-muted-foreground/40 mx-auto mb-4" />
                         <p className="font-semibold">
-                          {adFilter === 'approved' 
-                            ? 'No approved ad campaigns found.' 
-                            : adFilter === 'rejected' 
-                            ? 'No rejected or revoked ad campaigns found.' 
-                            : adFilter === 'pending'
-                            ? 'All booked and paid ad campaigns are resolved.'
-                            : 'No ad campaigns found.'}
+                          {adFilter === 'approved'
+                            ? 'No approved ad campaigns found.'
+                            : adFilter === 'rejected'
+                              ? 'No rejected or revoked ad campaigns found.'
+                              : adFilter === 'pending'
+                                ? 'All booked and paid ad campaigns are resolved.'
+                                : 'No ad campaigns found.'}
                         </p>
                         <p className="text-[10px] mt-1">
-                          {adFilter === 'approved' 
-                            ? 'Approve pending campaigns to see them here.' 
+                          {adFilter === 'approved'
+                            ? 'Approve pending campaigns to see them here.'
                             : 'No matching campaigns are available.'}
                         </p>
                       </div>
@@ -2274,11 +2271,10 @@ export default function AdminPortal() {
                                         <span>Revoke</span>
                                       </button>
                                     ) : (
-                                      <span className={`px-2 py-1 rounded-md text-[10px] font-extrabold uppercase tracking-wide ${
-                                        booking.approvalStatus === 'rejected'
-                                          ? 'bg-destructive/10 text-destructive border border-destructive/10'
-                                          : 'bg-orange-500/10 text-orange-500 border border-orange-500/10'
-                                      }`}>
+                                      <span className={`px-2 py-1 rounded-md text-[10px] font-extrabold uppercase tracking-wide ${booking.approvalStatus === 'rejected'
+                                        ? 'bg-destructive/10 text-destructive border border-destructive/10'
+                                        : 'bg-orange-500/10 text-orange-500 border border-orange-500/10'
+                                        }`}>
                                         {booking.approvalStatus}
                                       </span>
                                     )}
@@ -3022,9 +3018,8 @@ export default function AdminPortal() {
                           <span>{item.label}</span>
                         </div>
                         {badgeCount > 0 && (
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-black leading-none ${
-                            activeTab === item.id ? 'bg-primary-foreground text-primary' : 'bg-destructive text-destructive-foreground'
-                          }`}>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-black leading-none ${activeTab === item.id ? 'bg-primary-foreground text-primary' : 'bg-destructive text-destructive-foreground'
+                            }`}>
                             {badgeCount}
                           </span>
                         )}
@@ -3063,7 +3058,7 @@ export default function AdminPortal() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-card border border-border w-full max-w-3xl rounded-[32px] overflow-hidden shadow-2xl p-6 relative">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="font-outfit text-base font-bold text-foreground">Media Creative Preview</h3>
+              <h3 className="font-outfit text-base font-bold text-foreground">Media Preview</h3>
               <button
                 onClick={() => {
                   setShowVideoModal(false);
@@ -3129,7 +3124,7 @@ export default function AdminPortal() {
                               />
                             </div>
                             <span className="text-[10px] font-bold text-slate-300 mt-2">
-                              {mediaUrls.length > 1 ? (idx === 0 ? 'Front (Image 1)' : 'Back (Image 2)') : 'Image Creative'}
+                              {mediaUrls.length > 1 ? (idx === 0 ? 'Front (Image 1)' : 'Back (Image 2)') : 'Image'}
                             </span>
                           </div>
                         );
@@ -3671,7 +3666,7 @@ export default function AdminPortal() {
               <div className="space-y-6">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-muted/20 p-3 rounded-2xl border border-border/40">
                   <h5 className="text-xs font-bold text-foreground">Venues & Devices</h5>
-                  
+
                   {/* Venue selection dropdown */}
                   <div className="flex items-center space-x-1.5 w-full sm:w-auto">
                     <span className="text-[9px] font-bold text-muted-foreground uppercase shrink-0">Select Venue:</span>
@@ -3701,7 +3696,7 @@ export default function AdminPortal() {
 
                     return filteredUserHosts.map((app) => {
                       const appDevices = devices.filter(d => (d.hostApplicationId?._id || d.hostApplicationId)?.toString() === app._id?.toString());
-                      
+
                       return (
                         <div key={app._id} className="border-b border-border/30 pb-4 last:border-b-0 last:pb-0 space-y-3 pt-2">
                           <div className="flex justify-between items-start">
@@ -3745,7 +3740,7 @@ export default function AdminPortal() {
               <div className="space-y-4">
                 <div className="flex justify-between items-center bg-muted/20 p-3 rounded-2xl border border-border/40">
                   <h5 className="text-xs font-bold text-foreground">Campaign Bookings ({campaigns.filter(c => (c.advertiserId?._id || c.advertiserId)?.toString() === selectedUser._id?.toString()).length})</h5>
-                  
+
                   {/* Sorting dropdown for campaigns */}
                   <div className="flex items-center space-x-1.5">
                     <span className="text-[9px] font-bold text-muted-foreground uppercase">Sort:</span>

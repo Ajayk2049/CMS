@@ -32,7 +32,9 @@ import {
   X,
   createIcons,
   ListVideo,
-  IndianRupee
+  IndianRupee,
+  BarChart3,
+  Activity
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -94,6 +96,51 @@ export default function AdvertiserDashboard() {
   const [previewVideoUrl, setPreviewVideoUrl] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef(null);
+
+  // Analytics Modal state
+  const [showAnalyticsModal, setShowAnalyticsModal] = useState(false);
+  const [analyticsBookingId, setAnalyticsBookingId] = useState('');
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  const fetchCampaignAnalytics = async (bookingId, isSilent = false) => {
+    if (!bookingId) return;
+    if (!isSilent) setAnalyticsLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/ads/analytics/${bookingId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        setAnalyticsData(res.data.data);
+      }
+    } catch (err) {
+      console.error('fetchCampaignAnalytics Error:', err);
+      if (!isSilent) {
+        showToast('error', err.response?.data?.message || 'Failed to load campaign analytics.');
+      }
+    } finally {
+      if (!isSilent) setAnalyticsLoading(false);
+    }
+  };
+
+  const openAnalyticsModal = (bookingId) => {
+    setAnalyticsBookingId(bookingId);
+    setAnalyticsData(null);
+    setShowAnalyticsModal(true);
+    fetchCampaignAnalytics(bookingId);
+  };
+
+  useEffect(() => {
+    let interval = null;
+    if (showAnalyticsModal && analyticsBookingId && token) {
+      interval = setInterval(() => {
+        fetchCampaignAnalytics(analyticsBookingId, true);
+      }, 10000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [showAnalyticsModal, analyticsBookingId, token]);
 
   // Dropdown options loaded from server
   const [states, setStates] = useState([]);
@@ -886,6 +933,16 @@ export default function AdvertiserDashboard() {
                                     <span className="hidden md:inline">Verify</span>
                                   </button>
                                 )}
+                                {booking.paymentStatus === 'completed' && booking.approvalStatus === 'approved' && (
+                                  <button
+                                    onClick={() => openAnalyticsModal(booking.bookingId)}
+                                    className="flex items-center space-x-1 px-2.5 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30 font-bold rounded-xl transition-all text-[10px] cursor-pointer shadow-sm"
+                                    title="View Campaign Analytics"
+                                  >
+                                    <BarChart3 className="w-3.5 h-3.5" />
+                                    <span>Analytics</span>
+                                  </button>
+                                )}
                                 <button
                                   onClick={() => setExpandedCampaigns(prev => ({
                                     ...prev,
@@ -1490,6 +1547,158 @@ export default function AdvertiserDashboard() {
                 autoPlay
                 className="w-full h-full object-contain"
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Campaign Analytics Modal */}
+      {showAnalyticsModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="w-full max-w-4xl bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="flex justify-between items-center border-b border-border/40 pb-4 shrink-0">
+              <div className="flex items-center space-x-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-500 flex items-center justify-center shrink-0">
+                  <BarChart3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-outfit text-md font-bold text-foreground flex items-center space-x-2">
+                    <span>Campaign Analytics</span>
+                    <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-muted text-muted-foreground border border-border/40">
+                      {analyticsBookingId}
+                    </span>
+                  </h3>
+                  <p className="text-[10px] text-muted-foreground font-semibold mt-0.5">
+                    Real-time playback telemetry & impression statistics
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => fetchCampaignAnalytics(analyticsBookingId)}
+                  disabled={analyticsLoading}
+                  className="p-2 hover:bg-muted border border-border/40 rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer text-xs font-bold flex items-center space-x-1"
+                  title="Refresh Live Data"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${analyticsLoading ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">Refresh</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAnalyticsModal(false);
+                    setAnalyticsBookingId('');
+                    setAnalyticsData(null);
+                  }}
+                  className="p-2 hover:bg-muted border border-border/40 rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer text-xs font-bold"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto pt-4 space-y-6 pr-1">
+              {analyticsLoading && !analyticsData ? (
+                <div className="py-16 flex flex-col items-center justify-center space-y-3">
+                  <RefreshCw className="w-8 h-8 text-primary animate-spin" />
+                  <p className="text-xs font-bold text-muted-foreground">Fetching playback telemetry data...</p>
+                </div>
+              ) : analyticsData ? (
+                <>
+                  {/* Summary Metric Cards */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="p-4 rounded-xl bg-card border border-border/40 flex flex-col justify-between shadow-sm">
+                      <div className="flex items-center justify-between text-muted-foreground mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Total Plays</span>
+                        <Play className="w-3.5 h-3.5 text-blue-500" />
+                      </div>
+                      <span className="text-2xl font-black font-outfit text-foreground">{analyticsData.totalPlays}</span>
+                      <span className="text-[9px] text-muted-foreground font-semibold mt-1">Total Impressions</span>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-card border border-border/40 flex flex-col justify-between shadow-sm">
+                      <div className="flex items-center justify-between text-muted-foreground mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Devices Reached</span>
+                        <Tablet className="w-3.5 h-3.5 text-indigo-500" />
+                      </div>
+                      <span className="text-2xl font-black font-outfit text-foreground">{analyticsData.uniqueDevicesCount}</span>
+                      <span className="text-[9px] text-muted-foreground font-semibold mt-1">Unique Tablets / Screens</span>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-card border border-border/40 flex flex-col justify-between shadow-sm">
+                      <div className="flex items-center justify-between text-muted-foreground mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Total Duration</span>
+                        <Clock className="w-3.5 h-3.5 text-emerald-500" />
+                      </div>
+                      <span className="text-2xl font-black font-outfit text-foreground">{analyticsData.totalDurationMinutes}<span className="text-xs font-semibold text-muted-foreground ml-1">mins</span></span>
+                      <span className="text-[9px] text-muted-foreground font-semibold mt-1">{analyticsData.totalDurationSeconds} Seconds Broadcast</span>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-card border border-border/40 flex flex-col justify-between shadow-sm">
+                      <div className="flex items-center justify-between text-muted-foreground mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider">Interactive Clicks</span>
+                        <Activity className="w-3.5 h-3.5 text-amber-500" />
+                      </div>
+                      <span className="text-2xl font-black font-outfit text-foreground">{analyticsData.totalClicks}</span>
+                      <span className="text-[9px] text-muted-foreground font-semibold mt-1">Touch Engagements</span>
+                    </div>
+                  </div>
+
+                  {/* Impression History Table */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center space-x-2">
+                        <Activity className="w-3.5 h-3.5 text-primary" />
+                        <span>Playback Impression Log</span>
+                      </h4>
+                      <span className="text-[10px] text-muted-foreground font-semibold">Updated live every 10s</span>
+                    </div>
+
+                    {analyticsData.recentImpressions.length === 0 ? (
+                      <div className="p-8 rounded-xl border border-dashed border-border/40 text-center">
+                        <p className="text-xs font-semibold text-muted-foreground">No playback telemetry recorded yet.</p>
+                        <p className="text-[10px] text-muted-foreground mt-1">Impressions will appear here automatically once the ad plays on target devices.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto rounded-xl border border-border/40">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-muted/40 text-[10px] uppercase font-bold text-muted-foreground border-b border-border/40">
+                            <tr>
+                              <th className="py-2.5 px-3">Date & Time</th>
+                              <th className="py-2.5 px-3">Device ID</th>
+                              <th className="py-2.5 px-3">Outlet / Venue</th>
+                              <th className="py-2.5 px-3">Duration</th>
+                              <th className="py-2.5 px-3 text-right">Clicks</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border/20 font-medium">
+                            {analyticsData.recentImpressions.map((imp) => (
+                              <tr key={imp.id} className="hover:bg-muted/20 transition-colors">
+                                <td className="py-2.5 px-3 whitespace-nowrap font-mono text-[11px]">
+                                  {new Date(imp.createdAt).toLocaleString()}
+                                </td>
+                                <td className="py-2.5 px-3 font-mono text-[11px] text-foreground font-semibold">
+                                  {imp.deviceId}
+                                </td>
+                                <td className="py-2.5 px-3 font-semibold text-foreground">
+                                  {imp.outletName} {imp.city ? `(${imp.city})` : ''}
+                                </td>
+                                <td className="py-2.5 px-3 font-mono text-[11px] text-emerald-500 font-bold">
+                                  {imp.durationSeconds}s
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono text-[11px] font-bold">
+                                  {imp.interactiveClicks}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : null}
             </div>
           </div>
         </div>

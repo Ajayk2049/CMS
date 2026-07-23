@@ -93,6 +93,7 @@ class MenuItem extends $pb.GeneratedMessage {
     $core.bool? isAvailable,
     $core.String? imageUrl,
     $core.bool? isVeg,
+    $core.bool? isPopular,
   }) {
     final result = create();
     if (itemId != null) result.itemId = itemId;
@@ -103,17 +104,17 @@ class MenuItem extends $pb.GeneratedMessage {
     if (isAvailable != null) result.isAvailable = isAvailable;
     if (imageUrl != null) result.imageUrl = imageUrl;
     if (isVeg != null) result.isVeg = isVeg;
+    if (isPopular != null) result.isPopular = isPopular;
     return result;
   }
 
-  MenuItem._();
-
-  factory MenuItem.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
-  factory MenuItem.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+  MenuItem._() : super();
+  factory MenuItem.fromBuffer($core.List<$core.int> i,
+          [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(i, r);
+  factory MenuItem.fromJson($core.String i,
+          [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(i, r);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MenuItem',
@@ -127,6 +128,7 @@ class MenuItem extends $pb.GeneratedMessage {
     ..aOB(6, _omitFieldNames ? '' : 'isAvailable', protoName: 'isAvailable')
     ..aOS(7, _omitFieldNames ? '' : 'imageUrl', protoName: 'imageUrl')
     ..aOB(8, _omitFieldNames ? '' : 'isVeg', protoName: 'isVeg')
+    ..aOB(9, _omitFieldNames ? '' : 'isPopular', protoName: 'isPopular')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -218,6 +220,15 @@ class MenuItem extends $pb.GeneratedMessage {
   $core.bool hasIsVeg() => $_has(7);
   @$pb.TagNumber(8)
   void clearIsVeg() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.bool get isPopular => $_getBF(8);
+  @$pb.TagNumber(9)
+  set isPopular($core.bool value) => $_setBool(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasIsPopular() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearIsPopular() => $_clearField(9);
 }
 
 class GetMenuResponse extends $pb.GeneratedMessage {

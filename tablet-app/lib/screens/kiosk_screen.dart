@@ -1387,37 +1387,51 @@ class _KioskScreenState extends State<KioskScreen> {
   }
 
   Widget _buildSidebar() {
-    const categoriesOrder = ['Starters', 'Main Course', 'Dessert', 'Beverages'];
+    const defaultCategoriesOrder = ['Popular', 'Starters', 'Main Course', 'Dessert', 'Beverages'];
     final categories = <String>[];
-    for (final cat in categoriesOrder) {
+
+    // Always include 'Popular' if any item is popular, or as first default
+    if (_menu.value.items.any((item) => item.isPopular)) {
+      categories.add('Popular');
+    }
+
+    for (final cat in ['Starters', 'Main Course', 'Dessert', 'Beverages']) {
       if (_menu.value.items.any((item) => item.category.toLowerCase() == cat.toLowerCase())) {
         categories.add(cat);
       }
     }
     for (final item in _menu.value.items) {
-      if (!categoriesOrder.any((cat) => cat.toLowerCase() == item.category.toLowerCase()) &&
+      if (!defaultCategoriesOrder.any((cat) => cat.toLowerCase() == item.category.toLowerCase()) &&
           !categories.contains(item.category)) {
         categories.add(item.category);
       }
     }
-    if (categories.isEmpty) categories.addAll(categoriesOrder);
+    if (categories.isEmpty) categories.addAll(defaultCategoriesOrder);
+
+    // If active category not in available list, default to first category
+    if (!categories.any((c) => c.toLowerCase() == _selectedCategory.toLowerCase())) {
+      _selectedCategory = categories.first;
+    }
 
     return Container(
       width: 120,
       color: kSidebarBg,
-      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 0),
       child: Column(
         children: [
           Expanded(
             child: ListView.separated(
               itemCount: categories.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 16),
+              separatorBuilder: (context, index) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
                 final cat = categories[index];
                 final isSelected = cat.toLowerCase() == _selectedCategory.toLowerCase();
 
                 IconData iconData;
                 switch (cat.toLowerCase()) {
+                  case 'popular':
+                    iconData = Icons.insights;
+                    break;
                   case 'starters':
                     iconData = Icons.fastfood;
                     break;
@@ -1437,30 +1451,55 @@ class _KioskScreenState extends State<KioskScreen> {
                 }
 
                 return Material(
-                  color: isSelected ? kAccentBlue : kCardBg,
-                  borderRadius: kCardBorderRadius,
-                  elevation: isSelected ? 3 : 1,
-                  shadowColor: Colors.black.withOpacity(0.1),
+                  color: Colors.transparent,
                   child: InkWell(
-                    borderRadius: kCardBorderRadius,
                     onTap: () {
                       HapticFeedback.selectionClick();
                       setState(() => _selectedCategory = cat);
                     },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
+                    child: SizedBox(
+                      height: 72,
+                      child: Stack(
                         children: [
-                          Icon(iconData, color: isSelected ? Colors.white : kTextDark, size: 26),
-                          const SizedBox(height: 8),
-                          Text(
-                            cat,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: isSelected ? Colors.white : kTextDark,
+                          // Vertical left-edge active pill indicator matching reference UI
+                          if (isSelected)
+                            Positioned(
+                              left: 0,
+                              top: 16,
+                              bottom: 16,
+                              child: Container(
+                                width: 5,
+                                decoration: const BoxDecoration(
+                                  color: kAccentBlue,
+                                  borderRadius: BorderRadius.horizontal(right: Radius.circular(4)),
+                                ),
+                              ),
+                            ),
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    iconData,
+                                    color: isSelected ? kTextDark : kTextDark.withValues(alpha: 0.75),
+                                    size: 28,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    cat,
+                                    textAlign: TextAlign.center,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                                      color: isSelected ? kTextDark : kTextDark.withValues(alpha: 0.8),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ],
@@ -1646,44 +1685,37 @@ class _KioskScreenState extends State<KioskScreen> {
         final amountFormatted = (amountPaise / 100).toStringAsFixed(2);
 
         IconData iconData;
-        Color iconColor;
         String statusTitle;
         String statusSubtitle;
 
         switch (orderStatus.toLowerCase()) {
           case 'placed':
             iconData = Icons.watch_later_outlined;
-            iconColor = Colors.amber.shade600;
             statusTitle = 'Order Placed';
             statusSubtitle = 'Waiting for kitchen confirmation…';
             break;
           case 'confirmed':
             iconData = Icons.check_circle_outline_rounded;
-            iconColor = Colors.green.shade600;
             statusTitle = 'Order Confirmed';
             statusSubtitle = 'Preparing your food shortly…';
             break;
           case 'cooking':
             iconData = Icons.soup_kitchen;
-            iconColor = Colors.blue.shade600;
             statusTitle = 'Preparing & Cooking';
             statusSubtitle = 'Chefs are working on your food!';
             break;
           case 'served':
             iconData = Icons.restaurant_rounded;
-            iconColor = const Color(0xFF059669);
             statusTitle = 'Delivered & Served';
             statusSubtitle = 'Enjoy your meal!';
             break;
           case 'cancelled':
             iconData = Icons.cancel_outlined;
-            iconColor = Colors.red.shade600;
             statusTitle = 'Order Cancelled';
             statusSubtitle = 'Please contact the staff.';
             break;
           default:
             iconData = Icons.receipt_long_rounded;
-            iconColor = kTextGrey;
             statusTitle = 'Active Order';
             statusSubtitle = 'Status: $orderStatus';
         }

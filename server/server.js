@@ -24,6 +24,7 @@ const PhonePeTransaction = require('./models/PhonePeTransaction');
 const AdsRates = require('./models/AdsRates');
 const Report = require('./models/Report');
 const HostApplication = require('./models/HostApplication');
+const AdImpression = require('./models/AdImpression');
 
 // WebSocket client sockets map (merchantId -> ws socket)
 const merchantSockets = new Map();
@@ -705,11 +706,27 @@ const deviceServiceHandlers = {
       const { deviceId } = claims;
       console.log(`[gRPC telemetry] Device ${deviceId} tracked impression for Booking ${bookingId}: ${durationSeconds}s, Clicks: ${interactiveClicks}`);
 
+      if (bookingId && bookingId !== 'unknown') {
+        const booking = await AdBooking.findOne({ bookingId });
+        const deviceDoc = await Device.findOne({ deviceId });
+
+        await AdImpression.create({
+          bookingId,
+          advertiserId: booking ? booking.userId : null,
+          deviceId: deviceId || null,
+          hostApplicationId: booking ? booking.hostApplicationId : (deviceDoc ? deviceDoc.hostApplicationId : null),
+          durationSeconds: Number(durationSeconds) || 15,
+          interactiveClicks: Number(interactiveClicks) || 0,
+          createdAt: new Date()
+        });
+      }
+
       callback(null, {
         success: true,
         message: 'Telemetry logged successfully'
       });
     } catch (err) {
+      console.error('TrackAdImpression Error:', err.message);
       const code = err.code || grpc.status.INTERNAL;
       callback({ code, message: err.message });
     }
@@ -735,7 +752,8 @@ const menuServiceHandlers = {
         category: item.category,
         isAvailable: item.isAvailable,
         imageUrl: item.imageUrl || '',
-        isVeg: item.isVeg !== undefined ? item.isVeg : true
+        isVeg: item.isVeg !== undefined ? item.isVeg : true,
+        isPopular: item.isPopular || false
       })) : [];
 
       callback(null, {
