@@ -625,6 +625,32 @@ class AdController {
       // This solves the non-seekable pipe problem for BOTH MP4 and WebM.
       await pipeline(req.body, fs.createWriteStream(tempPath));
 
+      // Inspect video duration via ffprobe before transcoding
+      const maxVideoDurationSeconds = config.maxVideoDurationSeconds || 30;
+      try {
+        const metadata = await new Promise((resolve, reject) => {
+          ffmpeg.ffprobe(tempPath, (err, meta) => {
+            if (err) return reject(err);
+            resolve(meta);
+          });
+        });
+
+        const durationSeconds = metadata?.format?.duration || 0;
+        if (durationSeconds > maxVideoDurationSeconds) {
+          if (fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch (e) {}
+          }
+          mediaLog.status = 'failed';
+          await mediaLog.save();
+          return res.status(400).send({
+            success: false,
+            message: `Video duration (${Math.round(durationSeconds)}s) exceeds maximum allowed limit of ${maxVideoDurationSeconds} seconds.`
+          });
+        }
+      } catch (probeErr) {
+        console.warn('ffprobe duration check warning:', probeErr.message);
+      }
+
       // Run FFmpeg Transcoding using the temporary file path as source
       await new Promise((resolve, reject) => {
         ffmpeg(tempPath)

@@ -37,7 +37,8 @@ const config = {
     webhookPassword: process.env.PHONEPE_WEBHOOK_PASSWORD || 'webhook_secure_pass_123',
     webhookStrict: process.env.PHONEPE_WEBHOOK_STRICT === 'true'
   },
-  merchantRedirectUrl: process.env.MERCHANT_REDIRECT_URL || 'http://localhost:3001/merchant/orders'
+  merchantRedirectUrl: process.env.MERCHANT_REDIRECT_URL || 'http://localhost:3001/merchant/orders',
+  maxVideoDurationSeconds: parseInt(process.env.MAX_VIDEO_DURATION_SECONDS, 10) || 30
 };
 
 // Validate critical parameters

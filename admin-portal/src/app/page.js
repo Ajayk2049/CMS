@@ -328,8 +328,10 @@ export default function AdminPortal() {
     let reconnectTimeout = null;
     let reconnectDelay = 1000;
     const maxReconnectDelay = 30000;
+    let stopReconnect = false;
 
     const connectWebSocket = () => {
+      if (stopReconnect) return;
       if (ws) {
         try {
           ws.close();
@@ -347,6 +349,13 @@ export default function AdminPortal() {
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
+          if (payload.error && (payload.error.includes('token') || payload.error.includes('Access denied') || payload.error.includes('Authentication'))) {
+            console.warn('[WebSocket] Auth failed, stopping reconnect loop:', payload.error);
+            stopReconnect = true;
+            try { ws.close(); } catch (e) {}
+            return;
+          }
+
           console.log('[WebSocket] Received update alert:', payload);
           if (['new_host_app', 'host_app_reviewed', 'new_campaign', 'campaign_reviewed', 'report_updated', 'new_device_request', 'device_request_reviewed'].includes(payload.event)) {
             console.log('[WebSocket] Triggering dynamic dashboard refresh...');
@@ -358,7 +367,10 @@ export default function AdminPortal() {
       };
 
       ws.onclose = (event) => {
-        console.log(`[WebSocket] Closed (code: ${event.code}). Attempting reconnect in ${reconnectDelay}ms...`);
+        console.log(`[WebSocket] Closed (code: ${event.code}).`);
+        if (stopReconnect) return;
+
+        console.log(`[WebSocket] Attempting reconnect in ${reconnectDelay}ms...`);
         reconnectTimeout = setTimeout(() => {
           reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
           connectWebSocket();

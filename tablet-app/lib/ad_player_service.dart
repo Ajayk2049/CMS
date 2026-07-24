@@ -130,6 +130,7 @@ class AdPlayerService {
     if (source.startsWith('static__') || source.startsWith('img__')) {
       _staticTimer?.cancel();
       _channel.invokeMethod('pause');
+      onImpression?.call(source);
       _emitState();
       _staticTimer = Timer(kStaticAdDisplayDuration, () {
         if (!_disposed && !_isPaused) _advance();
