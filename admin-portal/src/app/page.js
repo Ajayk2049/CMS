@@ -150,6 +150,47 @@ export default function AdminPortal() {
   const [deletingUser, setDeletingUser] = useState(null);
   const [adminDeletePassword, setAdminDeletePassword] = useState('');
 
+  // Quota Override Modal States
+  const [isQuotaModalOpen, setIsQuotaModalOpen] = useState(false);
+  const [quotaForm, setQuotaForm] = useState({
+    customMaxVideoSlots: '',
+    customDailyVideoQuota: '',
+    customMaxImageSlots: '',
+    customDailyImageQuota: '',
+    customMaxScreenSlots: '',
+    customDailyScreenQuota: ''
+  });
+
+  const openQuotaModal = (hostApp) => {
+    setQuotaForm({
+      customMaxVideoSlots: hostApp.customMaxVideoSlots ?? '',
+      customDailyVideoQuota: hostApp.customDailyVideoQuota ?? '',
+      customMaxImageSlots: hostApp.customMaxImageSlots ?? '',
+      customDailyImageQuota: hostApp.customDailyImageQuota ?? '',
+      customMaxScreenSlots: hostApp.customMaxScreenSlots ?? '',
+      customDailyScreenQuota: hostApp.customDailyScreenQuota ?? ''
+    });
+    setIsQuotaModalOpen(true);
+  };
+
+  const handleSaveQuotas = async () => {
+    if (!selectedHostApp) return;
+    try {
+      const res = await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, quotaForm, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        showNotification('Host quota overrides updated successfully!', 'success');
+        setSelectedHostApp(res.data.data);
+        fetchHosts(token);
+        setIsQuotaModalOpen(false);
+      }
+    } catch (err) {
+      console.error(err);
+      showNotification(err.response?.data?.message || 'Failed to update quotas.', 'error');
+    }
+  };
+
   // Sub-tabs within sections
   const [deviceSubTab, setDeviceSubTab] = useState('tablet');
   const [selectedVenueFilter, setSelectedVenueFilter] = useState('all');
@@ -352,7 +393,7 @@ export default function AdminPortal() {
           if (payload.error && (payload.error.includes('token') || payload.error.includes('Access denied') || payload.error.includes('Authentication'))) {
             console.warn('[WebSocket] Auth failed, stopping reconnect loop:', payload.error);
             stopReconnect = true;
-            try { ws.close(); } catch (e) {}
+            try { ws.close(); } catch (e) { }
             return;
           }
 
@@ -2488,52 +2529,59 @@ export default function AdminPortal() {
                             )}
 
                             {selectedHostApp.status === 'approved' && (
-                              <div className="space-y-3 pt-4 border-t border-border/40">
-                                <div className="flex justify-between items-center">
-                                  <span className="text-[10px] font-black text-muted-foreground uppercase">Admin Account Controls</span>
-                                </div>
+                               <div className="space-y-3 pt-4 border-t border-border/40">
+                                 <div className="flex justify-between items-center">
+                                   <span className="text-[10px] font-black text-muted-foreground uppercase">Admin Account Controls</span>
+                                   <button
+                                     onClick={() => openQuotaModal(selectedHostApp)}
+                                     className="text-xs font-bold text-primary hover:underline flex items-center space-x-1 cursor-pointer"
+                                   >
+                                     <Settings className="w-3.5 h-3.5" />
+                                     <span>Edit Custom Quotas</span>
+                                   </button>
+                                 </div>
 
-                                <div className="grid grid-cols-2 gap-3">
-                                  <button
-                                    onClick={async () => {
-                                      try {
-                                        const nextState = !selectedHostApp.isPaused;
-                                        await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, { isPaused: nextState }, { headers: { Authorization: `Bearer ${token}` } });
-                                        setSelectedHostApp(prev => ({ ...prev, isPaused: nextState }));
-                                        fetchHosts(token);
-                                      } catch (e) {
-                                        console.error(e);
-                                      }
-                                    }}
-                                    className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer border ${selectedHostApp.isPaused
-                                      ? 'bg-amber-500 text-white border-amber-600'
-                                      : 'bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20'
-                                      }`}
-                                  >
-                                    <span>{selectedHostApp.isPaused ? 'Unpause Host' : 'Pause Host'}</span>
-                                  </button>
+                                 <div className="grid grid-cols-2 gap-3">
+                                   <button
+                                     onClick={async () => {
+                                       try {
+                                         const nextState = !selectedHostApp.isPaused;
+                                         await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, { isPaused: nextState }, { headers: { Authorization: `Bearer ${token}` } });
+                                         setSelectedHostApp(prev => ({ ...prev, isPaused: nextState }));
+                                         fetchHosts(token);
+                                       } catch (e) {
+                                         console.error(e);
+                                       }
+                                     }}
+                                     className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer border ${selectedHostApp.isPaused
+                                       ? 'bg-amber-500 text-white border-amber-600'
+                                       : 'bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20'
+                                       }`}
+                                   >
+                                     <span>{selectedHostApp.isPaused ? 'Unpause Host' : 'Pause Host'}</span>
+                                   </button>
 
-                                  <button
-                                    onClick={async () => {
-                                      try {
-                                        const nextState = !selectedHostApp.isRevoked;
-                                        await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, { isRevoked: nextState }, { headers: { Authorization: `Bearer ${token}` } });
-                                        setSelectedHostApp(prev => ({ ...prev, isRevoked: nextState }));
-                                        fetchHosts(token);
-                                      } catch (e) {
-                                        console.error(e);
-                                      }
-                                    }}
-                                    className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer border ${selectedHostApp.isRevoked
-                                      ? 'bg-destructive text-white border-destructive'
-                                      : 'bg-destructive/10 text-destructive border-destructive/20 hover:bg-destructive/20'
-                                      }`}
-                                  >
-                                    <span>{selectedHostApp.isRevoked ? 'Unrevoke Host' : 'Revoke Host'}</span>
-                                  </button>
-                                </div>
-                              </div>
-                            )}
+                                   <button
+                                     onClick={async () => {
+                                       try {
+                                         const nextState = !selectedHostApp.isRevoked;
+                                         await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, { isRevoked: nextState }, { headers: { Authorization: `Bearer ${token}` } });
+                                         setSelectedHostApp(prev => ({ ...prev, isRevoked: nextState }));
+                                         fetchHosts(token);
+                                       } catch (e) {
+                                         console.error(e);
+                                       }
+                                     }}
+                                     className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer border ${selectedHostApp.isRevoked
+                                       ? 'bg-destructive text-white border-destructive'
+                                       : 'bg-destructive/10 text-destructive border-destructive/20 hover:bg-destructive/20'
+                                       }`}
+                                   >
+                                     <span>{selectedHostApp.isRevoked ? 'Unrevoke Host' : 'Revoke Host'}</span>
+                                   </button>
+                                 </div>
+                               </div>
+                             )}
                           </div>
                         </div>
                       </div>
@@ -3878,6 +3926,111 @@ export default function AdminPortal() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Custom Quota Override Modal */}
+      {isQuotaModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md space-y-5 shadow-2xl animate-fade-in">
+            <div className="flex justify-between items-center border-b border-border/40 pb-3">
+              <h4 className="font-outfit text-base font-black text-foreground uppercase tracking-wider">
+                Edit Custom Quotas ({selectedHostApp?.outletName})
+              </h4>
+              <button
+                onClick={() => setIsQuotaModalOpen(false)}
+                className="p-1 rounded-lg hover:bg-muted text-muted-foreground transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs font-semibold">
+              <p className="text-muted-foreground text-[11px]">
+                Leave blank to use system defaults (2 Video / 4 Daily; 10 Image / 15 Daily; 3 Wall Screen / 6 Daily).
+              </p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-muted-foreground">Max Video Slots</label>
+                  <input
+                    type="number"
+                    placeholder="Default: 2"
+                    value={quotaForm.customMaxVideoSlots}
+                    onChange={(e) => setQuotaForm(prev => ({ ...prev, customMaxVideoSlots: e.target.value }))}
+                    className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-muted-foreground">Daily Video Changes</label>
+                  <input
+                    type="number"
+                    placeholder="Default: 4"
+                    value={quotaForm.customDailyVideoQuota}
+                    onChange={(e) => setQuotaForm(prev => ({ ...prev, customDailyVideoQuota: e.target.value }))}
+                    className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-muted-foreground">Max Image Slots</label>
+                  <input
+                    type="number"
+                    placeholder="Default: 10"
+                    value={quotaForm.customMaxImageSlots}
+                    onChange={(e) => setQuotaForm(prev => ({ ...prev, customMaxImageSlots: e.target.value }))}
+                    className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-muted-foreground">Daily Image Changes</label>
+                  <input
+                    type="number"
+                    placeholder="Default: 15"
+                    value={quotaForm.customDailyImageQuota}
+                    onChange={(e) => setQuotaForm(prev => ({ ...prev, customDailyImageQuota: e.target.value }))}
+                    className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-muted-foreground">Max Wall Screen Slots</label>
+                  <input
+                    type="number"
+                    placeholder="Default: 3"
+                    value={quotaForm.customMaxScreenSlots}
+                    onChange={(e) => setQuotaForm(prev => ({ ...prev, customMaxScreenSlots: e.target.value }))}
+                    className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-muted-foreground">Daily Screen Changes</label>
+                  <input
+                    type="number"
+                    placeholder="Default: 6"
+                    value={quotaForm.customDailyScreenQuota}
+                    onChange={(e) => setQuotaForm(prev => ({ ...prev, customDailyScreenQuota: e.target.value }))}
+                    className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-3 border-t border-border/40">
+              <button
+                onClick={() => setIsQuotaModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-muted-foreground hover:bg-muted transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveQuotas}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold text-xs px-5 py-2 rounded-xl transition-all shadow-md cursor-pointer"
+              >
+                Save Quota Overrides
+              </button>
+            </div>
           </div>
         </div>
       )}
