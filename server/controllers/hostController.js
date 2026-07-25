@@ -192,6 +192,8 @@ class HostController {
         tabletQuantity: parsedTabletQty,
         requestScreen: isRequestingScreen,
         screenQuantity: parsedScreenQty,
+        adMode: req.body.adMode || 'open',
+        allowOpenAds: req.body.allowOpenAds !== undefined ? !!req.body.allowOpenAds : true,
         status: 'pending'
       });
 
@@ -274,6 +276,8 @@ class HostController {
       application.contactPerson = contactPerson;
       application.phone = phone;
       application.email = email;
+      if (req.body.adMode !== undefined) application.adMode = req.body.adMode;
+      if (req.body.allowOpenAds !== undefined) application.allowOpenAds = !!req.body.allowOpenAds;
 
       await application.save();
 
@@ -964,6 +968,369 @@ class HostController {
     } catch (error) {
       console.error('verifyPassword Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to verify password' });
+    }
+  }
+
+  /**
+   * Helper: Check and update 2:00 AM IST daily quota reset
+   */
+  async check2AMQuotaReset(hostApp) {
+    if (!hostApp) return;
+    const now = new Date();
+    // Calculate IST time (UTC + 5:30)
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(now.getTime() + istOffset);
+
+    // Calculate 2 AM IST today
+    const istToday2AM = new Date(istNow);
+    istToday2AM.setUTCHours(2, 0, 0, 0);
+
+    let last2AMCutoff = istToday2AM;
+    if (istNow < istToday2AM) {
+      last2AMCutoff = new Date(istToday2AM.getTime() - 24 * 60 * 60 * 1000);
+    }
+
+    const lastReset = hostApp.lastQuotaResetDate ? new Date(hostApp.lastQuotaResetDate) : new Date(0);
+    if (lastReset < last2AMCutoff) {
+      const defaultVideoChanges = hostApp.customDailyVideoQuota !== null && hostApp.customDailyVideoQuota !== undefined
+        ? hostApp.customDailyVideoQuota
+        : 4;
+      const defaultImageChanges = hostApp.customDailyImageQuota !== null && hostApp.customDailyImageQuota !== undefined
+        ? hostApp.customDailyImageQuota
+        : 15;
+      const defaultScreenChanges = hostApp.customDailyScreenQuota !== null && hostApp.customDailyScreenQuota !== undefined
+        ? hostApp.customDailyScreenQuota
+        : 6;
+
+      hostApp.dailyVideoChangesRemaining = defaultVideoChanges;
+      hostApp.dailyImageChangesRemaining = defaultImageChanges;
+      hostApp.dailyScreenChangesRemaining = defaultScreenChanges;
+      hostApp.lastQuotaResetDate = now;
+      await hostApp.save();
+    }
+  }
+
+  /**
+   * Fetch active venue promos and quota stats for merchant outlet
+   */
+  async getHostPromos(req, res) {
+    const VenuePromo = require('../models/VenuePromo');
+    const HostApplication = require('../models/HostApplication');
+    const { hostApplicationId } = req.query || {};
+
+    try {
+      let hostApp = null;
+      if (hostApplicationId) {
+        hostApp = await HostApplication.findById(hostApplicationId);
+      } else {
+        hostApp = await HostApplication.findOne({ userId: req.user.uid, status: 'approved' });
+      }
+
+      if (!hostApp) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+
+      await this.check2AMQuotaReset(hostApp);
+
+      const promos = await VenuePromo.find({ hostApplicationId: hostApp._id }).sort({ slotType: 1, slotIndex: 1 });
+
+      const maxVideoSlots = hostApp.customMaxVideoSlots !== null && hostApp.customMaxVideoSlots !== undefined ? hostApp.customMaxVideoSlots : 2;
+      const maxImageSlots = hostApp.customMaxImageSlots !== null && hostApp.customMaxImageSlots !== undefined ? hostApp.customMaxImageSlots : 10;
+      const maxScreenSlots = hostApp.customMaxScreenSlots !== null && hostApp.customMaxScreenSlots !== undefined ? hostApp.customMaxScreenSlots : 3;
+
+      const dailyVideoQuota = hostApp.customDailyVideoQuota !== null && hostApp.customDailyVideoQuota !== undefined ? hostApp.customDailyVideoQuota : 4;
+      const dailyImageQuota = hostApp.customDailyImageQuota !== null && hostApp.customDailyImageQuota !== undefined ? hostApp.customDailyImageQuota : 15;
+      const dailyScreenQuota = hostApp.customDailyScreenQuota !== null && hostApp.customDailyScreenQuota !== undefined ? hostApp.customDailyScreenQuota : 6;
+
+      return res.status(200).send({
+        success: true,
+        data: {
+          promos,
+          quotaStats: {
+            maxVideoSlots,
+            maxImageSlots,
+            maxScreenSlots,
+            dailyVideoQuota,
+            dailyImageQuota,
+            dailyScreenQuota,
+            dailyVideoChangesRemaining: hostApp.dailyVideoChangesRemaining,
+            dailyImageChangesRemaining: hostApp.dailyImageChangesRemaining,
+            dailyScreenChangesRemaining: hostApp.dailyScreenChangesRemaining,
+            isPaused: !!hostApp.isPaused,
+            isRevoked: !!hostApp.isRevoked
+          }
+        }
+      });
+    } catch (error) {
+      console.error('getHostPromos Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch host promos' });
+    }
+  }
+
+  /**
+   * Upload host promo media file into isolated server/uploads/host_promos/[hostApplicationId]/
+   */
+  async uploadHostPromoMedia(req, res) {
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    const sharp = require('sharp');
+    const ffmpeg = require('fluent-ffmpeg');
+    const { pipeline } = require('stream/promises');
+    const { v4: uuidv4 } = require('uuid');
+    const HostApplication = require('../models/HostApplication');
+
+    const hostApplicationId = req.headers['x-host-application-id'] || req.query.hostApplicationId;
+    if (!hostApplicationId) {
+      return res.status(400).send({ success: false, message: 'Host application ID required' });
+    }
+
+    try {
+      const hostApp = await HostApplication.findById(hostApplicationId);
+      if (!hostApp) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+
+      if (hostApp.isPaused || hostApp.isRevoked) {
+        return res.status(403).send({ success: false, message: 'Account is paused or revoked by platform admin' });
+      }
+
+      const filenameHeader = req.headers['x-filename'] || 'file.mp4';
+      const ext = path.extname(filenameHeader).toLowerCase() || '.mp4';
+      const isVideo = ['.mp4', '.webm', '.mov', '.avi'].includes(ext);
+      const isImage = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
+
+      if (!isVideo && !isImage) {
+        return res.status(400).send({ success: false, message: 'Unsupported file format' });
+      }
+
+      const uploadsDir = path.join(__dirname, '..', 'uploads', 'host_promos', hostApplicationId.toString());
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+
+      if (isImage) {
+        const uniqueFilename = `promo_img_${uuidv4().replace(/-/g, '').slice(0, 16)}.webp`;
+        const filePath = path.join(uploadsDir, uniqueFilename);
+
+        const sharpStream = sharp().resize(1920, 1080, { fit: 'inside', withoutEnlargement: true }).webp({ quality: 85 });
+        await pipeline(req.body, sharpStream, fs.createWriteStream(filePath));
+
+        return res.status(200).send({
+          success: true,
+          data: {
+            mediaUrl: `/uploads/host_promos/${hostApplicationId}/${uniqueFilename}`,
+            mediaType: 'image',
+            durationSeconds: 15
+          }
+        });
+      } else {
+        // Video upload with ffmpeg transcoding & temp file cleanup
+        const uniqueFilename = `promo_vid_${uuidv4().replace(/-/g, '').slice(0, 16)}.mp4`;
+        const filePath = path.join(uploadsDir, uniqueFilename);
+        const tempPath = path.join(os.tmpdir(), `tmp-host-promo-${Date.now()}${ext}`);
+
+        try {
+          await pipeline(req.body, fs.createWriteStream(tempPath));
+
+          // Transcode video using ffmpeg
+          await new Promise((resolve, reject) => {
+            ffmpeg(tempPath)
+              .videoCodec('libx264')
+              .outputOptions(['-profile:v baseline', '-level 3.1', '-pix_fmt yuv420p', '-movflags +faststart'])
+              .audioCodec('aac')
+              .audioChannels(2)
+              .on('end', resolve)
+              .on('error', reject)
+              .save(filePath);
+          });
+
+          return res.status(200).send({
+            success: true,
+            data: {
+              mediaUrl: `/uploads/host_promos/${hostApplicationId}/${uniqueFilename}`,
+              mediaType: 'video',
+              durationSeconds: 30
+            }
+          });
+        } finally {
+          // Strictly clean up temp file after transcoding
+          if (fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch (e) {}
+          }
+        }
+      }
+    } catch (error) {
+      console.error('uploadHostPromoMedia Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to upload and process promo media' });
+    }
+  }
+
+  /**
+   * Stream Host Promos: Batch update slots, clean up old files, deduct quota & notify WebSocket
+   */
+  async streamHostPromos(req, res) {
+    const fs = require('fs');
+    const path = require('path');
+    const VenuePromo = require('../models/VenuePromo');
+    const HostApplication = require('../models/HostApplication');
+    const { hostApplicationId, slots } = req.body || {};
+
+    if (!hostApplicationId || !Array.isArray(slots)) {
+      return res.status(400).send({ success: false, message: 'Invalid payload' });
+    }
+
+    try {
+      const hostApp = await HostApplication.findById(hostApplicationId);
+      if (!hostApp) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+
+      if (hostApp.isPaused || hostApp.isRevoked) {
+        return res.status(403).send({ success: false, message: 'Account is paused or revoked by admin' });
+      }
+
+      await this.check2AMQuotaReset(hostApp);
+
+      let videoChangesConsumed = 0;
+      let imageChangesConsumed = 0;
+      let screenChangesConsumed = 0;
+
+      for (const slot of slots) {
+        const { slotType, slotIndex, title, mediaUrl, mediaType, isDeleted } = slot;
+
+        const existingPromo = await VenuePromo.findOne({
+          hostApplicationId: hostApp._id,
+          slotType,
+          slotIndex
+        });
+
+        if (isDeleted) {
+          if (existingPromo) {
+            // Delete physical file from disk
+            if (existingPromo.mediaUrl && existingPromo.mediaUrl.startsWith('/uploads/host_promos/')) {
+              const relPath = existingPromo.mediaUrl.replace('/uploads/host_promos/', '');
+              const fullPath = path.join(__dirname, '..', 'uploads', 'host_promos', relPath);
+              if (fs.existsSync(fullPath)) {
+                try { fs.unlinkSync(fullPath); } catch (e) { console.error('Unlink error:', e.message); }
+              }
+            }
+            await VenuePromo.deleteOne({ _id: existingPromo._id });
+          }
+          continue;
+        }
+
+        // If media changed, unlink old media file and deduct quota
+        const isNewMedia = !existingPromo || existingPromo.mediaUrl !== mediaUrl;
+        if (isNewMedia && mediaUrl) {
+          if (slotType === 'video') {
+            if (hostApp.dailyVideoChangesRemaining - videoChangesConsumed <= 0) {
+              return res.status(429).send({ success: false, message: 'Daily video change quota exhausted! Resets at 2:00 AM IST.' });
+            }
+            videoChangesConsumed++;
+          } else if (slotType === 'screen') {
+            if (hostApp.dailyScreenChangesRemaining - screenChangesConsumed <= 0) {
+              return res.status(429).send({ success: false, message: 'Daily screen ad change quota exhausted! Resets at 2:00 AM IST.' });
+            }
+            screenChangesConsumed++;
+          } else {
+            if (hostApp.dailyImageChangesRemaining - imageChangesConsumed <= 0) {
+              return res.status(429).send({ success: false, message: 'Daily image change quota exhausted! Resets at 2:00 AM IST.' });
+            }
+            imageChangesConsumed++;
+          }
+
+          if (existingPromo && existingPromo.mediaUrl && existingPromo.mediaUrl.startsWith('/uploads/host_promos/')) {
+            const relPath = existingPromo.mediaUrl.replace('/uploads/host_promos/', '');
+            const fullPath = path.join(__dirname, '..', 'uploads', 'host_promos', relPath);
+            if (fs.existsSync(fullPath)) {
+              try { fs.unlinkSync(fullPath); } catch (e) { console.error('Unlink error:', e.message); }
+            }
+          }
+
+          if (existingPromo) {
+            existingPromo.mediaUrl = mediaUrl;
+            existingPromo.mediaType = mediaType;
+            existingPromo.title = title || '';
+            existingPromo.isStreaming = true;
+            await existingPromo.save();
+          } else {
+            await VenuePromo.create({
+              hostApplicationId: hostApp._id,
+              slotType,
+              slotIndex,
+              title: title || '',
+              mediaUrl,
+              mediaType,
+              isStreaming: true
+            });
+          }
+        } else if (existingPromo) {
+          existingPromo.title = title || '';
+          await existingPromo.save();
+        }
+      }
+
+      // Deduct consumed daily quota
+      hostApp.dailyVideoChangesRemaining = Math.max(0, hostApp.dailyVideoChangesRemaining - videoChangesConsumed);
+      hostApp.dailyImageChangesRemaining = Math.max(0, hostApp.dailyImageChangesRemaining - imageChangesConsumed);
+      hostApp.dailyScreenChangesRemaining = Math.max(0, hostApp.dailyScreenChangesRemaining - screenChangesConsumed);
+      await hostApp.save();
+
+      // Emit WebSocket push signal to connected venue devices
+      if (global.deviceSockets) {
+        const payload = JSON.stringify({ event: 'reload_promos', hostApplicationId: hostApp._id.toString() });
+        for (const [deviceId, socket] of global.deviceSockets.entries()) {
+          try { socket.send(payload); } catch (e) {}
+        }
+      }
+
+      return res.status(200).send({
+        success: true,
+        message: 'Venue promos updated and streaming on devices!',
+        data: {
+          dailyVideoChangesRemaining: hostApp.dailyVideoChangesRemaining,
+          dailyImageChangesRemaining: hostApp.dailyImageChangesRemaining
+        }
+      });
+    } catch (error) {
+      console.error('streamHostPromos Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to stream venue promos' });
+    }
+  }
+
+  /**
+   * Delete a specific promo slot and unlink its file
+   */
+  async deleteHostPromoSlot(req, res) {
+    const fs = require('fs');
+    const path = require('path');
+    const VenuePromo = require('../models/VenuePromo');
+    const HostApplication = require('../models/HostApplication');
+    const { hostApplicationId, slotType, slotIndex } = req.body || {};
+
+    try {
+      const hostApp = await HostApplication.findById(hostApplicationId);
+      if (!hostApp) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+
+      const existingPromo = await VenuePromo.findOne({ hostApplicationId: hostApp._id, slotType, slotIndex });
+      if (existingPromo) {
+        if (existingPromo.mediaUrl && existingPromo.mediaUrl.startsWith('/uploads/host_promos/')) {
+          const relPath = existingPromo.mediaUrl.replace('/uploads/host_promos/', '');
+          const fullPath = path.join(__dirname, '..', 'uploads', 'host_promos', relPath);
+          if (fs.existsSync(fullPath)) {
+            try { fs.unlinkSync(fullPath); } catch (e) {}
+          }
+        }
+        await VenuePromo.deleteOne({ _id: existingPromo._id });
+      }
+
+      return res.status(200).send({ success: true, message: 'Promo slot cleared and file unlinked' });
+    } catch (error) {
+      console.error('deleteHostPromoSlot Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to delete promo slot' });
     }
   }
 }

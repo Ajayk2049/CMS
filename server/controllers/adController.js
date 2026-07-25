@@ -181,8 +181,8 @@ class AdController {
 
     try {
       const apps = await HostApplication.find(
-        { state, city, status: 'approved' },
-        'outletName outletDescription doorNo street city state zipCode requestTablet tabletQuantity requestScreen screenQuantity'
+        { state, city, status: 'approved', allowOpenAds: { $ne: false } },
+        'outletName requestTablet tabletQuantity requestScreen screenQuantity'
       );
       
       const outlets = [];
@@ -191,12 +191,6 @@ class AdController {
           outlets.push({
             _id: app._id,
             outletName: app.outletName,
-            outletDescription: app.outletDescription,
-            doorNo: app.doorNo,
-            street: app.street,
-            city: app.city,
-            state: app.state,
-            zipCode: app.zipCode,
             deviceType: 'tablet',
             quantity: app.tabletQuantity
           });
@@ -205,12 +199,6 @@ class AdController {
           outlets.push({
             _id: app._id,
             outletName: app.outletName,
-            outletDescription: app.outletDescription,
-            doorNo: app.doorNo,
-            street: app.street,
-            city: app.city,
-            state: app.state,
-            zipCode: app.zipCode,
             deviceType: 'screen',
             quantity: app.screenQuantity
           });
@@ -253,6 +241,7 @@ class AdController {
       adDurationDays,
       frequency,
       mediaUrl,
+      adCategory,
       redirectUrl
     } = req.body || {};
 
@@ -352,6 +341,7 @@ class AdController {
         frequency,
         amount: totalAmount,
         mediaUrl,
+        adCategory: adCategory || 'Other',
         paymentStatus: 'pending',
         approvalStatus: 'pending',
         transactionId,

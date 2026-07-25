@@ -81,6 +81,67 @@ const HostApplicationSchema = new mongoose.Schema({
     default: null,
     trim: true
   },
+  adMode: {
+    type: String,
+    enum: ['open', 'closed'],
+    default: 'open'
+  },
+  allowOpenAds: {
+    type: Boolean,
+    default: true,
+    index: true
+  },
+  // Modular Quota Overrides (null means system default: 2 videos, 10 images, 3 screens)
+  customMaxVideoSlots: {
+    type: Number,
+    default: null
+  },
+  customMaxImageSlots: {
+    type: Number,
+    default: null
+  },
+  customMaxScreenSlots: {
+    type: Number,
+    default: null
+  },
+  customDailyVideoQuota: {
+    type: Number,
+    default: null
+  },
+  customDailyImageQuota: {
+    type: Number,
+    default: null
+  },
+  customDailyScreenQuota: {
+    type: Number,
+    default: null
+  },
+  // Daily Change Trackers & 2:00 AM IST Reset Date
+  dailyVideoChangesRemaining: {
+    type: Number,
+    default: 4
+  },
+  dailyImageChangesRemaining: {
+    type: Number,
+    default: 15
+  },
+  dailyScreenChangesRemaining: {
+    type: Number,
+    default: 6
+  },
+  lastQuotaResetDate: {
+    type: Date,
+    default: Date.now
+  },
+  // Admin Account Status Flags
+  isPaused: {
+    type: Boolean,
+    default: false
+  },
+  isRevoked: {
+    type: Boolean,
+    default: false
+  },
   createdAt: {
     type: Date,
     default: Date.now

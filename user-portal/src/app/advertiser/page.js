@@ -161,6 +161,7 @@ export default function AdvertiserDashboard() {
   const [quantity, setQuantity] = useState('1');
   const [adDurationDays, setAdDurationDays] = useState(7);
   const [frequency, setFrequency] = useState('hourly');
+  const [adCategory, setAdCategory] = useState('Electronics');
 
   const getFrequencyLabel = (freq) => {
     if (!freq) return 'Unknown';
@@ -596,6 +597,7 @@ export default function AdvertiserDashboard() {
           adDurationDays: parseInt(adDurationDays, 10),
           frequency,
           mediaUrl,
+          adCategory,
           redirectUrl
         },
         {
@@ -1334,6 +1336,24 @@ export default function AdvertiserDashboard() {
                       ))}
                     </select>
                   </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Ad Category</label>
+                    <select
+                      value={adCategory}
+                      onChange={(e) => setAdCategory(e.target.value)}
+                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
+                    >
+                      <option value="Electronics">Electronics & Gadgets</option>
+                      <option value="RealEstate">Real Estate & Housing</option>
+                      <option value="Automotive">Automotive & Vehicles</option>
+                      <option value="Beverages">Beverages & Soft Drinks (Coke, Pepsi)</option>
+                      <option value="Fashion">Fashion & Apparel</option>
+                      <option value="Finance">Finance & Banking</option>
+                      <option value="Entertainment">Entertainment & Media</option>
+                      <option value="Other">Other Commercial Brands</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Right Column: Tabbed Media File Asset Upload (col-span-7) */}
@@ -1385,10 +1405,10 @@ export default function AdvertiserDashboard() {
                       ) : (
                         <>
                           {/* Media Specifications Disclaimer Banner */}
-                          <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs font-medium space-y-1 text-foreground">
+                          <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs font-medium space-y-2 text-foreground">
                             <div className="flex items-center space-x-1.5 text-blue-600 dark:text-blue-400 font-bold uppercase text-[10px] tracking-wider">
                               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                              <span>Media Specs & Requirements ({selectedDeviceType === 'tablet' ? 'Tablet Kiosk' : 'Digital Screen / TV'})</span>
+                              <span>Media Specs & Content Policy ({selectedDeviceType === 'tablet' ? 'Tablet Kiosk' : 'Digital Screen / TV'})</span>
                             </div>
                             <div className="text-[11px] text-muted-foreground leading-relaxed pl-5 space-y-0.5 font-semibold">
                               {mediaTypeTab === 'videos' ? (
@@ -1404,6 +1424,9 @@ export default function AdvertiserDashboard() {
                                   <p>• <strong>Preferred Resolution</strong>: <strong>{selectedDeviceType === 'tablet' ? '800 × 1280 px' : '1920 × 1080 px Full HD'}</strong></p>
                                 </>
                               )}
+                            </div>
+                            <div className="pt-2 border-t border-blue-500/20 text-[10px] text-amber-600 dark:text-amber-400 font-semibold space-y-0.5 pl-5">
+                              <p>⚠️ <strong>Prohibited Content Policy</strong>: Restaurants, rival dining venues, fast-food chains (Dominos, KFC), and food truck ads are strictly prohibited on dining kiosks. Misclassified ads will be rejected during manual admin review.</p>
                             </div>
                           </div>
 

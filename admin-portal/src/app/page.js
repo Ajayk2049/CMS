@@ -2210,7 +2210,12 @@ export default function AdminPortal() {
                                   <div>{booking.advertiserId?.name || booking.advertiserId?.phone || 'Advertiser'}</div>
                                   <div className="text-[10px] text-muted-foreground font-medium">{booking.city}, {booking.state}</div>
                                 </td>
-                                <td className="p-4 font-mono font-bold text-primary">{booking.bookingId}</td>
+                                <td className="p-4 font-mono font-bold text-primary">
+                                  <div>{booking.bookingId}</div>
+                                  <span className="inline-block text-[9px] font-bold px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 mt-1 uppercase">
+                                    {booking.adCategory || 'Other'}
+                                  </span>
+                                </td>
                                 <td className="p-4 text-center">
                                   <button
                                     onClick={() => {
@@ -2353,14 +2358,22 @@ export default function AdminPortal() {
                                   </div>
                                 </td>
                                 <td className="p-4">
-                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded capitalize ${app.status === 'approved'
-                                    ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
-                                    : app.status === 'rejected'
-                                      ? 'bg-destructive/10 text-destructive border border-destructive/20'
-                                      : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'
-                                    }`}>
-                                    {app.status}
-                                  </span>
+                                  <div className="flex flex-col space-y-1 items-start">
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded capitalize ${app.status === 'approved'
+                                      ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
+                                      : app.status === 'rejected'
+                                        ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                                        : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'
+                                      }`}>
+                                      {app.status}
+                                    </span>
+                                    <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded ${app.allowOpenAds !== false
+                                      ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20'
+                                      : 'bg-purple-500/10 text-purple-500 border border-purple-500/20'
+                                      }`}>
+                                      {app.allowOpenAds !== false ? 'OPEN ADS' : 'PRIVATE'}
+                                    </span>
+                                  </div>
                                 </td>
                                 <td className="p-4 text-right pr-6 text-muted-foreground font-medium">
                                   {new Date(app.createdAt).toLocaleDateString()}
@@ -2471,6 +2484,54 @@ export default function AdminPortal() {
                                   <X className="w-4 h-4" />
                                   <span>Reject Request</span>
                                 </button>
+                              </div>
+                            )}
+
+                            {selectedHostApp.status === 'approved' && (
+                              <div className="space-y-3 pt-4 border-t border-border/40">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-[10px] font-black text-muted-foreground uppercase">Admin Account Controls</span>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        const nextState = !selectedHostApp.isPaused;
+                                        await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, { isPaused: nextState }, { headers: { Authorization: `Bearer ${token}` } });
+                                        setSelectedHostApp(prev => ({ ...prev, isPaused: nextState }));
+                                        fetchHosts(token);
+                                      } catch (e) {
+                                        console.error(e);
+                                      }
+                                    }}
+                                    className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer border ${selectedHostApp.isPaused
+                                      ? 'bg-amber-500 text-white border-amber-600'
+                                      : 'bg-amber-500/10 text-amber-500 border-amber-500/20 hover:bg-amber-500/20'
+                                      }`}
+                                  >
+                                    <span>{selectedHostApp.isPaused ? 'Unpause Host' : 'Pause Host'}</span>
+                                  </button>
+
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        const nextState = !selectedHostApp.isRevoked;
+                                        await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, { isRevoked: nextState }, { headers: { Authorization: `Bearer ${token}` } });
+                                        setSelectedHostApp(prev => ({ ...prev, isRevoked: nextState }));
+                                        fetchHosts(token);
+                                      } catch (e) {
+                                        console.error(e);
+                                      }
+                                    }}
+                                    className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer border ${selectedHostApp.isRevoked
+                                      ? 'bg-destructive text-white border-destructive'
+                                      : 'bg-destructive/10 text-destructive border-destructive/20 hover:bg-destructive/20'
+                                      }`}
+                                  >
+                                    <span>{selectedHostApp.isRevoked ? 'Unrevoke Host' : 'Revoke Host'}</span>
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>

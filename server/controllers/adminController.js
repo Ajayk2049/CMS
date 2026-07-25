@@ -152,6 +152,43 @@ class AdminController {
   }
 
   /**
+   * Update Host Application Status & Custom Quota Overrides (Pause / Revoke / Quotas)
+   */
+  async updateHostStatusAndQuotas(req, res) {
+    const { hostApplicationId } = req.params || {};
+    const { isPaused, isRevoked, customMaxVideoSlots, customMaxImageSlots, customDailyVideoQuota, customDailyImageQuota } = req.body || {};
+
+    try {
+      const HostApplication = require('../models/HostApplication');
+      const app = await HostApplication.findById(hostApplicationId);
+      if (!app) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+
+      if (isPaused !== undefined) app.isPaused = !!isPaused;
+      if (isRevoked !== undefined) app.isRevoked = !!isRevoked;
+      if (customMaxVideoSlots !== undefined) app.customMaxVideoSlots = customMaxVideoSlots !== '' && customMaxVideoSlots !== null ? parseInt(customMaxVideoSlots, 10) : null;
+      if (customMaxImageSlots !== undefined) app.customMaxImageSlots = customMaxImageSlots !== '' && customMaxImageSlots !== null ? parseInt(customMaxImageSlots, 10) : null;
+      if (customMaxScreenSlots !== undefined) app.customMaxScreenSlots = customMaxScreenSlots !== '' && customMaxScreenSlots !== null ? parseInt(customMaxScreenSlots, 10) : null;
+
+      if (customDailyVideoQuota !== undefined) app.customDailyVideoQuota = customDailyVideoQuota !== '' && customDailyVideoQuota !== null ? parseInt(customDailyVideoQuota, 10) : null;
+      if (customDailyImageQuota !== undefined) app.customDailyImageQuota = customDailyImageQuota !== '' && customDailyImageQuota !== null ? parseInt(customDailyImageQuota, 10) : null;
+      if (customDailyScreenQuota !== undefined) app.customDailyScreenQuota = customDailyScreenQuota !== '' && customDailyScreenQuota !== null ? parseInt(customDailyScreenQuota, 10) : null;
+
+      await app.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'Host application status & quotas updated successfully',
+        data: app
+      });
+    } catch (error) {
+      console.error('updateHostStatusAndQuotas Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to update host status & quotas' });
+    }
+  }
+
+  /**
    * Get all ad bookings
    */
   async getAdBookings(req, res) {

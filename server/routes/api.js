@@ -77,6 +77,10 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.post('/host/orders/service-waiter', hostController.serviceWaiter);
     merchantRoutes.post('/host/request-more-devices', hostController.requestMoreDevices);
     merchantRoutes.post('/host/verify-password', hostController.verifyPassword);
+    merchantRoutes.get('/host/promos', hostController.getHostPromos.bind(hostController));
+    merchantRoutes.post('/host/promos/upload-media', { bodyLimit: 104857600 }, hostController.uploadHostPromoMedia.bind(hostController));
+    merchantRoutes.post('/host/promos/stream', hostController.streamHostPromos.bind(hostController));
+    merchantRoutes.post('/host/promos/delete-slot', hostController.deleteHostPromoSlot.bind(hostController));
     next();
   });
 
@@ -112,6 +116,7 @@ function registerRoutes(fastify, options, done) {
 
     adminRoutes.get('/admin/hosts', adminController.getHostApplications);
     adminRoutes.post('/admin/hosts/review', adminController.reviewHostApplication);
+    adminRoutes.put('/admin/hosts/:hostApplicationId/status', adminController.updateHostStatusAndQuotas.bind(adminController));
     adminRoutes.get('/admin/bookings', adminController.getAdBookings);
     adminRoutes.post('/admin/bookings/review', adminController.reviewAdBooking);
     adminRoutes.put('/admin/bookings/revoke/:bookingId', adminController.revokeBooking);

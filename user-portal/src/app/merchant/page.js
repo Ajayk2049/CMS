@@ -32,7 +32,9 @@ import {
   AlertCircle,
   Percent,
   Lock,
-  Star
+  Star,
+  Video,
+  Upload
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -241,7 +243,9 @@ export default function MerchantDashboard() {
     requestTablet: false,
     tabletQuantity: '1',
     requestScreen: false,
-    screenQuantity: '1'
+    screenQuantity: '1',
+    adMode: 'open',
+    allowOpenAds: true
   });
 
   // Menu tab states
@@ -256,6 +260,24 @@ export default function MerchantDashboard() {
   const approvedOutlets = applications.filter(app => app.status === 'approved' && app.requestTablet);
   const hasApprovedVenue = applications.some(app => app.status === 'approved');
   const [devices, setDevices] = useState([]);
+
+  // Venue Promos Tab states
+  const [promosList, setPromosList] = useState([]);
+  const [promoQuotaStats, setPromoQuotaStats] = useState({
+    maxVideoSlots: 2,
+    maxImageSlots: 10,
+    maxScreenSlots: 3,
+    dailyVideoQuota: 4,
+    dailyImageQuota: 15,
+    dailyScreenQuota: 6,
+    dailyVideoChangesRemaining: 4,
+    dailyImageChangesRemaining: 15,
+    dailyScreenChangesRemaining: 6,
+    isPaused: false,
+    isRevoked: false
+  });
+  const [promoDraftSlots, setPromoDraftSlots] = useState({});
+  const [isStreamingPromos, setIsStreamingPromos] = useState(false);
 
   // Menu Modal and editing states
   const [isMenuModalOpen, setIsMenuModalOpen] = useState(false);
@@ -480,6 +502,9 @@ export default function MerchantDashboard() {
       if (selectedOutletId) {
         fetchPaymentConfig(token, selectedOutletId);
       }
+    }
+    if ((activeTab === 'promos' || selectedOutletId) && token) {
+      fetchHostPromos(selectedOutletId);
     }
   }, [activeTab, token, selectedOutletId]);
 
@@ -949,7 +974,9 @@ export default function MerchantDashboard() {
         requestTablet: !!form.requestTablet,
         tabletQuantity: form.requestTablet ? parseInt(form.tabletQuantity, 10) : 0,
         requestScreen: !!form.requestScreen,
-        screenQuantity: form.requestScreen ? parseInt(form.screenQuantity, 10) : 0
+        screenQuantity: form.requestScreen ? parseInt(form.screenQuantity, 10) : 0,
+        adMode: form.adMode || 'open',
+        allowOpenAds: form.allowOpenAds !== undefined ? !!form.allowOpenAds : true
       };
 
       await axios.post(`${API_BASE}/host/apply`, payload, {
@@ -1048,6 +1075,178 @@ export default function MerchantDashboard() {
       showToast('Menu categories updated successfully!', 'success');
     } catch (err) {
       showToast(err.response?.data?.message || 'Failed to save menu categories.', 'error');
+    }
+  };
+
+  const fetchHostPromos = async (outletId) => {
+    const targetOutlet = outletId || selectedOutletId;
+    if (!targetOutlet) return;
+    try {
+      const res = await axios.get(`${API_BASE}/host/promos?hostApplicationId=${targetOutlet}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        setPromosList(res.data.data.promos || []);
+        if (res.data.data.quotaStats) {
+          setPromoQuotaStats(res.data.data.quotaStats);
+        }
+        const draftMap = {};
+        (res.data.data.promos || []).forEach(p => {
+          draftMap[`${p.slotType}_${p.slotIndex}`] = {
+            title: p.title || '',
+            mediaUrl: p.mediaUrl || '',
+            mediaType: p.mediaType || p.slotType,
+            previewUrl: p.mediaUrl ? (p.mediaUrl.startsWith('http') ? p.mediaUrl : `${API_BASE.replace('/api/v1', '')}${p.mediaUrl}`) : '',
+            fileObj: null,
+            isModified: false,
+            isDeleted: false
+          };
+        });
+        setPromoDraftSlots(draftMap);
+      }
+    } catch (err) {
+      console.error('Failed to fetch host promos:', err);
+    }
+  };
+
+  const handleSelectPromoFile = (slotType, slotIndex, file) => {
+    if (!file) return;
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    const isVid = ['.mp4', '.webm', '.mov', '.avi'].includes(ext);
+    const isImg = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext);
+
+    if (slotType === 'image' && !isImg) {
+      showToast('Unsupported image format. Allowed: JPG, JPEG, PNG, WEBP.', 'error');
+      return;
+    }
+    if (slotType === 'video' && !isVid) {
+      showToast('Unsupported video format. Allowed: MP4, WEBM, MOV.', 'error');
+      return;
+    }
+    if (slotType === 'screen' && !isVid && !isImg) {
+      showToast('Unsupported media format. Allowed: MP4, WEBM, JPG, PNG, WEBP.', 'error');
+      return;
+    }
+
+    if (isVid && file.size > 104857600) {
+      showToast('Video size exceeds 100MB limit.', 'error');
+      return;
+    }
+    if (isImg && file.size > 10485760) {
+      showToast('Image size exceeds 10MB limit.', 'error');
+      return;
+    }
+
+    const localPreviewUrl = URL.createObjectURL(file);
+    const key = `${slotType}_${slotIndex}`;
+
+    setPromoDraftSlots(prev => ({
+      ...prev,
+      [key]: {
+        title: prev[key]?.title || (file.name.replace(/\.[^/.]+$/, '')),
+        mediaUrl: prev[key]?.mediaUrl || '',
+        mediaType: isVid ? 'video' : 'image',
+        previewUrl: localPreviewUrl,
+        fileObj: file,
+        isModified: true,
+        isDeleted: false
+      }
+    }));
+  };
+
+  const handleClearPromoSlot = (slotType, slotIndex) => {
+    const key = `${slotType}_${slotIndex}`;
+    setPromoDraftSlots(prev => ({
+      ...prev,
+      [key]: {
+        title: '',
+        mediaUrl: '',
+        mediaType: slotType,
+        previewUrl: '',
+        fileObj: null,
+        isModified: true,
+        isDeleted: true
+      }
+    }));
+  };
+
+  const handleStreamAds = async () => {
+    if (!selectedOutletId) {
+      showToast('Please select an outlet first.', 'error');
+      return;
+    }
+
+    const modifiedKeys = Object.keys(promoDraftSlots).filter(k => promoDraftSlots[k]?.isModified);
+    if (modifiedKeys.length === 0) {
+      showToast('No unsaved promo changes to stream.', 'info');
+      return;
+    }
+
+    setIsStreamingPromos(true);
+    try {
+      const slotsPayload = [];
+
+      for (const key of modifiedKeys) {
+        const item = promoDraftSlots[key];
+        const [slotType, slotIndexStr] = key.split('_');
+        const slotIndex = parseInt(slotIndexStr, 10);
+
+        if (item.isDeleted) {
+          slotsPayload.push({
+            slotType,
+            slotIndex,
+            isDeleted: true
+          });
+          continue;
+        }
+
+        let finalMediaUrl = item.mediaUrl;
+        if (item.fileObj) {
+          const arrayBuffer = await item.fileObj.arrayBuffer();
+          const uploadRes = await axios.post(`${API_BASE}/host/promos/upload-media`, arrayBuffer, {
+            headers: {
+              'Content-Type': item.fileObj.type || 'application/octet-stream',
+              'X-Filename': item.fileObj.name,
+              'X-Host-Application-Id': selectedOutletId,
+              'Authorization': `Bearer ${token}`
+            }
+          });
+
+          if (uploadRes.data.success && uploadRes.data.data.mediaUrl) {
+            finalMediaUrl = uploadRes.data.data.mediaUrl;
+          } else {
+            throw new Error(uploadRes.data.message || 'File upload failed');
+          }
+        }
+
+        slotsPayload.push({
+          slotType,
+          slotIndex,
+          title: item.title,
+          mediaUrl: finalMediaUrl,
+          mediaType: item.mediaType,
+          isDeleted: false
+        });
+      }
+
+      const streamRes = await axios.post(`${API_BASE}/host/promos/stream`, {
+        hostApplicationId: selectedOutletId,
+        slots: slotsPayload
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (streamRes.data.success) {
+        showToast('Venue promos updated & streaming live on devices!', 'success');
+        fetchHostPromos(selectedOutletId);
+      } else {
+        showToast(streamRes.data.message || 'Failed to stream promos.', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(err.response?.data?.message || err.message || 'Failed to stream promos.', 'error');
+    } finally {
+      setIsStreamingPromos(false);
     }
   };
 
@@ -1396,7 +1595,9 @@ export default function MerchantDashboard() {
       zipCode: appToEdit.zipCode || '',
       contactPerson: appToEdit.contactPerson || '',
       phone: appToEdit.phone || '',
-      email: appToEdit.email || ''
+      email: appToEdit.email || '',
+      adMode: appToEdit.adMode || 'open',
+      allowOpenAds: appToEdit.allowOpenAds !== undefined ? appToEdit.allowOpenAds : true
     });
     setEditAppZipError('');
     setEditAppError('');
@@ -1546,6 +1747,16 @@ export default function MerchantDashboard() {
                   >
                     <UtensilsCrossed className={`w-4 h-4  ${activeTab === 'menu' ? 'text-primary-foreground' : 'text-primary'}`} />
                     <span className="hidden sm:inline">Menu Manager</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('promos')}
+                    className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'promos'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                      }`}
+                  >
+                    <Megaphone className={`w-4 h-4 ${activeTab === 'promos' ? 'text-primary-foreground' : 'text-primary'}`} />
+                    <span className="hidden sm:inline">Venue Promos</span>
                   </button>
                   <button
                     onClick={() => setActiveTab('orders')}
@@ -1895,6 +2106,59 @@ export default function MerchantDashboard() {
                   </div>
                 </div>
 
+                {/* Venue Ad Mode Choice Section */}
+                <div className="space-y-3 border-t border-border/60 pt-4">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Select Venue Ad Mode & Service Plan</span>
+
+                  <div className="grid md:grid-cols-2 gap-4">
+                    {/* Open Ads Mode Option */}
+                    <div
+                      onClick={() => setForm({ ...form, allowOpenAds: true, adMode: 'open' })}
+                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${form.allowOpenAds
+                        ? 'bg-blue-500/10 border-blue-500/80 shadow-md ring-1 ring-blue-500/50'
+                        : 'bg-background/50 border-border/40 hover:border-border'
+                        }`}
+                    >
+                      <div className="flex items-center space-x-2.5 mb-1.5">
+                        <input
+                          type="radio"
+                          name="formAdMode"
+                          checked={form.allowOpenAds === true}
+                          onChange={() => setForm({ ...form, allowOpenAds: true, adMode: 'open' })}
+                          className="w-4 h-4 accent-blue-500 cursor-pointer"
+                        />
+                        <span className="text-xs font-bold text-foreground">Open Ads Mode (Recommended)</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed pl-6 font-semibold">
+                        Accept third-party brand advertisements on kiosk screens. Qualifies your venue for discounted/free hardware & SaaS platform tier.
+                      </p>
+                    </div>
+
+                    {/* Closed / Private Mode Option */}
+                    <div
+                      onClick={() => setForm({ ...form, allowOpenAds: false, adMode: 'closed' })}
+                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${!form.allowOpenAds
+                        ? 'bg-purple-500/10 border-purple-500/80 shadow-md ring-1 ring-purple-500/50'
+                        : 'bg-background/50 border-border/40 hover:border-border'
+                        }`}
+                    >
+                      <div className="flex items-center space-x-2.5 mb-1.5">
+                        <input
+                          type="radio"
+                          name="formAdMode"
+                          checked={form.allowOpenAds === false}
+                          onChange={() => setForm({ ...form, allowOpenAds: false, adMode: 'closed' })}
+                          className="w-4 h-4 accent-purple-500 cursor-pointer"
+                        />
+                        <span className="text-xs font-bold text-foreground">Closed / Private Mode</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed pl-6 font-semibold">
+                        Exclusive internal venue usage only (digital menu & in-house promos). Excludes third-party ads (Private SaaS Tier).
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 <button
                   type="submit"
                   disabled={loading}
@@ -1980,6 +2244,15 @@ export default function MerchantDashboard() {
                         <div className="flex justify-between">
                           <span className="text-muted-foreground font-semibold">Submitted On</span>
                           <span className="text-foreground font-semibold">{app.createdAt ? new Date(app.createdAt).toLocaleDateString() : 'N/A'}</span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-border/30">
+                          <span className="text-muted-foreground font-semibold">Venue Ad Mode</span>
+                          <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${app.allowOpenAds !== false
+                            ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20'
+                            : 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20'
+                            }`}>
+                            {app.allowOpenAds !== false ? 'OPEN ADS MODE' : 'CLOSED / PRIVATE'}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -2494,6 +2767,354 @@ export default function MerchantDashboard() {
                 })()}
               </>
             )}
+          </div>
+        )}
+
+        {/* 2.5 Venue Promos Tab */}
+        {activeTab === 'promos' && (
+          <div className="animate-fade-in space-y-6">
+            <div className="flex justify-between items-center flex-wrap gap-4 border-b border-border/40 pb-4">
+              <div>
+                <h1 className="font-outfit text-2xl font-black text-foreground uppercase tracking-wider">
+                  IN-HOUSE VENUE PROMOS
+                </h1>
+                <p className="text-muted-foreground text-xs font-semibold mt-1">
+                  Stream your own video ads, daily offers, and promotional banners directly onto your tabletop tablets and wall screens.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={handleStreamAds}
+                  disabled={isStreamingPromos || promoQuotaStats.isPaused || promoQuotaStats.isRevoked}
+                  className="bg-primary hover:bg-primary/95 disabled:opacity-50 text-primary-foreground font-black text-xs px-6 py-3 rounded-xl transition-all shadow-lg cursor-pointer glow-hover flex items-center space-x-2 uppercase tracking-wider"
+                >
+                  {isStreamingPromos ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                      <span>Processing & Streaming...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      <span>Stream Ads</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Quota & Reset Banner */}
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-4 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-left flex items-center space-x-3">
+                <Video className="w-6 h-6 text-blue-500 shrink-0" />
+                <div>
+                  <span className="text-[10px] font-black uppercase text-blue-500 tracking-wider">Tablet Video Changes Left</span>
+                  <div className="text-lg font-black text-foreground mt-0.5">
+                    {promoQuotaStats.dailyVideoChangesRemaining} / {promoQuotaStats.dailyVideoQuota} Remaining
+                  </div>
+                  <span className="text-[9px] text-muted-foreground font-semibold">Resets daily at 2:00 AM IST</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/20 text-left flex items-center space-x-3">
+                <Upload className="w-6 h-6 text-purple-500 shrink-0" />
+                <div>
+                  <span className="text-[10px] font-black uppercase text-purple-500 tracking-wider">Tablet Image Changes Left</span>
+                  <div className="text-lg font-black text-foreground mt-0.5">
+                    {promoQuotaStats.dailyImageChangesRemaining} / {promoQuotaStats.dailyImageQuota} Remaining
+                  </div>
+                  <span className="text-[9px] text-muted-foreground font-semibold">Resets daily at 2:00 AM IST</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-left flex items-center space-x-3">
+                <Tv className="w-6 h-6 text-emerald-500 shrink-0" />
+                <div>
+                  <span className="text-[10px] font-black uppercase text-emerald-500 tracking-wider">Wall Screen Changes Left</span>
+                  <div className="text-lg font-black text-foreground mt-0.5">
+                    {promoQuotaStats.dailyScreenChangesRemaining} / {promoQuotaStats.dailyScreenQuota} Remaining
+                  </div>
+                  <span className="text-[9px] text-muted-foreground font-semibold">Resets daily at 2:00 AM IST</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-muted/20 border border-border/40 text-left flex items-center space-x-3">
+                <Lock className="w-6 h-6 text-amber-500 shrink-0" />
+                <div>
+                  <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider">Server Execution Safeguard</span>
+                  <p className="text-[10px] text-muted-foreground font-semibold leading-tight mt-0.5">
+                    Selecting media updates local draft preview. Server transcoding and streaming start strictly when you click <strong className="text-foreground">Stream Ads</strong>.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Video Promo Slots Section */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-outfit text-base font-black text-foreground uppercase tracking-wider flex items-center space-x-2">
+                  <Video className="w-4 h-4 text-blue-500" />
+                  <span>Video Promo Slots ({promoQuotaStats.maxVideoSlots} Max)</span>
+                </h3>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {Array.from({ length: promoQuotaStats.maxVideoSlots }).map((_, idx) => {
+                  const key = `video_${idx}`;
+                  const slot = promoDraftSlots[key] || {};
+                  const hasMedia = slot.previewUrl && !slot.isDeleted;
+
+                  return (
+                    <div
+                      key={key}
+                      className={`p-5 rounded-2xl border transition-all flex flex-col justify-between space-y-4 relative ${hasMedia
+                        ? 'bg-card border-blue-500/40 shadow-sm'
+                        : 'bg-card/20 border-dashed border-border/60 hover:border-blue-500/50'
+                        }`}
+                    >
+                      <div className="flex justify-between items-center border-b border-border/40 pb-2.5">
+                        <span className="text-xs font-black uppercase text-foreground flex items-center space-x-1.5">
+                          <span className="w-2 h-2 rounded-full bg-blue-500" />
+                          <span>Video Slot #{idx + 1}</span>
+                        </span>
+                        {hasMedia && (
+                          <button
+                            type="button"
+                            onClick={() => handleClearPromoSlot('video', idx)}
+                            className="p-1.5 rounded-lg bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/20 transition-all cursor-pointer shadow-sm"
+                            title="Delete / Clear Ad Slot"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+
+                      {hasMedia ? (
+                        <div className="space-y-3">
+                          <div className="relative w-full h-48 bg-black/40 rounded-xl overflow-hidden border border-border/40 flex items-center justify-center">
+                            <video
+                              src={slot.previewUrl}
+                              controls
+                              className="w-full h-full object-contain"
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Enter Video Ad Title (Optional)"
+                            value={slot.title || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setPromoDraftSlots(prev => ({
+                                ...prev,
+                                [key]: { ...prev[key], title: val, isModified: true }
+                              }));
+                            }}
+                            className="w-full bg-background border border-input rounded-xl px-3.5 py-2 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                          />
+                        </div>
+                      ) : (
+                        <div className="py-8 flex flex-col items-center justify-center text-center space-y-3 border-2 border-dashed border-border/40 rounded-xl bg-muted/10 relative hover:bg-muted/20 transition-all">
+                          <input
+                            type="file"
+                            accept="video/mp4,video/webm,video/mov"
+                            onChange={(e) => handleSelectPromoFile('video', idx, e.target.files[0])}
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10"
+                          />
+                          <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center text-blue-500 border border-blue-500/20">
+                            <Plus className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-foreground">Click to Choose Video File</p>
+                            <p className="text-[10px] text-muted-foreground font-medium mt-0.5">MP4, WEBM (Max 100MB, $\le 30$s)</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Image Promo Slots Section */}
+            <div className="space-y-4 pt-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-outfit text-base font-black text-foreground uppercase tracking-wider flex items-center space-x-2">
+                  <Upload className="w-4 h-4 text-purple-500" />
+                  <span>Image Promo Slots ({promoQuotaStats.maxImageSlots} Max)</span>
+                </h3>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                {Array.from({ length: promoQuotaStats.maxImageSlots }).map((_, idx) => {
+                  const key = `image_${idx}`;
+                  const slot = promoDraftSlots[key] || {};
+                  const hasMedia = slot.previewUrl && !slot.isDeleted;
+
+                  return (
+                    <div
+                      key={key}
+                      className={`p-4 rounded-2xl border transition-all flex flex-col justify-between space-y-3 relative ${hasMedia
+                        ? 'bg-card border-purple-500/40 shadow-sm'
+                        : 'bg-card/20 border-dashed border-border/60 hover:border-purple-500/50'
+                        }`}
+                    >
+                      <div className="flex justify-between items-center border-b border-border/40 pb-2">
+                        <span className="text-[11px] font-black uppercase text-foreground flex items-center space-x-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                          <span>Image #{idx + 1}</span>
+                        </span>
+                        {hasMedia && (
+                          <button
+                            type="button"
+                            onClick={() => handleClearPromoSlot('image', idx)}
+                            className="p-1 rounded-md bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/20 transition-all cursor-pointer"
+                            title="Delete / Clear Ad Slot"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {hasMedia ? (
+                        <div className="space-y-2">
+                          <div className="relative w-full h-32 bg-black/40 rounded-lg overflow-hidden border border-border/40">
+                            <img
+                              src={slot.previewUrl}
+                              alt={`Image slot ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Ad Title (Optional)"
+                            value={slot.title || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setPromoDraftSlots(prev => ({
+                                ...prev,
+                                [key]: { ...prev[key], title: val, isModified: true }
+                              }));
+                            }}
+                            className="w-full bg-background border border-input rounded-lg px-2.5 py-1.5 text-[11px] font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                          />
+                        </div>
+                      ) : (
+                        <div className="py-6 flex flex-col items-center justify-center text-center space-y-2 border border-dashed border-border/40 rounded-xl bg-muted/10 relative hover:bg-muted/20 transition-all min-h-[140px]">
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp"
+                            onChange={(e) => handleSelectPromoFile('image', idx, e.target.files[0])}
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10"
+                          />
+                          <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center text-purple-500 border border-purple-500/20">
+                            <Plus className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-bold text-foreground">Choose Image</p>
+                            <p className="text-[9px] text-muted-foreground font-medium">JPG, PNG (Max 10MB)</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Screen Display Promo Slots Section (Large Wall Display Screens) */}
+            <div className="space-y-4 pt-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-outfit text-base font-black text-foreground uppercase tracking-wider flex items-center space-x-2">
+                  <Tv className="w-4 h-4 text-emerald-500" />
+                  <span>Large Wall Screen Promo Slots ({promoQuotaStats.maxScreenSlots} Max)</span>
+                </h3>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {Array.from({ length: promoQuotaStats.maxScreenSlots }).map((_, idx) => {
+                  const key = `screen_${idx}`;
+                  const slot = promoDraftSlots[key] || {};
+                  const hasMedia = slot.previewUrl && !slot.isDeleted;
+
+                  return (
+                    <div
+                      key={key}
+                      className={`p-5 rounded-2xl border transition-all flex flex-col justify-between space-y-4 relative ${hasMedia
+                        ? 'bg-card border-emerald-500/40 shadow-sm'
+                        : 'bg-card/20 border-dashed border-border/60 hover:border-emerald-500/50'
+                        }`}
+                    >
+                      <div className="flex justify-between items-center border-b border-border/40 pb-2.5">
+                        <span className="text-xs font-black uppercase text-foreground flex items-center space-x-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                          <span>Screen Slot #{idx + 1}</span>
+                        </span>
+                        {hasMedia && (
+                          <button
+                            type="button"
+                            onClick={() => handleClearPromoSlot('screen', idx)}
+                            className="p-1.5 rounded-lg bg-destructive/10 hover:bg-destructive/20 text-destructive border border-destructive/20 transition-all cursor-pointer shadow-sm"
+                            title="Delete / Clear Ad Slot"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+
+                      {hasMedia ? (
+                        <div className="space-y-3">
+                          <div className="relative w-full h-48 bg-black/40 rounded-xl overflow-hidden border border-border/40 flex items-center justify-center">
+                            {slot.mediaType === 'video' ? (
+                              <video
+                                src={slot.previewUrl}
+                                controls
+                                className="w-full h-full object-contain"
+                              />
+                            ) : (
+                              <img
+                                src={slot.previewUrl}
+                                alt={`Screen slot ${idx + 1}`}
+                                className="w-full h-full object-cover"
+                              />
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Enter Screen Ad Title (Optional)"
+                            value={slot.title || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setPromoDraftSlots(prev => ({
+                                ...prev,
+                                [key]: { ...prev[key], title: val, isModified: true }
+                              }));
+                            }}
+                            className="w-full bg-background border border-input rounded-xl px-3.5 py-2 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                          />
+                        </div>
+                      ) : (
+                        <div className="py-8 flex flex-col items-center justify-center text-center space-y-3 border-2 border-dashed border-border/40 rounded-xl bg-muted/10 relative hover:bg-muted/20 transition-all">
+                          <input
+                            type="file"
+                            accept="video/mp4,video/webm,video/mov,image/jpeg,image/png,image/webp"
+                            onChange={(e) => handleSelectPromoFile('screen', idx, e.target.files[0])}
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10"
+                          />
+                          <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500 border border-emerald-500/20">
+                            <Plus className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-foreground">Choose Wall Screen Media</p>
+                            <p className="text-[10px] text-muted-foreground font-medium mt-0.5">Video / Image (Full HD 1920×1080)</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 
@@ -3667,6 +4288,59 @@ export default function MerchantDashboard() {
                     onChange={(e) => setEditAppForm({ ...editAppForm, email: e.target.value })}
                     className="w-full bg-background border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
                   />
+                </div>
+              </div>
+
+              {/* Venue Ad Mode Choice Section */}
+              <div className="space-y-3 border-t border-border/40 pt-4">
+                <span className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Venue Ad Mode & Service Plan</span>
+
+                <div className="grid md:grid-cols-2 gap-4">
+                  {/* Open Ads Mode Option */}
+                  <div
+                    onClick={() => setEditAppForm({ ...editAppForm, allowOpenAds: true, adMode: 'open' })}
+                    className={`p-4 rounded-2xl border cursor-pointer transition-all ${editAppForm.allowOpenAds !== false
+                      ? 'bg-blue-500/10 border-blue-500/80 shadow-md ring-1 ring-blue-500/50'
+                      : 'bg-background/50 border-border/40 hover:border-border'
+                      }`}
+                  >
+                    <div className="flex items-center space-x-2.5 mb-1.5">
+                      <input
+                        type="radio"
+                        name="editAdMode"
+                        checked={editAppForm.allowOpenAds !== false}
+                        onChange={() => setEditAppForm({ ...editAppForm, allowOpenAds: true, adMode: 'open' })}
+                        className="w-4 h-4 accent-blue-500 cursor-pointer"
+                      />
+                      <span className="text-xs font-bold text-foreground">Open Ads Mode</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed pl-6 font-semibold">
+                      Accept third-party brand advertisements on kiosk screens. Qualifies your venue for discounted/free hardware & SaaS platform tier.
+                    </p>
+                  </div>
+
+                  {/* Closed / Private Mode Option */}
+                  <div
+                    onClick={() => setEditAppForm({ ...editAppForm, allowOpenAds: false, adMode: 'closed' })}
+                    className={`p-4 rounded-2xl border cursor-pointer transition-all ${editAppForm.allowOpenAds === false
+                      ? 'bg-purple-500/10 border-purple-500/80 shadow-md ring-1 ring-purple-500/50'
+                      : 'bg-background/50 border-border/40 hover:border-border'
+                      }`}
+                  >
+                    <div className="flex items-center space-x-2.5 mb-1.5">
+                      <input
+                        type="radio"
+                        name="editAdMode"
+                        checked={editAppForm.allowOpenAds === false}
+                        onChange={() => setEditAppForm({ ...editAppForm, allowOpenAds: false, adMode: 'closed' })}
+                        className="w-4 h-4 accent-purple-500 cursor-pointer"
+                      />
+                      <span className="text-xs font-bold text-foreground">Closed / Private Mode</span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed pl-6 font-semibold">
+                      Exclusive internal venue usage only (digital menu & in-house promos). Excludes third-party ads (Private SaaS Tier).
+                    </p>
+                  </div>
                 </div>
               </div>
 

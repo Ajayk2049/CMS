@@ -50,6 +50,12 @@ const AdBookingSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  adCategory: {
+    type: String,
+    enum: ['Electronics', 'RealEstate', 'Automotive', 'Beverages', 'Fashion', 'Finance', 'Entertainment', 'Other'],
+    default: 'Other',
+    index: true
+  },
   paymentStatus: {
     type: String,
     enum: ['pending', 'completed', 'failed', 'refunded'],

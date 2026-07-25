@@ -110,6 +110,45 @@ class DeviceAuthController {
         return res.status(400).send({ success: false, message: 'Invalid device credentials in token' });
       }
 
+      const HostApplication = require('../models/HostApplication');
+      const VenuePromo = require('../models/VenuePromo');
+
+      const hostApp = await HostApplication.findById(hostApplicationId);
+      if (!hostApp || hostApp.isPaused || hostApp.isRevoked) {
+        return res.status(200).send({ success: true, data: [] });
+      }
+
+      // Fetch active in-house venue promos matching deviceType
+      const promoQuery = { hostApplicationId, isStreaming: true };
+      if (deviceType === 'screen') {
+        promoQuery.slotType = 'screen';
+      } else {
+        promoQuery.slotType = { $in: ['video', 'image'] };
+      }
+
+      const venuePromos = await VenuePromo.find(promoQuery).sort({ slotType: 1, slotIndex: 1 });
+      const promoAds = venuePromos.map(p => {
+        const resolvedUrl = resolveMediaUrl(p.mediaUrl, req.headers.host);
+        return {
+          bookingId: `promo_${p._id}`,
+          mediaUrl: resolvedUrl,
+          mediaUrls: [resolvedUrl],
+          frequencyMinutes: 0,
+          durationSeconds: p.mediaType === 'video' ? 30 : 15,
+          title: p.title || 'Venue Special',
+          mediaType: p.mediaType === 'video' ? 'video' : 'static',
+          isVenuePromo: true
+        };
+      });
+
+      // If venue is in Closed / Private Mode, return only in-house venue promos!
+      if (hostApp.allowOpenAds === false) {
+        return res.status(200).send({
+          success: true,
+          data: promoAds
+        });
+      }
+
       const bookings = await AdBooking.find({
         outletId: hostApplicationId,
         deviceType: deviceType,
@@ -125,7 +164,7 @@ class DeviceAuthController {
         return expiryDate >= now;
       });
 
-      const ads = activeBookings.map(b => {
+      const thirdPartyAds = activeBookings.map(b => {
         let frequencyMinutes = 0; // Default 0 means continuous loop
         const freq = (b.frequency || '').toLowerCase().trim();
         if (freq.includes('continuous') || freq === '0') {
@@ -162,7 +201,7 @@ class DeviceAuthController {
 
       return res.status(200).send({
         success: true,
-        data: ads
+        data: [...promoAds, ...thirdPartyAds]
       });
     } catch (error) {
       console.error('getDeviceAds Error:', error.message);
