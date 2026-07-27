@@ -245,8 +245,8 @@ class AdController {
       redirectUrl
     } = req.body || {};
 
-    if (!outletId || !deviceType || !quantity || !adDurationDays || !frequency || !mediaUrl || !redirectUrl) {
-      return res.status(400).send({ success: false, message: 'All booking fields and redirectUrl are required' });
+    if (!outletId || !deviceType || !quantity || !adDurationDays || !frequency || !redirectUrl) {
+      return res.status(400).send({ success: false, message: 'All required booking fields and redirectUrl must be provided' });
     }
 
     try {
@@ -340,7 +340,7 @@ class AdController {
         adDurationDays: parseInt(adDurationDays, 10),
         frequency,
         amount: totalAmount,
-        mediaUrl,
+        mediaUrl: mediaUrl || '',
         adCategory: adCategory || 'Other',
         paymentStatus: 'pending',
         approvalStatus: 'pending',
@@ -553,13 +553,34 @@ class AdController {
     const fs = require('fs');
     const path = require('path');
     const os = require('os');
+    const { v4: uuidv4 } = require('uuid');
     const { pipeline } = require('stream/promises');
     const ffmpeg = require('fluent-ffmpeg');
     const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
     const config = require('../config/config');
     const MediaLog = require('../models/MediaLog');
+    const AdBooking = require('../models/AdBooking');
+    const videoQueueService = require('../services/videoQueueService');
 
     ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+
+    const bookingId = req.query.bookingId;
+    if (bookingId) {
+      try {
+        const booking = await AdBooking.findById(bookingId);
+        if (!booking) {
+          return res.status(404).send({ success: false, message: 'Ad booking campaign not found.' });
+        }
+        if (booking.paymentStatus !== 'completed') {
+          return res.status(403).send({ success: false, message: 'Media upload is locked until campaign payment is completed.' });
+        }
+        if (booking.approvalStatus !== 'pending') {
+          return res.status(403).send({ success: false, message: `Media upload is locked. Campaign has already been ${booking.approvalStatus}.` });
+        }
+      } catch (err) {
+        return res.status(400).send({ success: false, message: 'Invalid bookingId provided.' });
+      }
+    }
 
     const filenameHeader = req.headers['x-filename'] || 'video.mp4';
     const ext = path.extname(filenameHeader).toLowerCase();
@@ -592,30 +613,31 @@ class AdController {
     }
     const targetSubdir = deviceType;
 
-    // Resolution map: tablet = portrait 800x1280 (9:16), screen = landscape 1920x1080 (16:9)
     const resolutionMap = {
       tablet: '800x1280',
       screen: '1920x1080'
     };
     const resolution = resolutionMap[deviceType];
 
-    // We output H.264 mp4 always for baseline compatibility
     const uniqueFilename = `vid_${uuidv4().replace(/-/g, '').slice(0, 16)}.mp4`;
     const uploadsDir = path.join(__dirname, '..', 'uploads', 'ads', 'videos', targetSubdir);
+    const stagingDir = path.join(__dirname, '..', 'uploads', 'ads', 'staging');
     
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
+    if (!fs.existsSync(stagingDir)) {
+      fs.mkdirSync(stagingDir, { recursive: true });
+    }
 
     const filePath = path.join(uploadsDir, uniqueFilename);
-    const tempPath = path.join(os.tmpdir(), `tmp-ad-upload-${Date.now()}${ext}`);
+    const tempPath = path.join(stagingDir, `staging_${uuidv4().replace(/-/g, '').slice(0, 12)}${ext}`);
 
     try {
-      // Stream the raw network payload directly to a temporary disk file.
-      // This solves the non-seekable pipe problem for BOTH MP4 and WebM.
+      // Stream raw payload directly to staging folder
       await pipeline(req.body, fs.createWriteStream(tempPath));
 
-      // Inspect video duration via ffprobe before transcoding
+      // Inspect video duration via ffprobe before queueing
       const maxVideoDurationSeconds = config.maxVideoDurationSeconds || 30;
       try {
         const metadata = await new Promise((resolve, reject) => {
@@ -641,77 +663,41 @@ class AdController {
         console.warn('ffprobe duration check warning:', probeErr.message);
       }
 
-      // Run FFmpeg Transcoding using the temporary file path as source
-      await new Promise((resolve, reject) => {
-        ffmpeg(tempPath)
-          .videoCodec('libx264')
-          .size(resolution)
-          .fps(30)
-          .outputOptions([
-            '-profile:v baseline', 
-            '-level 3.1',          
-            '-pix_fmt yuv420p',    
-            '-movflags +faststart' // Crucial for low-powered Android download-and-stream
-          ])
-          .audioCodec('aac')
-          .audioChannels(2)
-          .on('end', resolve)
-          .on('error', reject)
-          .save(filePath);
+      // Enqueue job for background sequential CPU-throttled transcoding
+      videoQueueService.enqueueJob({
+        tempPath,
+        filePath,
+        targetSubdir,
+        uniqueFilename,
+        resolution,
+        mediaLogId: mediaLog._id,
+        bookingId
       });
 
-      // Clean up temp file safely on success
-      if (fs.existsSync(tempPath)) {
-        try {
-          fs.unlinkSync(tempPath);
-        } catch (err) {
-          console.error('Failed to delete temp file:', err.message);
-        }
-      }
-
-      // Update MediaLog as completed
-      mediaLog.status = 'completed';
-      mediaLog.finalizedFilename = uniqueFilename;
-      mediaLog.outputPath = filePath;
-      await mediaLog.save();
-
-      // Return relative server URL
       const fileUrl = `/uploads/ads/videos/${targetSubdir}/${uniqueFilename}`;
 
+      // Return instant HTTP 200 response with professional message
       return res.status(200).send({
         success: true,
-        message: 'Video uploaded and optimized successfully',
+        message: 'Media uploaded successfully! Your campaign video is being optimized and scheduled. It will go live across venue displays within 15 minutes.',
         data: {
           filename: uniqueFilename,
-          url: fileUrl
+          url: fileUrl,
+          status: 'queued'
         }
       });
 
     } catch (error) {
-      console.error('uploadVideo Transcoding Error:', error.message);
-      
-      // Clean up temp file safely on error
+      console.error('uploadVideo Staging Error:', error.message);
       if (fs.existsSync(tempPath)) {
-        try {
-          fs.unlinkSync(tempPath);
-        } catch (err) {}
+        try { fs.unlinkSync(tempPath); } catch (err) {}
       }
-
-      // Remove corrupt output file
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (err) {}
-      }
-
-      // Update MediaLog as failed
       if (mediaLog) {
         mediaLog.status = 'failed';
         mediaLog.errorMessage = error.message;
         await mediaLog.save();
       }
-
-      return res.status(500).send({ success: false, message: 'Failed to upload and transcode video: ' + error.message });
+      return res.status(500).send({ success: false, message: 'Failed to stage video upload: ' + error.message });
     }
   }
 
@@ -724,6 +710,25 @@ class AdController {
     const sharp = require('sharp');
     const { v4: uuidv4 } = require('uuid');
     const MediaLog = require('../models/MediaLog');
+    const AdBooking = require('../models/AdBooking');
+
+    const bookingId = req.query.bookingId;
+    if (bookingId) {
+      try {
+        const booking = await AdBooking.findById(bookingId);
+        if (!booking) {
+          return res.status(404).send({ success: false, message: 'Ad booking campaign not found.' });
+        }
+        if (booking.paymentStatus !== 'completed') {
+          return res.status(403).send({ success: false, message: 'Media upload is locked until campaign payment is completed.' });
+        }
+        if (booking.approvalStatus !== 'pending') {
+          return res.status(403).send({ success: false, message: `Media upload is locked. Campaign has already been ${booking.approvalStatus}.` });
+        }
+      } catch (err) {
+        return res.status(400).send({ success: false, message: 'Invalid bookingId provided.' });
+      }
+    }
 
     const filenameHeader = req.headers['x-filename'] || req.headers['X-Filename'] || 'image.png';
     const ext = path.extname(filenameHeader).toLowerCase();
@@ -792,6 +797,25 @@ class AdController {
       await mediaLog.save();
 
       const fileUrl = `/uploads/ads/images/${deviceType}/${uniqueFilename}`;
+
+      if (bookingId) {
+        try {
+          const booking = await AdBooking.findById(bookingId);
+          if (booking) {
+            let existingUrls = booking.mediaUrl ? booking.mediaUrl.split(',').map(s => s.trim()).filter(Boolean) : [];
+            existingUrls.push(fileUrl);
+            booking.mediaUrl = existingUrls.join(', ');
+            await booking.save();
+
+            // Broadcast real-time WebSocket update to Admin Live Feed
+            if (global.broadcastToAdmins) {
+              global.broadcastToAdmins('new_campaign', { bookingId: booking.bookingId });
+            }
+          }
+        } catch (updateErr) {
+          console.error('Failed to update booking mediaUrl in uploadImage:', updateErr.message);
+        }
+      }
 
       return res.status(200).send({
         success: true,

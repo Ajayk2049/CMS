@@ -3176,10 +3176,10 @@ export default function AdminPortal() {
 
       {/* Video / Image Creative Preview Modal */}
       {showVideoModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-card border border-border w-full max-w-3xl rounded-[32px] overflow-hidden shadow-2xl p-6 relative">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-outfit text-base font-bold text-foreground">Media Preview</h3>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="bg-card border border-border w-full max-w-2xl max-h-[85vh] rounded-[24px] overflow-hidden shadow-2xl p-5 relative flex flex-col">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-outfit text-base font-bold text-foreground">Media Creative Preview</h3>
               <button
                 onClick={() => {
                   setShowVideoModal(false);
@@ -3190,7 +3190,7 @@ export default function AdminPortal() {
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="w-full min-h-[220px] rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center p-3">
+            <div className="w-full flex-1 max-h-[60vh] md:max-h-[68vh] rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center p-2">
               {activeVideoUrl ? (
                 (() => {
                   const mediaUrls = activeVideoUrl.split(',').map(s => s.trim()).filter(Boolean);
@@ -3203,7 +3203,7 @@ export default function AdminPortal() {
                         key={firstUrl}
                         src={resolveMediaUrl(firstUrl)}
                         controls
-                        className="w-full h-full object-contain bg-black rounded-xl"
+                        className="w-full max-h-[60vh] md:max-h-[65vh] object-contain bg-black rounded-xl"
                         onPlay={() => {
                           if (selectedCampaign) {
                             setWatchedVideos(prev => new Set(prev).add(selectedCampaign.bookingId));

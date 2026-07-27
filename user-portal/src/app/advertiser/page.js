@@ -299,10 +299,47 @@ export default function AdvertiserDashboard() {
     }
   }, [router]);
 
+  // Active paid booking pending media upload persistence
+  const [activeUploadBooking, setActiveUploadBooking] = useState(null);
+  const [uploadSuccessMsg, setUploadSuccessMsg] = useState('');
+  
+  // Local browser media preview state (before server upload)
+  const [selectedVideoFile, setSelectedVideoFile] = useState(null);
+  const [localVideoPreviewUrl, setLocalVideoPreviewUrl] = useState('');
+
+  // Prevent accidental tab refresh / close during active file uploads
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (uploading) {
+        e.preventDefault();
+        e.returnValue = 'Upload in progress. Please do not refresh or leave this page until completed.';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [uploading]);
+
   // Persist Active Tab
   useEffect(() => {
     localStorage.setItem('advertiserActiveTab', activeTab);
   }, [activeTab]);
+
+  // Check for paid booking needing upload upon bookings update
+  useEffect(() => {
+    if (bookings && bookings.length > 0) {
+      // Only lock/mount upload view if campaign payment is completed, approval is pending, AND mediaUrl is empty
+      const pendingUpload = bookings.find(b => b.paymentStatus === 'completed' && b.approvalStatus === 'pending' && (!b.mediaUrl || b.mediaUrl.trim() === ''));
+      if (pendingUpload) {
+        setActiveUploadBooking(pendingUpload);
+        if (activeTab !== 'new-booking') {
+          setActiveTab('new-booking');
+        }
+      } else {
+        setActiveUploadBooking(null);
+      }
+    }
+  }, [bookings]);
 
   // Fetch bookings list
   const fetchBookings = async (authToken) => {
@@ -383,13 +420,16 @@ export default function AdvertiserDashboard() {
     setQuantity(cleaned);
   };
 
-  // Upload video raw binary payload and save to local disk
-  const handleFileUpload = async (e) => {
+  // Step 1: Handle local browser video file selection (Generates local preview only, no upload)
+  const handleVideoFileSelect = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    if (!selectedDeviceType) {
-      showToast('error', 'Please select a Display Type (Tablet or Screen) before uploading.');
+    const targetBooking = activeUploadBooking;
+    const targetDeviceType = targetBooking ? targetBooking.deviceType : selectedDeviceType;
+
+    if (!targetDeviceType) {
+      showToast('error', 'Please select a Display Type (Tablet or Screen) first.');
       return;
     }
 
@@ -399,7 +439,7 @@ export default function AdvertiserDashboard() {
       return;
     }
 
-    // Inspect video duration locally before network transfer
+    // Inspect video duration locally before creating preview
     const maxDuration = config.maxVideoDurationSeconds || 30;
     try {
       const duration = await new Promise((resolve) => {
@@ -424,14 +464,53 @@ export default function AdvertiserDashboard() {
       console.warn('Could not inspect video duration locally:', err);
     }
 
+    // Revoke old object URL if exists
+    if (localVideoPreviewUrl) {
+      URL.revokeObjectURL(localVideoPreviewUrl);
+    }
+
+    const blobUrl = URL.createObjectURL(file);
+    setSelectedVideoFile(file);
+    setLocalVideoPreviewUrl(blobUrl);
+    showToast('info', 'Video selected! Preview your video below and click "Upload Ad" to proceed.');
+  };
+
+  const clearSelectedVideoFile = () => {
+    if (localVideoPreviewUrl) {
+      URL.revokeObjectURL(localVideoPreviewUrl);
+    }
+    setSelectedVideoFile(null);
+    setLocalVideoPreviewUrl('');
+  };
+
+  // Step 2: Upload selected video file to server staging queue upon explicit button click
+  const handleFileUpload = async () => {
+    if (!selectedVideoFile) {
+      showToast('error', 'Please select a video file first.');
+      return;
+    }
+
+    const targetBooking = activeUploadBooking;
+    const targetDeviceType = targetBooking ? targetBooking.deviceType : selectedDeviceType;
+
+    if (!targetDeviceType) {
+      showToast('error', 'Please select a Display Type (Tablet or Screen) before uploading.');
+      return;
+    }
+
     setUploading(true);
     setUploadProgress(0);
 
     try {
-      const response = await axios.post(`${API_BASE}/ads/upload${selectedDeviceType ? '?deviceType=' + selectedDeviceType : ''}`, file, {
+      let uploadUrl = `${API_BASE}/ads/upload?deviceType=${targetDeviceType}`;
+      if (targetBooking) {
+        uploadUrl += `&bookingId=${targetBooking._id}`;
+      }
+
+      const response = await axios.post(uploadUrl, selectedVideoFile, {
         headers: {
-          'Content-Type': file.type || 'application/octet-stream',
-          'X-Filename': file.name,
+          'Content-Type': selectedVideoFile.type || 'application/octet-stream',
+          'X-Filename': selectedVideoFile.name,
           'Authorization': `Bearer ${token}`
         },
         onUploadProgress: (progressEvent) => {
@@ -440,9 +519,16 @@ export default function AdvertiserDashboard() {
         }
       });
 
-      if (response.data.success && response.data.data.url) {
-        setMediaUrl(response.data.data.url);
-        showToast('success', 'Video uploaded successfully!');
+      if (response.data.success) {
+        setMediaUrl(response.data.data?.url || '');
+        showToast('success', 'Campaign ad creative uploaded and submitted for admin review!');
+        
+        // Automatically clear upload view lock & navigate to My Campaigns tab
+        setActiveUploadBooking(null);
+        setSelectedVideoFile(null);
+        setLocalVideoPreviewUrl('');
+        setActiveTab('bookings');
+        fetchBookings(token);
       } else {
         showToast('error', response.data.message || 'Upload failed.');
       }
@@ -451,24 +537,28 @@ export default function AdvertiserDashboard() {
     } finally {
       setUploading(false);
       setUploadProgress(0);
-      if (e && e.target) {
-        e.target.value = '';
-      }
     }
   };
 
-  // Upload image raw binary payload and save to local disk via sharp
-  const handleImageUpload = async (e) => {
+  // Local image file selection state (before server upload)
+  const [selectedImageFiles, setSelectedImageFiles] = useState([]);
+  const [localImagePreviewUrls, setLocalImagePreviewUrls] = useState([]);
+
+  // Step 1: Handle local browser image file selection (Generates local preview only, no upload)
+  const handleImageFileSelect = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    if (!selectedDeviceType) {
-      showToast('error', 'Please select a Display Type (Tablet or Screen) before uploading.');
+    const targetBooking = activeUploadBooking;
+    const targetDeviceType = targetBooking ? targetBooking.deviceType : selectedDeviceType;
+
+    if (!targetDeviceType) {
+      showToast('error', 'Please select a Display Type (Tablet or Screen) first.');
       return;
     }
 
-    if (uploadedImages.length >= 2) {
-      showToast('error', 'You can upload a maximum of 2 images per campaign.');
+    if (selectedImageFiles.length >= 2) {
+      showToast('error', 'You can select a maximum of 2 images per campaign.');
       return;
     }
 
@@ -478,71 +568,112 @@ export default function AdvertiserDashboard() {
       return;
     }
 
-    let contentType = file.type || 'application/octet-stream';
-    if (!file.type || file.type === '') {
-      if (ext === '.png') contentType = 'image/png';
-      else if (ext === '.webp') contentType = 'image/webp';
-      else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+    const blobUrl = URL.createObjectURL(file);
+    const updatedFiles = [...selectedImageFiles, file];
+    const updatedPreviews = [...localImagePreviewUrls, blobUrl];
+
+    setSelectedImageFiles(updatedFiles);
+    setLocalImagePreviewUrls(updatedPreviews);
+    showToast('info', `Image ${updatedFiles.length}/2 selected! Preview below and click "Upload Ad" to proceed.`);
+    if (e && e.target) e.target.value = '';
+  };
+
+  const removeSelectedImageFile = (idx) => {
+    if (localImagePreviewUrls[idx]) {
+      URL.revokeObjectURL(localImagePreviewUrls[idx]);
+    }
+    const updatedFiles = selectedImageFiles.filter((_, i) => i !== idx);
+    const updatedPreviews = localImagePreviewUrls.filter((_, i) => i !== idx);
+    setSelectedImageFiles(updatedFiles);
+    setLocalImagePreviewUrls(updatedPreviews);
+  };
+
+  // Step 2: Upload selected image files to server via Sharp upon explicit "Upload Ad" button click
+  const handleImageUpload = async () => {
+    if (selectedImageFiles.length === 0) {
+      showToast('error', 'Please select at least 1 image file first.');
+      return;
+    }
+
+    const targetBooking = activeUploadBooking;
+    const targetDeviceType = targetBooking ? targetBooking.deviceType : selectedDeviceType;
+
+    if (!targetDeviceType) {
+      showToast('error', 'Please select a Display Type (Tablet or Screen) before uploading.');
+      return;
     }
 
     setUploading(true);
     setUploadProgress(0);
 
     try {
-      const response = await axios.post(`${API_BASE}/ads/upload-image${selectedDeviceType ? '?deviceType=' + selectedDeviceType : ''}`, file, {
-        headers: {
-          'Content-Type': contentType,
-          'X-Filename': file.name,
-          'Authorization': `Bearer ${token}`
-        },
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(percentCompleted);
+      const serverUrls = [];
+      for (let i = 0; i < selectedImageFiles.length; i++) {
+        const imgFile = selectedImageFiles[i];
+        let uploadUrl = `${API_BASE}/ads/upload-image?deviceType=${targetDeviceType}`;
+        if (targetBooking) {
+          uploadUrl += `&bookingId=${targetBooking._id}`;
         }
-      });
 
-      if (response.data.success && response.data.data.url) {
-        const serverUrl = response.data.data.url;
-        // Create instant local object URL for preview fallback
-        const localPreviewUrl = URL.createObjectURL(file);
-        const newImageItems = [...uploadedImages, { serverUrl, previewUrl: localPreviewUrl }];
-        setUploadedImages(newImageItems);
-        setMediaUrl(newImageItems.map(item => typeof item === 'string' ? item : item.serverUrl).join(','));
-        showToast('success', `Image ${newImageItems.length}/2 uploaded & optimized successfully!`);
-      } else {
-        showToast('error', response.data.message || 'Image upload failed.');
+        const response = await axios.post(uploadUrl, imgFile, {
+          headers: {
+            'Content-Type': imgFile.type || 'application/octet-stream',
+            'X-Filename': imgFile.name,
+            'Authorization': `Bearer ${token}`
+          },
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round(((i + (progressEvent.loaded / progressEvent.total)) * 100) / selectedImageFiles.length);
+            setUploadProgress(percentCompleted);
+          }
+        });
+
+        if (response.data.success && response.data.data.url) {
+          serverUrls.push(response.data.data.url);
+        }
       }
+
+      setUploadedImages(serverUrls);
+      const combinedUrlStr = serverUrls.join(', ');
+      setMediaUrl(combinedUrlStr);
+      showToast('success', 'Campaign ad creative uploaded and submitted for admin review!');
+
+      // Automatically clear upload view lock & navigate to My Campaigns tab
+      setActiveUploadBooking(null);
+      setSelectedImageFiles([]);
+      setLocalImagePreviewUrls([]);
+      setActiveTab('bookings');
+      fetchBookings(token);
     } catch (err) {
-      showToast('error', err.response?.data?.message || 'Failed to upload image file.');
+      showToast('error', err.response?.data?.message || 'Failed to upload image creative.');
     } finally {
       setUploading(false);
       setUploadProgress(0);
-      if (e && e.target) {
-        e.target.value = '';
-      }
     }
   };
 
-  const removeUploadedImage = (index) => {
-    const newImages = uploadedImages.filter((_, i) => i !== index);
-    setUploadedImages(newImages);
-    setMediaUrl(newImages.map(item => typeof item === 'string' ? item : item.serverUrl).join(','));
+  const removeUploadedImage = (indexToRemove) => {
+    const updated = uploadedImages.filter((_, idx) => idx !== indexToRemove);
+    setUploadedImages(updated);
+    setMediaUrl(updated.join(', '));
   };
 
-  // Dynamic pricing calculation
+  // Compute calculated pricing amount
   useEffect(() => {
     if (!selectedOutlet) {
       setComputedAmount(0);
       return;
     }
-
-    const deviceType = selectedOutlet.deviceType;
-    const duration = parseInt(adDurationDays, 10);
-    const qty = parseInt(quantity, 10) || 0;
+    const qty = parseInt(quantity, 10);
+    const dur = parseInt(adDurationDays, 10);
+    if (isNaN(qty) || qty < 1) {
+      setComputedAmount(0);
+      return;
+    }
 
     const matchRate = rates.find(
-      r => r.deviceType === deviceType &&
-        r.durationDays === duration &&
+      (r) =>
+        r.deviceType === selectedOutlet.deviceType &&
+        r.durationDays === dur &&
         r.frequency === frequency
     );
 
@@ -553,26 +684,13 @@ export default function AdvertiserDashboard() {
     }
   }, [selectedOutlet, quantity, adDurationDays, frequency, rates]);
 
-  // Handle Ad booking initiation
+  // Handle Ad booking initiation (Paywall First)
   const handleInitiateBooking = async (e) => {
     e.preventDefault();
-
 
     if (!selectedOutlet) {
       showToast('error', 'Please select a target venue and display type.');
       return;
-    }
-
-    if (mediaTypeTab === 'images') {
-      if (uploadedImages.length === 0 && (!mediaUrl || !mediaUrl.trim())) {
-        showToast('error', 'Please upload at least 1 image (max 2) or paste an image URL before proceeding.');
-        return;
-      }
-    } else {
-      if (!mediaUrl || !mediaUrl.trim()) {
-        showToast('error', 'Please upload a video file or provide a video URL before proceeding.');
-        return;
-      }
     }
 
     const bookingQty = parseInt(quantity, 10);
@@ -587,7 +705,7 @@ export default function AdvertiserDashboard() {
     }
 
     try {
-      const redirectUrl = `${config.userPortalUrl}/advertiser`; // redirect back to dashboard
+      const redirectUrl = `${config.userPortalUrl}/advertiser`;
       const response = await axios.post(
         `${API_BASE}/ads/book`,
         {
@@ -596,7 +714,7 @@ export default function AdvertiserDashboard() {
           quantity: bookingQty,
           adDurationDays: parseInt(adDurationDays, 10),
           frequency,
-          mediaUrl,
+          mediaUrl: '', // Paywall first: media URL filled in subsequent upload phase
           adCategory,
           redirectUrl
         },
@@ -605,9 +723,8 @@ export default function AdvertiserDashboard() {
         }
       );
 
-      showToast('success', 'Ad booking initiated! Redirecting you to the payment gateway...');
+      showToast('success', 'Ad campaign created! Redirecting to payment gateway...');
 
-      // Simulate/Open Checkout Redirect
       if (response.data.data.paymentUrl) {
         window.location.href = response.data.data.paymentUrl;
       }
@@ -666,9 +783,12 @@ export default function AdvertiserDashboard() {
       const paymentStatus = res.data.data?.paymentStatus;
 
       if (paymentStatus === 'completed') {
-        showToast('success', 'Payment verified successfully! Your campaign is under review.');
+        showToast('success', 'Payment verified successfully! Please upload your campaign ad creative below.');
         fetchBookings(activeToken);
-        if (isAutoVerify) setActiveTab('bookings');
+        if (res.data.data) {
+          setActiveUploadBooking(res.data.data);
+          setActiveTab('new-booking');
+        }
       } else if (paymentStatus === 'failed') {
         showToast('error', 'Payment failed or was declined. Please try booking again.');
         if (isAutoVerify) setActiveTab('new-booking');
@@ -697,7 +817,13 @@ export default function AdvertiserDashboard() {
 
         <nav className="flex space-x-1.5 md:space-x-2">
           <button
-            onClick={() => setActiveTab('bookings')}
+            onClick={() => {
+              if (activeUploadBooking) {
+                showToast('info', 'Please upload media creative for your confirmed booking first.');
+                return;
+              }
+              setActiveTab('bookings');
+            }}
             className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'bookings'
               ? 'bg-primary text-primary-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
@@ -707,7 +833,13 @@ export default function AdvertiserDashboard() {
             <span className="hidden sm:inline">My Campaigns</span>
           </button>
           <button
-            onClick={() => setActiveTab('rates')}
+            onClick={() => {
+              if (activeUploadBooking) {
+                showToast('info', 'Please upload media creative for your confirmed booking first.');
+                return;
+              }
+              setActiveTab('rates');
+            }}
             className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'rates'
               ? 'bg-primary text-primary-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
@@ -717,7 +849,13 @@ export default function AdvertiserDashboard() {
             <span className="hidden sm:inline">Ad Rates</span>
           </button>
           <button
-            onClick={() => setActiveTab('new-booking')}
+            onClick={() => {
+              if (activeUploadBooking) {
+                showToast('info', 'Please upload media creative for your confirmed booking first.');
+                return;
+              }
+              setActiveTab('new-booking');
+            }}
             className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'new-booking'
               ? 'bg-primary text-primary-foreground shadow-sm'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
@@ -1017,6 +1155,19 @@ export default function AdvertiserDashboard() {
                                   {/* Right Panel Media Creative Preview */}
                                   <div className="flex flex-col space-y-2">
                                     {(() => {
+                                      if (booking.approvalStatus === 'rejected') {
+                                        return (
+                                          <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-xs space-y-1.5">
+                                            <div className="flex items-center space-x-1.5 text-destructive font-bold">
+                                              <span>🗑️ Media Files Deleted</span>
+                                            </div>
+                                            <p className="text-muted-foreground leading-relaxed font-semibold">
+                                              Media creative files (videos/images) were unlinked and permanently deleted from server storage upon campaign rejection.
+                                            </p>
+                                          </div>
+                                        );
+                                      }
+
                                       const mediaUrls = (booking.mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean);
                                       const firstUrl = mediaUrls[0] || '';
                                       const isVideo = booking.adType === 'video' || firstUrl.endsWith('.mp4') || firstUrl.endsWith('.webm');
@@ -1181,442 +1332,475 @@ export default function AdvertiserDashboard() {
 
         {/* 3. New Booking Flow Tab */}
         {activeTab === 'new-booking' && (
-          <div className="animate-fade-in max-w-4xl mx-auto p-4 rounded-xl bg-card border border-[#0069a8]/80 shadow-[0_0_20px_rgba(0,105,168,0.3)] dark:shadow-[0_0_35px_rgba(0,105,168,0.55)] space-y-6">
-            <h1 className="font-outfit text-2xl font-black text-foreground mb-2">Book Advertising Spot</h1>
-            <p className="text-muted-foreground text-xs font-semibold mb-8">Target specific local dining tables or digital display screens in three simple steps.</p>
-
-            {/* Step 1: Location selection - Flushed and Borderless */}
-            <div className="space-y-4 m-0 p-0 border-none bg-transparent">
-              <h3 className="font-outfit text-lg font-black text-foreground flex items-center">
-                <MapPin className="w-5 h-5 mr-2 text-primary shrink-0" />
-                <span>Select Target Venue</span>
-              </h3>
-
-              <div className="space-y-4">
-                {/* Row 1: State & City */}
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select State</label>
-                    <select
-                      value={selectedState}
-                      onChange={(e) => {
-                        setSelectedState(e.target.value);
-                        fetchCities(e.target.value);
-                      }}
-                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
-                    >
-                      <option value="">-- State --</option>
-                      {states.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select City</label>
-                    <select
-                      value={selectedCity}
-                      disabled={!selectedState}
-                      onChange={(e) => {
-                        setSelectedCity(e.target.value);
-                        fetchOutlets(e.target.value);
-                      }}
-                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
-                    >
-                      <option value="">-- City --</option>
-                      {cities.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Row 2: Outlet Name & Display Type */}
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select Outlet Name</label>
-                    <select
-                      value={selectedOutletName}
-                      disabled={!selectedCity}
-                      onChange={(e) => {
-                        const name = e.target.value;
-                        setSelectedOutletName(name);
-
-                        // Find matching outlets
-                        const matches = outlets.filter(o => o.outletName === name);
-                        const devices = matches.map(o => o.deviceType);
-                        setAvailableDeviceTypes(devices);
-
-                        // Reset device type and selectedOutlet
-                        setSelectedDeviceType('');
-                        setSelectedOutlet(null);
-                      }}
-                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
-                    >
-                      <option value="">-- Outlet --</option>
-                      {Array.from(new Set(outlets.map(o => o.outletName))).map(name => (
-                        <option key={name} value={name}>{name}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Select Display Type</label>
-                    <select
-                      value={selectedDeviceType}
-                      disabled={!selectedOutletName}
-                      onChange={(e) => {
-                        const devType = e.target.value;
-                        setSelectedDeviceType(devType);
-
-                        // Find specific outlet matching name and device type
-                        const matched = outlets.find(o => o.outletName === selectedOutletName && o.deviceType === devType);
-                        setSelectedOutlet(matched || null);
-                        setQuantity('1');
-                      }}
-                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer disabled:opacity-50 transition-all"
-                    >
-                      <option value="">-- Display Type --</option>
-                      {availableDeviceTypes.map(type => (
-                        <option key={type} value={type}>
-                          {type === 'tablet' ? 'Tabletop Tablet' : 'Wall Screen'}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Step 2: Campaign Settings - Flushed and Borderless */}
-            <div className="space-y-4 m-0 p-0 border-none bg-transparent pt-4">
-              <h3 className="font-outfit text-lg font-black text-foreground flex items-center">
-                <Video className="w-5 h-5 mr-2 text-primary shrink-0" />
-                <span>Ad Details & Schedule</span>
-              </h3>
-
-              <form onSubmit={handleInitiateBooking} className="grid md:grid-cols-12 gap-8 items-start">
-                {/* Left Column: Stacked settings inputs (col-span-5) */}
-                <div className="md:col-span-5 space-y-4">
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Quantity of Devices</label>
-                    <input
-                      type="text"
-                      required
-                      value={quantity}
-                      onChange={(e) => handleQuantityChange(e.target.value)}
-                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                    />
-                    {selectedOutlet && (
-                      <p className="text-[10px] text-muted-foreground mt-1.5 font-semibold">
-                        Max available: {selectedOutlet.quantity}
-                      </p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Duration (Days)</label>
-                    <select
-                      value={adDurationDays}
-                      onChange={(e) => setAdDurationDays(parseInt(e.target.value, 10))}
-                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
-                    >
-                      <option value={7}>7 Days Plan</option>
-                      <option value={30}>30 Days Plan</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Frequency</label>
-                    <select
-                      value={frequency}
-                      onChange={(e) => setFrequency(e.target.value)}
-                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
-                    >
-                      {getAvailableFrequencies().map((freq) => (
-                        <option key={freq} value={freq}>
-                          {getFrequencyLabel(freq)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2 font-bold">Ad Category</label>
-                    <select
-                      value={adCategory}
-                      onChange={(e) => setAdCategory(e.target.value)}
-                      className="w-full bg-background border border-input rounded-xl px-4 py-3.5 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent cursor-pointer transition-all"
-                    >
-                      <option value="Electronics">Electronics & Gadgets</option>
-                      <option value="RealEstate">Real Estate & Housing</option>
-                      <option value="Automotive">Automotive & Vehicles</option>
-                      <option value="Beverages">Beverages & Soft Drinks (Coke, Pepsi)</option>
-                      <option value="Fashion">Fashion & Apparel</option>
-                      <option value="Finance">Finance & Banking</option>
-                      <option value="Entertainment">Entertainment & Media</option>
-                      <option value="Other">Other Commercial Brands</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Right Column: Tabbed Media File Asset Upload (col-span-7) */}
-                <div className="md:col-span-7 space-y-4">
-                  <div>
-                    {/* Tab Selector: Videos vs Images */}
-                    <div className="flex items-center justify-between mb-3">
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Media Creative Type</label>
-                      <div className="flex bg-muted p-1 rounded-xl border border-border/40 text-[10px] font-bold">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMediaTypeTab('videos');
-                            setMediaUrl('');
-                            setUploadedImages([]);
-                          }}
-                          className={`px-3 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${mediaTypeTab === 'videos'
-                            ? 'bg-background text-foreground shadow-sm'
-                            : 'text-muted-foreground hover:text-foreground'
-                            }`}
-                        >
-                          <Video className="w-3 h-3 text-blue-500" />
-                          <span>Videos</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setMediaTypeTab('images');
-                            setMediaUrl('');
-                            setUploadedImages([]);
-                          }}
-                          className={`px-3 py-1 rounded-lg transition-all cursor-pointer flex items-center space-x-1 ${mediaTypeTab === 'images'
-                            ? 'bg-background text-foreground shadow-sm'
-                            : 'text-muted-foreground hover:text-foreground'
-                            }`}
-                        >
-                          <Upload className="w-3 h-3 text-amber-500" />
-                          <span>Images</span>
-                        </button>
-                      </div>
+          <div className="animate-fade-in max-w-4xl mx-auto p-4 sm:p-6 rounded-2xl bg-card border border-[#0069a8]/80 shadow-[0_0_20px_rgba(0,105,168,0.3)] dark:shadow-[0_0_35px_rgba(0,105,168,0.55)] space-y-6 transition-all duration-500">
+            
+            {activeUploadBooking ? (
+              /* ACTIVE PAID CAMPAIGN MEDIA UPLOAD PANEL */
+              <div className="space-y-6 animate-fade-in">
+                <div className="border-b border-border/40 pb-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                      <h1 className="font-outfit text-2xl font-black text-foreground">Upload Media Creative</h1>
                     </div>
+                    <p className="text-muted-foreground text-xs font-semibold">
+                      Payment Confirmed for Booking #{activeUploadBooking._id?.slice(-8).toUpperCase()}. You must upload your ad video or image creative below before booking additional spots.
+                    </p>
+                  </div>
+                </div>
 
-                    <div className="space-y-3">
-                      {!selectedDeviceType ? (
-                        <div className="flex flex-col items-center justify-center border border-dashed border-border/40 rounded-xl py-6 opacity-50 cursor-not-allowed text-center bg-card/5">
-                          <Upload className="w-4 h-4 text-muted-foreground mb-1" />
-                          <span className="text-[10px] font-bold text-foreground">Select Target Display Type first to upload media</span>
+                {/* Scheduled Processing Notification Banner */}
+                {uploadSuccessMsg && (
+                  <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-semibold flex items-start space-x-3 shadow-sm animate-fade-in">
+                    <CheckCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm">Upload Status</p>
+                      <p className="text-xs text-foreground/90 mt-0.5 leading-relaxed">{uploadSuccessMsg}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Media Specifications & Content Policy Banner */}
+                <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs font-medium space-y-3 text-foreground">
+                  <div className="flex items-center space-x-2 text-blue-600 dark:text-blue-400 font-bold uppercase text-[11px] tracking-wider">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>Media Specs & Content Policy ({activeUploadBooking.deviceType === 'tablet' ? 'Tablet Kiosk 9:16' : 'Digital Wall Screen 16:9'})</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground leading-relaxed pl-6 space-y-1 font-semibold">
+                    <p>• <strong>Aspect Ratio</strong>: {activeUploadBooking.deviceType === 'tablet' ? 'Portrait 10:16 / 9:16 (Vertical)' : 'Landscape 16:9 (Horizontal Widescreen)'}</p>
+                    <p>• <strong>Video Format</strong>: Up to <strong>{config.maxVideoDurationSeconds || 30} seconds</strong> (MP4 / WEBM formats)</p>
+                    <p>• <strong>Image Format</strong>: Up to <strong>2 Images</strong> (Front & Back switching creatives)</p>
+                    <p>• <strong>Preferred Resolution</strong>: <strong>{activeUploadBooking.deviceType === 'tablet' ? '800 × 1280 px' : '1920 × 1080 px Full HD'}</strong></p>
+                  </div>
+                  <div className="pt-2.5 border-t border-blue-500/20 text-xs text-amber-600 dark:text-amber-400 font-semibold space-y-1 pl-6">
+                    <p>⚠️ <strong>Prohibited Content Policy</strong>: Restaurants, rival dining venues, fast-food chains (Dominos, KFC), and food truck ads are strictly prohibited on dining kiosks. Misclassified ads will be rejected during manual admin review.</p>
+                  </div>
+                </div>
+
+                {/* Modern Media Creative Type Tab Selector */}
+                <div className="space-y-4 pt-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground">Select Creative Type</label>
+                    <div className="flex bg-muted p-1.5 rounded-xl border border-border/40 text-xs font-bold space-x-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMediaTypeTab('videos');
+                          setMediaUrl('');
+                          setUploadedImages([]);
+                        }}
+                        className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center space-x-2 ${mediaTypeTab === 'videos'
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                      >
+                        <Video className="w-4 h-4 text-blue-500" />
+                        <span>Ad Video</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMediaTypeTab('images');
+                          setMediaUrl('');
+                          setUploadedImages([]);
+                        }}
+                        className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center space-x-2 ${mediaTypeTab === 'images'
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                      >
+                        <Upload className="w-4 h-4 text-amber-500" />
+                        <span>Ad Images (Up to 2)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {mediaTypeTab === 'videos' ? (
+                    /* MODERN TWO-STAGE VIDEO UPLOAD SECTION */
+                    <div className="space-y-4">
+                      {/* Step 1: File selection target */}
+                      <label className="flex flex-col items-center justify-center border-2 border-dashed border-primary/40 hover:border-primary hover:bg-primary/5 rounded-2xl p-6 cursor-pointer transition-all text-center bg-card/10 group">
+                        <div className="w-10 h-10 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                          <Video className="w-5 h-5 text-blue-500" />
                         </div>
-                      ) : (
-                        <>
-                          {/* Media Specifications Disclaimer Banner */}
-                          <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs font-medium space-y-2 text-foreground">
-                            <div className="flex items-center space-x-1.5 text-blue-600 dark:text-blue-400 font-bold uppercase text-[10px] tracking-wider">
-                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                              <span>Media Specs & Content Policy ({selectedDeviceType === 'tablet' ? 'Tablet Kiosk' : 'Digital Screen / TV'})</span>
-                            </div>
-                            <div className="text-[11px] text-muted-foreground leading-relaxed pl-5 space-y-0.5 font-semibold">
-                              {mediaTypeTab === 'videos' ? (
-                                <>
-                                  <p>• <strong>Aspect Ratio</strong>: {selectedDeviceType === 'tablet' ? 'Portrait 10:16 / 9:16 (Vertical)' : 'Landscape 16:9 (Horizontal Widescreen)'}</p>
-                                  <p>• <strong>Max Duration</strong>: Up to <strong>{config.maxVideoDurationSeconds || 30} seconds</strong> (MP4 / WEBM formats)</p>
-                                  <p>• <strong>Preferred Resolution</strong>: <strong>{selectedDeviceType === 'tablet' ? '800 × 1280 px' : '1920 × 1080 px Full HD'}</strong></p>
-                                </>
-                              ) : (
-                                <>
-                                  <p>• <strong>Aspect Ratio</strong>: {selectedDeviceType === 'tablet' ? 'Portrait 10:16 / 9:16 (Vertical)' : 'Landscape 16:9 (Horizontal Widescreen)'}</p>
-                                  <p>• <strong>Creatives Allowed</strong>: Up to <strong>2 Images</strong> (Front & Back switching creatives)</p>
-                                  <p>• <strong>Preferred Resolution</strong>: <strong>{selectedDeviceType === 'tablet' ? '800 × 1280 px' : '1920 × 1080 px Full HD'}</strong></p>
-                                </>
-                              )}
-                            </div>
-                            <div className="pt-2 border-t border-blue-500/20 text-[10px] text-amber-600 dark:text-amber-400 font-semibold space-y-0.5 pl-5">
-                              <p>⚠️ <strong>Prohibited Content Policy</strong>: Restaurants, rival dining venues, fast-food chains (Dominos, KFC), and food truck ads are strictly prohibited on dining kiosks. Misclassified ads will be rejected during manual admin review.</p>
-                            </div>
+                        <span className="text-sm font-bold text-foreground">
+                          {selectedVideoFile ? `Selected: ${selectedVideoFile.name}` : 'Click to select ad video file (.mp4, .webm)'}
+                        </span>
+                        <span className="text-xs text-muted-foreground mt-1">Maximum duration: {config.maxVideoDurationSeconds || 30}s</span>
+                        <input
+                          type="file"
+                          accept="video/mp4,video/webm"
+                          onChange={handleVideoFileSelect}
+                          disabled={uploading}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {/* Step 2: Instant Client-Side Browser Preview Box */}
+                      {localVideoPreviewUrl && !mediaUrl && (
+                        <div className="p-4 rounded-xl border border-primary/40 bg-muted/20 space-y-3 animate-fade-in">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-bold text-foreground">Browser Media Preview (Not Uploaded Yet)</p>
+                            <button
+                              type="button"
+                              onClick={clearSelectedVideoFile}
+                              disabled={uploading}
+                              className="text-xs text-destructive hover:underline font-bold flex items-center space-x-1"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Change Video</span>
+                            </button>
+                          </div>
+                          <div className={`mx-auto w-full max-w-[260px] rounded-xl border border-border/40 bg-black overflow-hidden relative shadow-md ${activeUploadBooking?.deviceType === 'tablet' ? 'aspect-[3/4]' : 'aspect-[16/9]'}`}>
+                            <video src={localVideoPreviewUrl} controls className="w-full h-full object-contain" />
                           </div>
 
-                          {mediaTypeTab === 'videos' ? (
-                            /* VIDEO UPLOADER ROUTINE */
-                            <div className="space-y-3">
-                              <div className="space-y-2">
-                                <label className="flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-4 cursor-pointer transition-all text-center bg-card/5">
-                                  <Video className="w-5 h-5 text-blue-500 mb-1" />
-                                  <span className="text-[10px] font-bold text-foreground">
-                                    {uploading ? (
-                                      uploadProgress < 100
-                                        ? `Uploading (${uploadProgress}%)...`
-                                        : 'Processing Video...'
-                                    ) : (
-                                      'Upload Video File (.mp4, .webm)'
-                                    )}
-                                  </span>
-                                  <input
-                                    type="file"
-                                    accept="video/mp4,video/webm"
-                                    onChange={handleFileUpload}
-                                    disabled={uploading}
-                                    className="hidden"
-                                  />
-                                </label>
-                                {uploading && (
-                                  <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
-                                    <div
-                                      className={`h-1.5 rounded-full transition-all duration-300 ${uploadProgress === 100
-                                        ? 'bg-primary animate-pulse w-full'
-                                        : 'bg-primary'
-                                        }`}
-                                      style={{ width: uploadProgress === 100 ? '100%' : `${uploadProgress}%` }}
-                                    />
-                                  </div>
-                                )}
+                          {uploading && (
+                            <div className="space-y-1.5 pt-2">
+                              <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                                <span>Uploading payload to server staging...</span>
+                                <span>{uploadProgress}%</span>
                               </div>
-
-                              <input
-                                type="text"
-                                placeholder="Or, paste video URL"
-                                value={mediaUrl}
-                                onChange={(e) => setMediaUrl(e.target.value)}
-                                className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                              />
-
-                              {mediaUrl && (
-                                <div className="space-y-1.5 animate-fade-in pt-1">
-                                  <div className="flex items-center justify-between">
-                                    <p className="text-[9px] font-bold text-muted-foreground uppercase">Video Aspect-Ratio Preview</p>
-                                    <button
-                                      type="button"
-                                      onClick={() => setMediaUrl('')}
-                                      className="text-[9px] font-bold text-destructive hover:underline cursor-pointer flex items-center space-x-1"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                      <span>Remove Video</span>
-                                    </button>
-                                  </div>
-                                  <div className={`mx-auto w-full max-w-[200px] rounded-xl border border-border/40 bg-black overflow-hidden relative shadow-md ${selectedDeviceType === 'tablet'
-                                    ? 'aspect-[3/4]'
-                                    : 'aspect-[16/9]'
-                                    }`}>
-                                    <video
-                                      src={resolveMediaUrl(mediaUrl)}
-                                      controls
-                                      className="w-full h-full object-contain"
-                                    />
-                                  </div>
-                                  <p className="text-[8px] text-primary font-semibold truncate text-center mt-1">{mediaUrl}</p>
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            /* IMAGE UPLOADER ROUTINE (UP TO 2 IMAGES) */
-                            <div className="space-y-3">
-                              {uploadedImages.length < 2 && (
-                                <div className="space-y-2">
-                                  <label className="flex flex-col items-center justify-center border border-dashed border-border/40 hover:bg-muted/50 rounded-xl py-4 cursor-pointer transition-all text-center bg-card/5">
-                                    <Upload className="w-5 h-5 text-amber-500 mb-1" />
-                                    <span className="text-[10px] font-bold text-foreground">
-                                      {uploading ? (
-                                        uploadProgress < 100
-                                          ? `Uploading (${uploadProgress}%)...`
-                                          : 'Optimizing Image via Sharp...'
-                                      ) : (
-                                        `Upload Image File ${uploadedImages.length + 1}/2 (.png, .jpg, .webp)`
-                                      )}
-                                    </span>
-                                    <input
-                                      type="file"
-                                      accept="image/png,image/jpeg,image/jpg,image/webp"
-                                      onChange={handleImageUpload}
-                                      disabled={uploading}
-                                      className="hidden"
-                                    />
-                                  </label>
-                                  {uploading && (
-                                    <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
-                                      <div
-                                        className={`h-1.5 rounded-full transition-all duration-300 ${uploadProgress === 100
-                                          ? 'bg-amber-500 animate-pulse w-full'
-                                          : 'bg-amber-500'
-                                          }`}
-                                        style={{ width: uploadProgress === 100 ? '100%' : `${uploadProgress}%` }}
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              <input
-                                type="text"
-                                placeholder="Or, paste image URL"
-                                value={uploadedImages.length === 0 ? mediaUrl : ''}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setMediaUrl(val);
-                                  if (val) setUploadedImages([val]);
-                                  else setUploadedImages([]);
-                                }}
-                                className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                              />
-
-                              {/* Image Cards Preview Grid */}
-                              {uploadedImages.length > 0 && (
-                                <div className="space-y-2 animate-fade-in pt-1">
-                                  <p className="text-[9px] font-bold text-muted-foreground uppercase">Image Asset Previews ({uploadedImages.length}/2)</p>
-                                  <div className="grid grid-cols-2 gap-3">
-                                    {uploadedImages.map((imgItem, idx) => {
-                                      const imgSrc = typeof imgItem === 'string'
-                                        ? resolveMediaUrl(imgItem)
-                                        : (imgItem.previewUrl || resolveMediaUrl(imgItem.serverUrl));
-                                      return (
-                                        <div key={idx} className="relative group border border-border/40 rounded-xl overflow-hidden bg-muted/20 p-2 space-y-2">
-                                          <div className={`w-full rounded-lg bg-black overflow-hidden relative shadow-sm ${selectedDeviceType === 'tablet'
-                                            ? 'aspect-[3/4]'
-                                            : 'aspect-[16/9]'
-                                            }`}>
-                                            <img
-                                              src={imgSrc}
-                                              alt={`Creative ${idx + 1}`}
-                                              className="w-full h-full object-contain"
-                                            />
-                                          </div>
-                                          <div className="flex items-center justify-between">
-                                            <span className="text-[9px] font-bold text-foreground">
-                                              {idx === 0 ? 'Front (Image 1)' : 'Back (Image 2)'}
-                                            </span>
-                                            <button
-                                              type="button"
-                                              onClick={() => removeUploadedImage(idx)}
-                                              className="p-1 text-destructive hover:bg-destructive/10 rounded transition-colors cursor-pointer"
-                                              title="Remove Image"
-                                            >
-                                              <Trash2 className="w-3.5 h-3.5" />
-                                            </button>
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
+                              <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                                <div
+                                  className={`h-2 rounded-full transition-all duration-300 ${uploadProgress === 100 ? 'bg-primary animate-pulse w-full' : 'bg-primary'}`}
+                                  style={{ width: uploadProgress === 100 ? '100%' : `${uploadProgress}%` }}
+                                />
+                              </div>
+                              <p className="text-[10px] text-amber-500 font-semibold flex items-center justify-center pt-1">
+                                ⚠️ Upload in progress. Please do not refresh or close this tab!
+                              </p>
                             </div>
                           )}
-                        </>
+
+                          {!uploading && (
+                            <div className="pt-2">
+                              <button
+                                type="button"
+                                onClick={handleFileUpload}
+                                className="w-full bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center space-x-2"
+                              >
+                                <Upload className="w-4 h-4" />
+                                <span>Upload Ad</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
+
+                      {/* Final Uploaded Media Confirmation Box */}
+                      {mediaUrl && (
+                        <div className="p-4 rounded-xl border border-emerald-500/40 bg-emerald-500/5 space-y-3 animate-fade-in">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-bold text-foreground">Final Uploaded Video Asset</p>
+                            <span className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2.5 py-1 rounded-full">Staged & Scheduled</span>
+                          </div>
+                          <div className={`mx-auto w-full max-w-[260px] rounded-xl border border-border/40 bg-black overflow-hidden relative shadow-md ${activeUploadBooking?.deviceType === 'tablet' ? 'aspect-[3/4]' : 'aspect-[16/9]'}`}>
+                            <video src={resolveMediaUrl(mediaUrl)} controls className="w-full h-full object-contain" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* MODERN TWO-STAGE IMAGE UPLOAD SECTION */
+                    <div className="space-y-4">
+                      {/* Step 1: File selection target box */}
+                      {selectedImageFiles.length < 2 && !mediaUrl && (
+                        <label className="flex flex-col items-center justify-center border-2 border-dashed border-amber-500/40 hover:border-amber-500 hover:bg-amber-500/5 rounded-2xl p-6 cursor-pointer transition-all text-center bg-card/10 group">
+                          <div className="w-10 h-10 rounded-2xl bg-amber-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                            <Upload className="w-5 h-5 text-amber-500" />
+                          </div>
+                          <span className="text-sm font-bold text-foreground">
+                            Click to select image file {selectedImageFiles.length + 1}/2 (.png, .jpg, .webp)
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/jpg,image/webp"
+                            onChange={handleImageFileSelect}
+                            disabled={uploading}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
+
+                      {/* Step 2: Instant Client-Side Browser Preview Box */}
+                      {localImagePreviewUrls.length > 0 && !mediaUrl && (
+                        <div className="p-4 rounded-xl border border-amber-500/40 bg-muted/20 space-y-3 animate-fade-in">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-bold text-foreground">Browser Media Preview (Not Uploaded Yet)</p>
+                            <span className="text-[10px] font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">
+                              {localImagePreviewUrls.length}/2 Images Selected
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            {localImagePreviewUrls.map((blobUrl, idx) => (
+                              <div key={idx} className="border border-border/40 rounded-xl overflow-hidden bg-muted/20 p-2.5 space-y-2 relative">
+                                <div className={`w-full rounded-lg bg-black overflow-hidden relative shadow-sm ${activeUploadBooking?.deviceType === 'tablet' ? 'aspect-[3/4]' : 'aspect-[16/9]'}`}>
+                                  <img src={blobUrl} alt={`Preview ${idx + 1}`} className="w-full h-full object-contain" />
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-foreground">{idx === 0 ? 'Front Creative' : 'Back Creative'}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeSelectedImageFile(idx)}
+                                    disabled={uploading}
+                                    className="p-1 text-destructive hover:bg-destructive/10 rounded transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {uploading && (
+                            <div className="space-y-1.5 pt-2">
+                              <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                                <span>Optimizing & uploading images...</span>
+                                <span>{uploadProgress}%</span>
+                              </div>
+                              <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                                <div
+                                  className={`h-2 rounded-full transition-all duration-300 ${uploadProgress === 100 ? 'bg-primary animate-pulse w-full' : 'bg-primary'}`}
+                                  style={{ width: uploadProgress === 100 ? '100%' : `${uploadProgress}%` }}
+                                />
+                              </div>
+                              <p className="text-[10px] text-amber-500 font-semibold flex items-center justify-center pt-1">
+                                ⚠️ Upload in progress. Please do not refresh or close this tab!
+                              </p>
+                            </div>
+                          )}
+
+                          {!uploading && (
+                            <div className="pt-2">
+                              <button
+                                type="button"
+                                onClick={handleImageUpload}
+                                className="w-full bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center space-x-2"
+                              >
+                                <Upload className="w-4 h-4" />
+                                <span>Upload Ad</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Final Uploaded Media Confirmation Box */}
+                      {uploadedImages.length > 0 && mediaUrl && (
+                        <div className="p-4 rounded-xl border border-emerald-500/40 bg-emerald-500/5 space-y-3 animate-fade-in">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-bold text-foreground">Final Uploaded & Optimized Images</p>
+                            <span className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2.5 py-1 rounded-full">Optimized & Saved</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            {uploadedImages.map((imgItem, idx) => (
+                              <div key={idx} className="border border-border/40 rounded-xl overflow-hidden bg-muted/20 p-2.5 space-y-2">
+                                <div className={`w-full rounded-lg bg-black overflow-hidden relative shadow-sm ${activeUploadBooking?.deviceType === 'tablet' ? 'aspect-[3/4]' : 'aspect-[16/9]'}`}>
+                                  <img src={resolveMediaUrl(imgItem)} alt={`Creative ${idx + 1}`} className="w-full h-full object-contain" />
+                                </div>
+                                <span className="text-xs font-bold text-foreground">{idx === 0 ? 'Front Creative' : 'Back Creative'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {mediaUrl && (
+                    <div className="pt-4 border-t border-border/40">
+                      <button
+                        onClick={() => {
+                          showToast('success', 'Campaign creative saved successfully! Returning to campaigns list.');
+                          setActiveUploadBooking(null);
+                          setActiveTab('bookings');
+                        }}
+                        className="w-full bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all shadow-md cursor-pointer"
+                      >
+                        Finish & View Campaign
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* CLEAN INITIAL BOOKING FORM (PAYWALL ENFORCED) */
+              <>
+                <h1 className="font-outfit text-2xl font-black text-foreground mb-1">Book Advertising Spot</h1>
+                <p className="text-muted-foreground text-xs font-semibold mb-6">Select your target venue outlet and duration to proceed to payment checkout.</p>
+
+                {/* Step 1: Location selection */}
+                <div className="space-y-4 m-0 p-0 border-none bg-transparent">
+                  <h3 className="font-outfit text-md font-bold text-foreground flex items-center">
+                    <MapPin className="w-4 h-4 mr-2 text-primary shrink-0" />
+                    <span>Target Location & Venue</span>
+                  </h3>
+
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Select State</label>
+                      <select
+                        value={selectedState}
+                        onChange={(e) => {
+                          setSelectedState(e.target.value);
+                          fetchCities(e.target.value);
+                        }}
+                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                      >
+                        <option value="">-- State --</option>
+                        {states.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Select City</label>
+                      <select
+                        value={selectedCity}
+                        disabled={!selectedState}
+                        onChange={(e) => {
+                          setSelectedCity(e.target.value);
+                          fetchOutlets(e.target.value);
+                        }}
+                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer disabled:opacity-50"
+                      >
+                        <option value="">-- City --</option>
+                        {cities.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Select Outlet Name</label>
+                      <select
+                        value={selectedOutletName}
+                        disabled={!selectedCity}
+                        onChange={(e) => {
+                          const name = e.target.value;
+                          setSelectedOutletName(name);
+                          const matches = outlets.filter(o => o.outletName === name);
+                          const devices = matches.map(o => o.deviceType);
+                          setAvailableDeviceTypes(devices);
+                          setSelectedDeviceType('');
+                          setSelectedOutlet(null);
+                        }}
+                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer disabled:opacity-50"
+                      >
+                        <option value="">-- Outlet --</option>
+                        {Array.from(new Set(outlets.map(o => o.outletName))).map(name => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Select Display Type</label>
+                      <select
+                        value={selectedDeviceType}
+                        disabled={!selectedOutletName}
+                        onChange={(e) => {
+                          const devType = e.target.value;
+                          setSelectedDeviceType(devType);
+                          const matched = outlets.find(o => o.outletName === selectedOutletName && o.deviceType === devType);
+                          setSelectedOutlet(matched || null);
+                          setQuantity('1');
+                        }}
+                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer disabled:opacity-50"
+                      >
+                        <option value="">-- Display Type --</option>
+                        {availableDeviceTypes.map(type => (
+                          <option key={type} value={type}>
+                            {type === 'tablet' ? 'Tabletop Tablet' : 'Wall Screen'}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                 </div>
 
-                {/* Submit Pay button */}
-                <div className="col-span-full pt-2">
-                  <button
-                    type="submit"
-                    disabled={computedAmount === 0 || uploading}
-                    className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground font-bold py-4 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg glow-hover cursor-pointer"
-                  >
-                    <CreditCard className="w-4 h-4" />
-                    <span>
-                      {computedAmount > 0
-                        ? `Pay ₹${computedAmount / 100} via PhonePe Payment Gateway`
-                        : 'Pay via PhonePe Payment Gateway'}
-                    </span>
-                  </button>
-                </div>
-              </form>
-            </div>
+                {/* Step 2: Campaign Settings */}
+                <form onSubmit={handleInitiateBooking} className="space-y-4 pt-4 border-t border-border/40">
+                  <h3 className="font-outfit text-md font-bold text-foreground flex items-center">
+                    <Video className="w-4 h-4 mr-2 text-primary shrink-0" />
+                    <span>Ad Schedule & Package</span>
+                  </h3>
+
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Quantity of Devices</label>
+                      <input
+                        type="text"
+                        required
+                        value={quantity}
+                        onChange={(e) => handleQuantityChange(e.target.value)}
+                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                      {selectedOutlet && (
+                        <p className="text-[10px] text-muted-foreground mt-1 font-semibold">Max available: {selectedOutlet.quantity}</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Duration (Days)</label>
+                      <select
+                        value={adDurationDays}
+                        onChange={(e) => setAdDurationDays(parseInt(e.target.value, 10))}
+                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                      >
+                        <option value={7}>7 Days Plan</option>
+                        <option value={30}>30 Days Plan</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Frequency</label>
+                      <select
+                        value={frequency}
+                        onChange={(e) => setFrequency(e.target.value)}
+                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                      >
+                        {getAvailableFrequencies().map((freq) => (
+                          <option key={freq} value={freq}>{getFrequencyLabel(freq)}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Ad Category</label>
+                      <select
+                        value={adCategory}
+                        onChange={(e) => setAdCategory(e.target.value)}
+                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                      >
+                        <option value="Electronics">Electronics & Gadgets</option>
+                        <option value="RealEstate">Real Estate & Housing</option>
+                        <option value="Automotive">Automotive & Vehicles</option>
+                        <option value="Beverages">Beverages & Soft Drinks</option>
+                        <option value="Fashion">Fashion & Apparel</option>
+                        <option value="Finance">Finance & Banking</option>
+                        <option value="Entertainment">Entertainment & Media</option>
+                        <option value="Other">Other Commercial Brands</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Submit Pay button */}
+                  <div className="pt-4">
+                    <button
+                      type="submit"
+                      disabled={computedAmount === 0 || uploading}
+                      className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground font-bold py-4 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer"
+                    >
+                      <CreditCard className="w-4 h-4" />
+                      <span>
+                        {computedAmount > 0
+                          ? `Pay ₹${computedAmount / 100} via PhonePe Payment Gateway`
+                          : 'Select Venue & Plan to Pay'}
+                      </span>
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
           </div>
         )}
       </main>

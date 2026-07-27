@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const HostApplication = require('../models/HostApplication');
 const AdBooking = require('../models/AdBooking');
 const AdsRates = require('../models/AdsRates');
@@ -6,6 +8,7 @@ const User = require('../models/User');
 const PhonePeTransaction = require('../models/PhonePeTransaction');
 const Report = require('../models/Report');
 const Menu = require('../models/Menu');
+const MediaLog = require('../models/MediaLog');
 const phonePeService = require('../services/phonePeService');
 const crypto = require('crypto');
 const validator = require('../utils/validation');
@@ -250,6 +253,39 @@ class AdminController {
       } else {
         booking.approvalStatus = 'rejected';
         booking.denialReason = denialReason.trim();
+
+        // Immediately delete all media files (videos, images, staging) from disk upon rejection
+        if (booking.mediaUrl) {
+          const mediaUrls = booking.mediaUrl.split(',').map(s => s.trim()).filter(Boolean);
+          for (const rawUrl of mediaUrls) {
+            const urlParts = rawUrl.split('/uploads/');
+            if (urlParts.length > 1) {
+              const relativePath = urlParts[1];
+              const localFilePath = path.join(__dirname, '..', 'uploads', relativePath);
+              if (fs.existsSync(localFilePath)) {
+                try {
+                  fs.unlinkSync(localFilePath);
+                  console.log(`[REJECTION CLEANUP] Unlinked rejected media file: ${localFilePath}`);
+                } catch (unlinkErr) {
+                  console.error(`[REJECTION CLEANUP] Failed to unlink ${localFilePath}:`, unlinkErr.message);
+                }
+              }
+            }
+          }
+
+          // Log file unlinking in MediaLog
+          const mediaLog = new MediaLog({
+            originalFilename: booking.mediaUrl,
+            finalizedFilename: 'rejected_unlinked',
+            outputPath: 'deleted',
+            status: 'failed',
+            errorMessage: `Campaign rejected by admin. Reason: ${denialReason.trim()}`
+          });
+          await mediaLog.save();
+
+          // Clear mediaUrl on database record
+          booking.mediaUrl = '';
+        }
       }
       
       await booking.save();

@@ -48,7 +48,7 @@ const AdBookingSchema = new mongoose.Schema({
   },
   mediaUrl: {
     type: String,
-    required: true
+    default: ''
   },
   adCategory: {
     type: String,
