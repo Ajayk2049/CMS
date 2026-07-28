@@ -91,12 +91,22 @@ const HostApplicationSchema = new mongoose.Schema({
     default: true,
     index: true
   },
-  // Modular Quota Overrides (null means system default: 2 videos, 10 images, 3 screens)
+  // Modular Quota Overrides (null means system default)
+  // Tablet: 2 videos / 4 daily, 5 images / 10 daily
+  // Screen: 2 videos / 4 daily, 5 images / 10 daily
   customMaxVideoSlots: {
     type: Number,
     default: null
   },
   customMaxImageSlots: {
+    type: Number,
+    default: null
+  },
+  customMaxScreenVideoSlots: {
+    type: Number,
+    default: null
+  },
+  customMaxScreenImageSlots: {
     type: Number,
     default: null
   },
@@ -112,6 +122,14 @@ const HostApplicationSchema = new mongoose.Schema({
     type: Number,
     default: null
   },
+  customDailyScreenVideoQuota: {
+    type: Number,
+    default: null
+  },
+  customDailyScreenImageQuota: {
+    type: Number,
+    default: null
+  },
   customDailyScreenQuota: {
     type: Number,
     default: null
@@ -123,11 +141,19 @@ const HostApplicationSchema = new mongoose.Schema({
   },
   dailyImageChangesRemaining: {
     type: Number,
-    default: 15
+    default: 10
+  },
+  dailyScreenVideoChangesRemaining: {
+    type: Number,
+    default: 4
+  },
+  dailyScreenImageChangesRemaining: {
+    type: Number,
+    default: 10
   },
   dailyScreenChangesRemaining: {
     type: Number,
-    default: 6
+    default: 4
   },
   lastQuotaResetDate: {
     type: Date,

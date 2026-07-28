@@ -499,7 +499,8 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
     if (dir.existsSync()) {
       final files = dir.listSync().whereType<File>().where((f) {
         final name = f.path.split('/').last;
-        return (name.endsWith('.mp4') || name.endsWith('.webm')) && f.lengthSync() > 1000;
+        return ((name.endsWith('.mp4') || name.endsWith('.webm')) && f.lengthSync() > 1000) ||
+               ((name.endsWith('.webp') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png')) && f.lengthSync() > 500);
       }).toList();
 
       if (files.isNotEmpty) {
@@ -673,7 +674,7 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
 
         if (mediaUrl.isNotEmpty &&
             (mediaUrl.endsWith('.mp4') || mediaUrl.endsWith('.webm'))) {
-          // Build absolute download URL
+          // Video ad — download as ad_[bookingId].[ext]
           final absoluteUrl = mediaUrl.startsWith('http')
               ? mediaUrl
               : 'http://${widget.serverHost}:4200$mediaUrl';
@@ -695,8 +696,32 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
           }
 
           newLocalPaths.add(localFile.path);
+        } else if (mediaUrl.isNotEmpty &&
+            (mediaUrl.endsWith('.webp') || mediaUrl.endsWith('.jpg') || mediaUrl.endsWith('.jpeg') || mediaUrl.endsWith('.png'))) {
+          // Image ad — download and register as img__ entry
+          final absoluteUrl = mediaUrl.startsWith('http')
+              ? mediaUrl
+              : 'http://${widget.serverHost}:4200$mediaUrl';
+
+          final fileExt = mediaUrl.split('.').last;
+          final fileName = 'img_$bookingId.$fileExt';
+          final localFile = File('$_adsDirectory/$fileName');
+          activeFileNames.add(fileName);
+
+          if (!localFile.existsSync() || localFile.lengthSync() < 500) {
+            final success = await _downloadWithRetry(absoluteUrl, localFile, i + 1, serverAds.length);
+            if (!success) {
+              print('[DOWNLOAD] Skipping image ad $bookingId after failed download.');
+              continue;
+            }
+          } else {
+            print('[DOWNLOAD] Image ad $bookingId already cached: ${localFile.path} (${(localFile.lengthSync() / 1024).round()} KB)');
+          }
+
+          // Register as img__[localPath] so the player knows it is an image
+          newLocalPaths.add('img__${localFile.path}');
         } else {
-          // Non-video ad (static card)
+          // Non-video/image ad (static text card)
           newLocalPaths.add(
             'static__${ad['bookingId']}__${ad['title'] ?? ''}__${ad['subtitle'] ?? ad['description'] ?? ''}',
           );
@@ -846,7 +871,7 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
       for (var entity in dir.listSync()) {
         if (entity is File) {
           final name = entity.path.split('/').last.split('\\').last;
-          if (name.startsWith('ad_') && !activeFileNames.contains(name)) {
+          if ((name.startsWith('ad_') || name.startsWith('img_')) && !activeFileNames.contains(name)) {
             print('[CLEANUP] Removing old ad file: ${entity.path}');
             entity.deleteSync();
           }
@@ -892,6 +917,14 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
       // Static text ad — show for 8 seconds then advance
       if (mounted) setState(() {});
       _staticAdTimer = Timer(const Duration(seconds: 8), () {
+        _trackImpression(adSource);
+        _advanceToNextAd();
+      });
+    } else if (adSource.startsWith('img__')) {
+      // Image ad — show for 10 seconds then advance
+      print('[PLAYER] Showing image ad: $adSource');
+      if (mounted) setState(() {});
+      _staticAdTimer = Timer(const Duration(seconds: 10), () {
         _trackImpression(adSource);
         _advanceToNextAd();
       });
@@ -947,7 +980,7 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
     final nextIndex = (_currentAdIndex + 1) % _localPlaylist.length;
     final nextSource = _localPlaylist[nextIndex];
 
-    if (nextSource.startsWith('static__')) return; // No preload needed for static
+    if (nextSource.startsWith('static__') || nextSource.startsWith('img__')) return; // No preload needed for static/image
 
     final file = File(nextSource);
     if (!file.existsSync() || file.lengthSync() < 1000) return;
@@ -1040,7 +1073,7 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
     // Advance to next ad in circular fashion
     final nextIndex = (_currentAdIndex + 1) % _localPlaylist.length;
     final nextSource = _localPlaylist[nextIndex];
-    final isNextVideo = !nextSource.startsWith('static__');
+    final isNextVideo = !nextSource.startsWith('static__') && !nextSource.startsWith('img__');
 
     // Dispose active controller
     final oldController = _activeController;
@@ -1102,13 +1135,24 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
   }
 
   String _getBookingId(String path) {
-    if (path.startsWith('static__')) {
+    if (path.startsWith('img__')) {
+      // Image ad: img__/path/to/file.webp or img__bookingId
+      final inner = path.substring(5);
+      final fileName = inner.split('/').last.split('\\').last;
+      if (fileName.startsWith('img_')) {
+        return fileName.replaceAll('img_', '').split('.').first;
+      }
+      return inner;
+    } else if (path.startsWith('static__')) {
       final parts = path.split('__');
       if (parts.length >= 2) return parts[1];
     } else {
       final fileName = path.split('/').last.split('\\').last;
       if (fileName.startsWith('ad_')) {
         return fileName.replaceAll('ad_', '').split('.').first;
+      }
+      if (fileName.startsWith('img_')) {
+        return fileName.replaceAll('img_', '').split('.').first;
       }
     }
     return '';
@@ -1401,7 +1445,8 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
     if (_localPlaylist.isEmpty) return _buildSplashScreen('Loading...');
 
     final adSource = _localPlaylist[_currentAdIndex % _localPlaylist.length];
-    final hasVideo = !adSource.startsWith('static__');
+    final hasVideo = !adSource.startsWith('static__') && !adSource.startsWith('img__');
+    final hasImage = adSource.startsWith('img__');
     final isReady = _activeController != null && _activeController!.value.isInitialized;
 
     if (hasVideo && isReady) {
@@ -1414,7 +1459,37 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
           child: VideoPlayer(_activeController!),
         ),
       );
-    } else if (!hasVideo) {
+    } else if (hasImage) {
+      // Full-screen image ad
+      final imagePath = adSource.substring(5); // Remove 'img__' prefix
+      final imageFile = File(imagePath);
+      if (imageFile.existsSync()) {
+        return Container(
+          color: Colors.black,
+          child: Image.file(
+            imageFile,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            errorBuilder: (context, error, stackTrace) {
+              return Container(
+                color: const Color(0xFF030712),
+                child: const Center(
+                  child: Icon(Icons.broken_image, size: 80, color: Colors.white24),
+                ),
+              );
+            },
+          ),
+        );
+      } else {
+        return Container(
+          color: const Color(0xFF030712),
+          child: const Center(
+            child: Icon(Icons.image_not_supported, size: 80, color: Colors.white24),
+          ),
+        );
+      }
+    } else if (!hasVideo && !hasImage) {
       // Static ad card
       String title = 'DigiAds Display';
       String subtitle = '';

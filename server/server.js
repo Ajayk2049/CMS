@@ -953,49 +953,6 @@ async function main() {
   }
 }
 
-// localtunnel helper
-const localtunnel = require("localtunnel");
+main();
 
-let tunnelInstance = null;
 
-async function startLocalTunnel() {
-  try {
-    if (tunnelInstance) {
-      try {
-        tunnelInstance.close();
-      } catch (e) {}
-    }
-    const tunnel = await localtunnel({ port: config.port || 4200 });
-    tunnelInstance = tunnel;
-    const publicCallbackUrl = `${tunnel.url}/api/v1/payments/callback`;
-
-    // Dynamically override the callback URL in config
-    config.phonePe.callbackUrl = publicCallbackUrl;
-
-    console.log(`\x1b[32m[localtunnel] Tunnel active at: ${tunnel.url}\x1b[0m`);
-    console.log(`\x1b[32m[localtunnel] PhonePe Callback URL set to: ${publicCallbackUrl}\x1b[0m`);
-
-    tunnel.on('close', () => {
-      console.log('[localtunnel] Tunnel closed. Attempting reconnect in 10s...');
-      config.phonePe.callbackUrl = process.env.PHONEPE_CALLBACK_URL;
-      setTimeout(startLocalTunnel, 10000);
-    });
-
-    tunnel.on('error', (err) => {
-      console.error('[localtunnel] Tunnel socket error:', err.message);
-      try {
-        tunnel.close();
-      } catch (e) {}
-    });
-  } catch (err) {
-    console.error('[localtunnel] Failed to start tunnel:', err.message);
-    console.warn('[localtunnel] Falling back to .env callback URL:', config.phonePe.callbackUrl);
-    setTimeout(startLocalTunnel, 10000);
-  }
-}
-
-// Ensure tunnel is ready BEFORE server starts accepting requests
-(async () => {
-  await startLocalTunnel();
-  main();
-})();

@@ -480,6 +480,23 @@ export default function AdminPortal() {
       });
     });
 
+    // 4. Expired Ad Subscriptions (campaigns whose duration has elapsed)
+    const now = new Date();
+    campaigns.filter(c => c.paymentStatus === 'completed' && c.approvalStatus === 'approved').forEach(booking => {
+      const expiryDate = new Date(booking.createdAt);
+      expiryDate.setDate(expiryDate.getDate() + (booking.adDurationDays || 0));
+      if (expiryDate < now) {
+        list.push({
+          id: `expired_${booking.bookingId}`,
+          title: '⏰ Expired Ad Subscription',
+          description: `Campaign ${booking.bookingId} — ${booking.outletId?.outletName || 'Venue'} (expired ${expiryDate.toLocaleDateString()})`,
+          type: 'expired',
+          target: booking,
+          time: expiryDate
+        });
+      }
+    });
+
     // Sort by time descending
     return list.sort((a, b) => b.time - a.time);
   };
@@ -490,6 +507,12 @@ export default function AdminPortal() {
       setRequestsSubTab('hosts');
       setSelectedHostApp(item.target);
     } else if (item.type === 'campaign') {
+      setActiveTab('requests');
+      setRequestsSubTab('campaigns');
+      setSelectedCampaign(item.target);
+      setShowDetailsModal(true);
+    } else if (item.type === 'expired') {
+      // Navigate to campaign details for expired subscription review
       setActiveTab('requests');
       setRequestsSubTab('campaigns');
       setSelectedCampaign(item.target);
@@ -1515,7 +1538,8 @@ export default function AdminPortal() {
                             >
                               {/* Icon Indicator */}
                               <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${item.type === 'host' ? 'bg-emerald-500' :
-                                item.type === 'campaign' ? 'bg-blue-500' : 'bg-orange-500'
+                                item.type === 'campaign' ? 'bg-blue-500' :
+                                item.type === 'expired' ? 'bg-amber-500' : 'bg-orange-500'
                                 }`} />
 
                               <div className="flex-1 space-y-0.5">
@@ -3948,7 +3972,7 @@ export default function AdminPortal() {
 
             <div className="space-y-4 text-xs font-semibold">
               <p className="text-muted-foreground text-[11px]">
-                Leave blank to use system defaults (2 Video / 4 Daily; 10 Image / 15 Daily; 3 Wall Screen / 6 Daily).
+                Leave blank to use mode defaults — Open Mode: 4 Video / 4 Daily, 5 Image / 10 Daily; Closed Mode: 3 Video / 10 Daily, 10 Image / 15 Daily.
               </p>
 
               <div className="grid grid-cols-2 gap-3">
@@ -3956,7 +3980,7 @@ export default function AdminPortal() {
                   <label className="text-[10px] font-black uppercase text-muted-foreground">Max Video Slots</label>
                   <input
                     type="number"
-                    placeholder="Default: 2"
+                    placeholder="Default: 4"
                     value={quotaForm.customMaxVideoSlots}
                     onChange={(e) => setQuotaForm(prev => ({ ...prev, customMaxVideoSlots: e.target.value }))}
                     className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
@@ -3977,7 +4001,7 @@ export default function AdminPortal() {
                   <label className="text-[10px] font-black uppercase text-muted-foreground">Max Image Slots</label>
                   <input
                     type="number"
-                    placeholder="Default: 10"
+                    placeholder="Default: 5"
                     value={quotaForm.customMaxImageSlots}
                     onChange={(e) => setQuotaForm(prev => ({ ...prev, customMaxImageSlots: e.target.value }))}
                     className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
@@ -3987,7 +4011,7 @@ export default function AdminPortal() {
                   <label className="text-[10px] font-black uppercase text-muted-foreground">Daily Image Changes</label>
                   <input
                     type="number"
-                    placeholder="Default: 15"
+                    placeholder="Default: 10"
                     value={quotaForm.customDailyImageQuota}
                     onChange={(e) => setQuotaForm(prev => ({ ...prev, customDailyImageQuota: e.target.value }))}
                     className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
@@ -3998,7 +4022,7 @@ export default function AdminPortal() {
                   <label className="text-[10px] font-black uppercase text-muted-foreground">Max Wall Screen Slots</label>
                   <input
                     type="number"
-                    placeholder="Default: 3"
+                    placeholder="Default: 4"
                     value={quotaForm.customMaxScreenSlots}
                     onChange={(e) => setQuotaForm(prev => ({ ...prev, customMaxScreenSlots: e.target.value }))}
                     className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"
@@ -4008,7 +4032,7 @@ export default function AdminPortal() {
                   <label className="text-[10px] font-black uppercase text-muted-foreground">Daily Screen Changes</label>
                   <input
                     type="number"
-                    placeholder="Default: 6"
+                    placeholder="Default: 4"
                     value={quotaForm.customDailyScreenQuota}
                     onChange={(e) => setQuotaForm(prev => ({ ...prev, customDailyScreenQuota: e.target.value }))}
                     className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary mt-1"

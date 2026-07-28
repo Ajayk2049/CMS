@@ -194,6 +194,11 @@ class HostController {
         screenQuantity: parsedScreenQty,
         adMode: req.body.adMode || 'open',
         allowOpenAds: req.body.allowOpenAds !== undefined ? !!req.body.allowOpenAds : true,
+        dailyVideoChangesRemaining: (req.body.allowOpenAds === false || req.body.adMode === 'closed') ? 10 : 4,
+        dailyImageChangesRemaining: (req.body.allowOpenAds === false || req.body.adMode === 'closed') ? 15 : 10,
+        dailyScreenVideoChangesRemaining: (req.body.allowOpenAds === false || req.body.adMode === 'closed') ? 10 : 4,
+        dailyScreenImageChangesRemaining: (req.body.allowOpenAds === false || req.body.adMode === 'closed') ? 15 : 10,
+        dailyScreenChangesRemaining: (req.body.allowOpenAds === false || req.body.adMode === 'closed') ? 10 : 4,
         status: 'pending'
       });
 
@@ -992,18 +997,28 @@ class HostController {
 
     const lastReset = hostApp.lastQuotaResetDate ? new Date(hostApp.lastQuotaResetDate) : new Date(0);
     if (lastReset < last2AMCutoff) {
+      const isClosed = hostApp.allowOpenAds === false || hostApp.adMode === 'closed';
+
       const defaultVideoChanges = hostApp.customDailyVideoQuota !== null && hostApp.customDailyVideoQuota !== undefined
         ? hostApp.customDailyVideoQuota
-        : 4;
+        : (isClosed ? 10 : 4);
       const defaultImageChanges = hostApp.customDailyImageQuota !== null && hostApp.customDailyImageQuota !== undefined
         ? hostApp.customDailyImageQuota
-        : 15;
+        : (isClosed ? 15 : 10);
+      const defaultScreenVideoChanges = hostApp.customDailyScreenVideoQuota !== null && hostApp.customDailyScreenVideoQuota !== undefined
+        ? hostApp.customDailyScreenVideoQuota
+        : (isClosed ? 10 : 4);
+      const defaultScreenImageChanges = hostApp.customDailyScreenImageQuota !== null && hostApp.customDailyScreenImageQuota !== undefined
+        ? hostApp.customDailyScreenImageQuota
+        : (isClosed ? 15 : 10);
       const defaultScreenChanges = hostApp.customDailyScreenQuota !== null && hostApp.customDailyScreenQuota !== undefined
         ? hostApp.customDailyScreenQuota
-        : 6;
+        : (isClosed ? 10 : 4);
 
       hostApp.dailyVideoChangesRemaining = defaultVideoChanges;
       hostApp.dailyImageChangesRemaining = defaultImageChanges;
+      hostApp.dailyScreenVideoChangesRemaining = defaultScreenVideoChanges;
+      hostApp.dailyScreenImageChangesRemaining = defaultScreenImageChanges;
       hostApp.dailyScreenChangesRemaining = defaultScreenChanges;
       hostApp.lastQuotaResetDate = now;
       await hostApp.save();
@@ -1034,13 +1049,23 @@ class HostController {
 
       const promos = await VenuePromo.find({ hostApplicationId: hostApp._id }).sort({ slotType: 1, slotIndex: 1 });
 
-      const maxVideoSlots = hostApp.customMaxVideoSlots !== null && hostApp.customMaxVideoSlots !== undefined ? hostApp.customMaxVideoSlots : 2;
-      const maxImageSlots = hostApp.customMaxImageSlots !== null && hostApp.customMaxImageSlots !== undefined ? hostApp.customMaxImageSlots : 10;
-      const maxScreenSlots = hostApp.customMaxScreenSlots !== null && hostApp.customMaxScreenSlots !== undefined ? hostApp.customMaxScreenSlots : 3;
+      const isClosed = hostApp.allowOpenAds === false || hostApp.adMode === 'closed';
 
-      const dailyVideoQuota = hostApp.customDailyVideoQuota !== null && hostApp.customDailyVideoQuota !== undefined ? hostApp.customDailyVideoQuota : 4;
-      const dailyImageQuota = hostApp.customDailyImageQuota !== null && hostApp.customDailyImageQuota !== undefined ? hostApp.customDailyImageQuota : 15;
-      const dailyScreenQuota = hostApp.customDailyScreenQuota !== null && hostApp.customDailyScreenQuota !== undefined ? hostApp.customDailyScreenQuota : 6;
+      // Tablet quotas (Open: 4 video / 4 daily, 5 image / 10 daily | Closed: 3 video / 10 daily, 10 image / 15 daily)
+      const maxVideoSlots = hostApp.customMaxVideoSlots !== null && hostApp.customMaxVideoSlots !== undefined ? hostApp.customMaxVideoSlots : (isClosed ? 3 : 4);
+      const maxImageSlots = hostApp.customMaxImageSlots !== null && hostApp.customMaxImageSlots !== undefined ? hostApp.customMaxImageSlots : (isClosed ? 10 : 5);
+
+      const dailyVideoQuota = hostApp.customDailyVideoQuota !== null && hostApp.customDailyVideoQuota !== undefined ? hostApp.customDailyVideoQuota : (isClosed ? 10 : 4);
+      const dailyImageQuota = hostApp.customDailyImageQuota !== null && hostApp.customDailyImageQuota !== undefined ? hostApp.customDailyImageQuota : (isClosed ? 15 : 10);
+
+      // Screen quotas (Open: 4 video / 4 daily, 5 image / 10 daily | Closed: 3 video / 10 daily, 10 image / 15 daily)
+      const maxScreenVideoSlots = hostApp.customMaxScreenVideoSlots !== null && hostApp.customMaxScreenVideoSlots !== undefined ? hostApp.customMaxScreenVideoSlots : (isClosed ? 3 : 4);
+      const maxScreenImageSlots = hostApp.customMaxScreenImageSlots !== null && hostApp.customMaxScreenImageSlots !== undefined ? hostApp.customMaxScreenImageSlots : (isClosed ? 10 : 5);
+      const maxScreenSlots = hostApp.customMaxScreenSlots !== null && hostApp.customMaxScreenSlots !== undefined ? hostApp.customMaxScreenSlots : (isClosed ? 3 : 4);
+
+      const dailyScreenVideoQuota = hostApp.customDailyScreenVideoQuota !== null && hostApp.customDailyScreenVideoQuota !== undefined ? hostApp.customDailyScreenVideoQuota : (isClosed ? 10 : 4);
+      const dailyScreenImageQuota = hostApp.customDailyScreenImageQuota !== null && hostApp.customDailyScreenImageQuota !== undefined ? hostApp.customDailyScreenImageQuota : (isClosed ? 15 : 10);
+      const dailyScreenQuota = hostApp.customDailyScreenQuota !== null && hostApp.customDailyScreenQuota !== undefined ? hostApp.customDailyScreenQuota : (isClosed ? 10 : 4);
 
       return res.status(200).send({
         success: true,
@@ -1049,12 +1074,18 @@ class HostController {
           quotaStats: {
             maxVideoSlots,
             maxImageSlots,
+            maxScreenVideoSlots,
+            maxScreenImageSlots,
             maxScreenSlots,
             dailyVideoQuota,
             dailyImageQuota,
+            dailyScreenVideoQuota,
+            dailyScreenImageQuota,
             dailyScreenQuota,
             dailyVideoChangesRemaining: hostApp.dailyVideoChangesRemaining,
             dailyImageChangesRemaining: hostApp.dailyImageChangesRemaining,
+            dailyScreenVideoChangesRemaining: hostApp.dailyScreenVideoChangesRemaining || 4,
+            dailyScreenImageChangesRemaining: hostApp.dailyScreenImageChangesRemaining || 10,
             dailyScreenChangesRemaining: hostApp.dailyScreenChangesRemaining,
             isPaused: !!hostApp.isPaused,
             isRevoked: !!hostApp.isRevoked
@@ -1225,9 +1256,19 @@ class HostController {
         if (isNewMedia && mediaUrl) {
           if (slotType === 'video') {
             if (hostApp.dailyVideoChangesRemaining - videoChangesConsumed <= 0) {
-              return res.status(429).send({ success: false, message: 'Daily video change quota exhausted! Resets at 2:00 AM IST.' });
+              return res.status(429).send({ success: false, message: 'Daily tablet video change quota exhausted! Resets at 2:00 AM IST.' });
             }
             videoChangesConsumed++;
+          } else if (slotType === 'screen_video') {
+            if ((hostApp.dailyScreenVideoChangesRemaining || 0) - screenChangesConsumed <= 0) {
+              return res.status(429).send({ success: false, message: 'Daily screen video change quota exhausted! Resets at 2:00 AM IST.' });
+            }
+            screenChangesConsumed++;
+          } else if (slotType === 'screen_image') {
+            if ((hostApp.dailyScreenImageChangesRemaining || 0) - imageChangesConsumed <= 0) {
+              return res.status(429).send({ success: false, message: 'Daily screen image change quota exhausted! Resets at 2:00 AM IST.' });
+            }
+            imageChangesConsumed++;
           } else if (slotType === 'screen') {
             if (hostApp.dailyScreenChangesRemaining - screenChangesConsumed <= 0) {
               return res.status(429).send({ success: false, message: 'Daily screen ad change quota exhausted! Resets at 2:00 AM IST.' });
@@ -1235,7 +1276,7 @@ class HostController {
             screenChangesConsumed++;
           } else {
             if (hostApp.dailyImageChangesRemaining - imageChangesConsumed <= 0) {
-              return res.status(429).send({ success: false, message: 'Daily image change quota exhausted! Resets at 2:00 AM IST.' });
+              return res.status(429).send({ success: false, message: 'Daily tablet image change quota exhausted! Resets at 2:00 AM IST.' });
             }
             imageChangesConsumed++;
           }
@@ -1275,6 +1316,12 @@ class HostController {
       hostApp.dailyVideoChangesRemaining = Math.max(0, hostApp.dailyVideoChangesRemaining - videoChangesConsumed);
       hostApp.dailyImageChangesRemaining = Math.max(0, hostApp.dailyImageChangesRemaining - imageChangesConsumed);
       hostApp.dailyScreenChangesRemaining = Math.max(0, hostApp.dailyScreenChangesRemaining - screenChangesConsumed);
+      if (hostApp.dailyScreenVideoChangesRemaining !== undefined) {
+        hostApp.dailyScreenVideoChangesRemaining = Math.max(0, (hostApp.dailyScreenVideoChangesRemaining || 0) - screenChangesConsumed);
+      }
+      if (hostApp.dailyScreenImageChangesRemaining !== undefined) {
+        hostApp.dailyScreenImageChangesRemaining = Math.max(0, (hostApp.dailyScreenImageChangesRemaining || 0) - imageChangesConsumed);
+      }
       await hostApp.save();
 
       // Emit WebSocket push signal to connected venue devices

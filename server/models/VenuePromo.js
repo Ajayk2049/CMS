@@ -9,7 +9,7 @@ const VenuePromoSchema = new mongoose.Schema({
   },
   slotType: {
     type: String,
-    enum: ['video', 'image', 'screen'],
+    enum: ['video', 'image', 'screen', 'screen_video', 'screen_image'],
     required: true
   },
   slotIndex: {

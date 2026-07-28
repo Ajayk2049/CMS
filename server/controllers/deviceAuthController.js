@@ -121,7 +121,7 @@ class DeviceAuthController {
       // Fetch active in-house venue promos matching deviceType
       const promoQuery = { hostApplicationId, isStreaming: true };
       if (deviceType === 'screen') {
-        promoQuery.slotType = 'screen';
+        promoQuery.slotType = { $in: ['screen', 'screen_video', 'screen_image'] };
       } else {
         promoQuery.slotType = { $in: ['video', 'image'] };
       }
@@ -141,7 +141,7 @@ class DeviceAuthController {
         };
       });
 
-      // If venue is in Closed / Private Mode, return only in-house venue promos!
+      // CLOSED AD VENUES: return ONLY in-house venue promos (no 3rd-party ads)
       if (hostApp.allowOpenAds === false) {
         return res.status(200).send({
           success: true,
@@ -149,6 +149,7 @@ class DeviceAuthController {
         });
       }
 
+      // OPEN AD VENUES: combine 3rd-party ads + venue promos
       const bookings = await AdBooking.find({
         outletId: hostApplicationId,
         deviceType: deviceType,
@@ -199,9 +200,13 @@ class DeviceAuthController {
         };
       });
 
+      // Combine: 3rd-party ads + venue promos in a unified playlist
+      // If combined list is empty, devices will show their default screen (menu/catalog)
+      const combinedPlaylist = [...thirdPartyAds, ...promoAds];
+
       return res.status(200).send({
         success: true,
-        data: [...promoAds, ...thirdPartyAds]
+        data: combinedPlaylist
       });
     } catch (error) {
       console.error('getDeviceAds Error:', error.message);
