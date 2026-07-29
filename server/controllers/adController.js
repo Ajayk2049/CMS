@@ -215,14 +215,17 @@ class AdController {
    * Fetch current ad rates
    */
   async getRates(req, res) {
-    const { deviceType } = req.query || {};
+    const { deviceType, mediaType } = req.query || {};
     const query = {};
     if (deviceType) {
       query.deviceType = deviceType;
     }
+    if (mediaType) {
+      query.mediaType = mediaType;
+    }
 
     try {
-      const rates = await AdsRates.find(query).sort({ deviceType: 1, durationDays: 1 });
+      const rates = await AdsRates.find(query).sort({ deviceType: 1, mediaType: 1, durationDays: 1 });
       return res.status(200).send({ success: true, data: rates });
     } catch (error) {
       console.error('getRates Error:', error.message);
@@ -237,6 +240,7 @@ class AdController {
     const {
       outletId,
       deviceType,
+      mediaType,
       quantity,
       adDurationDays,
       frequency,
@@ -248,6 +252,8 @@ class AdController {
     if (!outletId || !deviceType || !quantity || !adDurationDays || !frequency || !redirectUrl) {
       return res.status(400).send({ success: false, message: 'All required booking fields and redirectUrl must be provided' });
     }
+
+    const resolvedMediaType = (mediaType || 'video').toLowerCase();
 
     try {
       // Find outlet
@@ -282,17 +288,27 @@ class AdController {
         return res.status(400).send({ success: false, message: 'Invalid deviceType requested' });
       }
 
-      // Fetch rates
-      const rate = await AdsRates.findOne({
+      // Fetch rates with mediaType validation
+      let rate = await AdsRates.findOne({
         deviceType,
+        mediaType: resolvedMediaType,
         durationDays: parseInt(adDurationDays, 10),
         frequency
       });
 
+      // Fallback: If no mediaType-specific rate found yet, fallback to deviceType rate
+      if (!rate) {
+        rate = await AdsRates.findOne({
+          deviceType,
+          durationDays: parseInt(adDurationDays, 10),
+          frequency
+        });
+      }
+
       if (!rate) {
         return res.status(400).send({ 
           success: false, 
-          message: 'No active pricing rate plan found for this duration and frequency combination' 
+          message: 'No active pricing rate plan found for this duration, media type, and frequency combination' 
         });
       }
 
@@ -336,6 +352,7 @@ class AdController {
         city: outlet.city,
         outletId: outlet._id,
         deviceType,
+        mediaType: resolvedMediaType,
         quantity: bookingQty,
         adDurationDays: parseInt(adDurationDays, 10),
         frequency,
@@ -565,17 +582,27 @@ class AdController {
     ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
     const bookingId = req.query.bookingId;
+    let targetBookingObj = null;
     if (bookingId) {
       try {
-        const booking = await AdBooking.findById(bookingId);
-        if (!booking) {
+        const isMongoId = bookingId.match(/^[0-9a-fA-F]{24}$/);
+        targetBookingObj = await AdBooking.findOne(
+          isMongoId ? { _id: bookingId } : { bookingId }
+        );
+        if (!targetBookingObj) {
           return res.status(404).send({ success: false, message: 'Ad booking campaign not found.' });
         }
-        if (booking.paymentStatus !== 'completed') {
+        if (targetBookingObj.mediaType && targetBookingObj.mediaType !== 'video') {
+          return res.status(400).send({
+            success: false,
+            message: 'Security Policy Violation: This ad campaign is registered for Static Image ads only. Video uploads are prohibited.'
+          });
+        }
+        if (targetBookingObj.paymentStatus !== 'completed') {
           return res.status(403).send({ success: false, message: 'Media upload is locked until campaign payment is completed.' });
         }
-        if (booking.approvalStatus !== 'pending') {
-          return res.status(403).send({ success: false, message: `Media upload is locked. Campaign has already been ${booking.approvalStatus}.` });
+        if (targetBookingObj.approvalStatus !== 'pending') {
+          return res.status(403).send({ success: false, message: `Media upload is locked. Campaign has already been ${targetBookingObj.approvalStatus}.` });
         }
       } catch (err) {
         return res.status(400).send({ success: false, message: 'Invalid bookingId provided.' });
@@ -671,10 +698,19 @@ class AdController {
         uniqueFilename,
         resolution,
         mediaLogId: mediaLog._id,
-        bookingId
+        bookingId: targetBookingObj ? targetBookingObj._id : bookingId
       });
 
       const fileUrl = `/uploads/ads/videos/${targetSubdir}/${uniqueFilename}`;
+
+      // Immediately persist mediaUrl to AdBooking record in MongoDB so refresh doesn't prompt re-upload
+      if (targetBookingObj) {
+        targetBookingObj.mediaUrl = fileUrl;
+        await targetBookingObj.save();
+        if (global.broadcastToAdmins) {
+          global.broadcastToAdmins('new_campaign', { bookingId: targetBookingObj.bookingId });
+        }
+      }
 
       // Return instant HTTP 200 response with professional message
       return res.status(200).send({
@@ -713,17 +749,27 @@ class AdController {
     const AdBooking = require('../models/AdBooking');
 
     const bookingId = req.query.bookingId;
+    let targetBookingObj = null;
     if (bookingId) {
       try {
-        const booking = await AdBooking.findById(bookingId);
-        if (!booking) {
+        const isMongoId = bookingId.match(/^[0-9a-fA-F]{24}$/);
+        targetBookingObj = await AdBooking.findOne(
+          isMongoId ? { _id: bookingId } : { bookingId }
+        );
+        if (!targetBookingObj) {
           return res.status(404).send({ success: false, message: 'Ad booking campaign not found.' });
         }
-        if (booking.paymentStatus !== 'completed') {
+        if (targetBookingObj.mediaType && targetBookingObj.mediaType !== 'image') {
+          return res.status(400).send({
+            success: false,
+            message: 'Security Policy Violation: This ad campaign is registered for Dynamic Video ads only. Image uploads are prohibited.'
+          });
+        }
+        if (targetBookingObj.paymentStatus !== 'completed') {
           return res.status(403).send({ success: false, message: 'Media upload is locked until campaign payment is completed.' });
         }
-        if (booking.approvalStatus !== 'pending') {
-          return res.status(403).send({ success: false, message: `Media upload is locked. Campaign has already been ${booking.approvalStatus}.` });
+        if (targetBookingObj.approvalStatus !== 'pending') {
+          return res.status(403).send({ success: false, message: `Media upload is locked. Campaign has already been ${targetBookingObj.approvalStatus}.` });
         }
       } catch (err) {
         return res.status(400).send({ success: false, message: 'Invalid bookingId provided.' });
@@ -798,19 +844,16 @@ class AdController {
 
       const fileUrl = `/uploads/ads/images/${deviceType}/${uniqueFilename}`;
 
-      if (bookingId) {
+      if (targetBookingObj) {
         try {
-          const booking = await AdBooking.findById(bookingId);
-          if (booking) {
-            let existingUrls = booking.mediaUrl ? booking.mediaUrl.split(',').map(s => s.trim()).filter(Boolean) : [];
-            existingUrls.push(fileUrl);
-            booking.mediaUrl = existingUrls.join(', ');
-            await booking.save();
+          let existingUrls = targetBookingObj.mediaUrl ? targetBookingObj.mediaUrl.split(',').map(s => s.trim()).filter(Boolean) : [];
+          existingUrls.push(fileUrl);
+          targetBookingObj.mediaUrl = existingUrls.join(', ');
+          await targetBookingObj.save();
 
-            // Broadcast real-time WebSocket update to Admin Live Feed
-            if (global.broadcastToAdmins) {
-              global.broadcastToAdmins('new_campaign', { bookingId: booking.bookingId });
-            }
+          // Broadcast real-time WebSocket update to Admin Live Feed
+          if (global.broadcastToAdmins) {
+            global.broadcastToAdmins('new_campaign', { bookingId: targetBookingObj.bookingId });
           }
         } catch (updateErr) {
           console.error('Failed to update booking mediaUrl in uploadImage:', updateErr.message);

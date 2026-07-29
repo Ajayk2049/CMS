@@ -147,7 +147,24 @@ async function startFastify() {
         global.deviceSockets.set(deviceId, socket);
         console.log(`[WS] Device connected: ${deviceId}`);
 
-        socket.send(JSON.stringify({ event: 'connected', message: 'Connected to device update feed' }));
+        socket.send(JSON.stringify({
+          event: 'connected',
+          message: 'Connected to device update feed',
+          deviceId: deviceId,
+          config: {
+            fallbackPollingMinutes: 15,
+            heartbeatIntervalSeconds: 30
+          }
+        }));
+
+        socket.on('message', (msg) => {
+          try {
+            const data = JSON.parse(msg.toString());
+            if (data && (data.event === 'ping' || data.type === 'ping')) {
+              socket.send(JSON.stringify({ event: 'pong', timestamp: Date.now() }));
+            }
+          } catch (e) {}
+        });
 
         socket.on('close', () => {
           global.deviceSockets.delete(deviceId);

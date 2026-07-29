@@ -155,6 +155,7 @@ export default function AdvertiserDashboard() {
   const [availableDeviceTypes, setAvailableDeviceTypes] = useState([]);
   const [selectedDeviceType, setSelectedDeviceType] = useState('');
   const [selectedOutlet, setSelectedOutlet] = useState(null);
+  const [selectedMediaType, setSelectedMediaType] = useState(''); // 'image' or 'video'
 
   // Form Fields
   const [mediaUrl, setMediaUrl] = useState('');
@@ -179,7 +180,7 @@ export default function AdvertiserDashboard() {
   };
 
   const getAvailableFrequencies = () => {
-    const deviceRates = rates.filter((r) => r.deviceType === selectedDeviceType);
+    const deviceRates = rates.filter((r) => r.deviceType === selectedDeviceType && (r.mediaType ? r.mediaType === selectedMediaType : true));
     const uniqFrequencies = Array.from(new Set(deviceRates.map((r) => r.frequency)));
     if (uniqFrequencies.length === 0) {
       return ['continuous', 'hourly'];
@@ -192,7 +193,7 @@ export default function AdvertiserDashboard() {
     if (avail.length > 0 && !avail.includes(frequency)) {
       setFrequency(avail[0]);
     }
-  }, [selectedDeviceType, rates]);
+  }, [selectedDeviceType, selectedMediaType, rates]);
   const [computedAmount, setComputedAmount] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [rateTab, setRateTab] = useState('tablet');
@@ -303,6 +304,16 @@ export default function AdvertiserDashboard() {
   const [activeUploadBooking, setActiveUploadBooking] = useState(null);
   const [uploadSuccessMsg, setUploadSuccessMsg] = useState('');
   
+  useEffect(() => {
+    if (activeUploadBooking) {
+      if (activeUploadBooking.mediaType === 'image') {
+        setMediaTypeTab('images');
+      } else if (activeUploadBooking.mediaType === 'video') {
+        setMediaTypeTab('videos');
+      }
+    }
+  }, [activeUploadBooking]);
+  
   // Local browser media preview state (before server upload)
   const [selectedVideoFile, setSelectedVideoFile] = useState(null);
   const [localVideoPreviewUrl, setLocalVideoPreviewUrl] = useState('');
@@ -325,16 +336,12 @@ export default function AdvertiserDashboard() {
     localStorage.setItem('advertiserActiveTab', activeTab);
   }, [activeTab]);
 
-  // Check for paid booking needing upload upon bookings update
+  // Sync active upload booking when bookings array is fetched (preserves user activeTab choice)
   useEffect(() => {
     if (bookings && bookings.length > 0) {
-      // Only lock/mount upload view if campaign payment is completed, approval is pending, AND mediaUrl is empty
       const pendingUpload = bookings.find(b => b.paymentStatus === 'completed' && b.approvalStatus === 'pending' && (!b.mediaUrl || b.mediaUrl.trim() === ''));
       if (pendingUpload) {
         setActiveUploadBooking(pendingUpload);
-        if (activeTab !== 'new-booking') {
-          setActiveTab('new-booking');
-        }
       } else {
         setActiveUploadBooking(null);
       }
@@ -520,14 +527,26 @@ export default function AdvertiserDashboard() {
       });
 
       if (response.data.success) {
-        setMediaUrl(response.data.data?.url || '');
+        const uploadedUrl = response.data.data?.url || '';
         showToast('success', 'Campaign ad creative uploaded and submitted for admin review!');
         
-        // Automatically clear upload view lock & navigate to My Campaigns tab
+        // Update local bookings state array in memory immediately to prevent stale state race condition
+        if (targetBooking) {
+          setBookings(prev => prev.map(b => {
+            if (b._id === targetBooking._id || b.bookingId === targetBooking.bookingId) {
+              return { ...b, mediaUrl: uploadedUrl };
+            }
+            return b;
+          }));
+        }
+
+        // Single point of final action: Clear upload state and return to My Campaigns tab
         setActiveUploadBooking(null);
         setSelectedVideoFile(null);
         setLocalVideoPreviewUrl('');
+        setMediaUrl('');
         setActiveTab('bookings');
+        localStorage.setItem('advertiserActiveTab', 'bookings');
         fetchBookings(token);
       } else {
         showToast('error', response.data.message || 'Upload failed.');
@@ -634,14 +653,25 @@ export default function AdvertiserDashboard() {
 
       setUploadedImages(serverUrls);
       const combinedUrlStr = serverUrls.join(', ');
-      setMediaUrl(combinedUrlStr);
       showToast('success', 'Campaign ad creative uploaded and submitted for admin review!');
 
-      // Automatically clear upload view lock & navigate to My Campaigns tab
+      // Update local bookings state array in memory immediately to prevent stale state race condition
+      if (targetBooking) {
+        setBookings(prev => prev.map(b => {
+          if (b._id === targetBooking._id || b.bookingId === targetBooking.bookingId) {
+            return { ...b, mediaUrl: combinedUrlStr };
+          }
+          return b;
+        }));
+      }
+
+      // Single point of final action: Clear upload state and return to My Campaigns tab
       setActiveUploadBooking(null);
       setSelectedImageFiles([]);
       setLocalImagePreviewUrls([]);
+      setMediaUrl('');
       setActiveTab('bookings');
+      localStorage.setItem('advertiserActiveTab', 'bookings');
       fetchBookings(token);
     } catch (err) {
       showToast('error', err.response?.data?.message || 'Failed to upload image creative.');
@@ -659,7 +689,7 @@ export default function AdvertiserDashboard() {
 
   // Compute calculated pricing amount
   useEffect(() => {
-    if (!selectedOutlet) {
+    if (!selectedOutlet || !selectedMediaType) {
       setComputedAmount(0);
       return;
     }
@@ -670,19 +700,29 @@ export default function AdvertiserDashboard() {
       return;
     }
 
-    const matchRate = rates.find(
+    let matchRate = rates.find(
       (r) =>
         r.deviceType === selectedOutlet.deviceType &&
+        (r.mediaType ? r.mediaType === selectedMediaType : true) &&
         r.durationDays === dur &&
         r.frequency === frequency
     );
+
+    if (!matchRate) {
+      matchRate = rates.find(
+        (r) =>
+          r.deviceType === selectedOutlet.deviceType &&
+          r.durationDays === dur &&
+          r.frequency === frequency
+      );
+    }
 
     if (matchRate) {
       setComputedAmount(matchRate.amount * qty); // in paise
     } else {
       setComputedAmount(0);
     }
-  }, [selectedOutlet, quantity, adDurationDays, frequency, rates]);
+  }, [selectedOutlet, selectedMediaType, quantity, adDurationDays, frequency, rates]);
 
   // Handle Ad booking initiation (Paywall First)
   const handleInitiateBooking = async (e) => {
@@ -690,6 +730,11 @@ export default function AdvertiserDashboard() {
 
     if (!selectedOutlet) {
       showToast('error', 'Please select a target venue and display type.');
+      return;
+    }
+
+    if (!selectedMediaType) {
+      showToast('error', 'Please choose what you want to advertise (Static Image or Dynamic Video) first.');
       return;
     }
 
@@ -711,6 +756,7 @@ export default function AdvertiserDashboard() {
         {
           outletId: selectedOutlet._id,
           deviceType: selectedOutlet.deviceType,
+          mediaType: selectedMediaType,
           quantity: bookingQty,
           adDurationDays: parseInt(adDurationDays, 10),
           frequency,
@@ -1098,6 +1144,19 @@ export default function AdvertiserDashboard() {
                                     <span className="hidden md:inline">Verify</span>
                                   </button>
                                 )}
+                                {booking.paymentStatus === 'completed' && booking.approvalStatus === 'pending' && (!booking.mediaUrl || booking.mediaUrl.trim() === '') && (
+                                  <button
+                                    onClick={() => {
+                                      setActiveUploadBooking(booking);
+                                      setActiveTab('new-booking');
+                                    }}
+                                    className="flex items-center space-x-1 px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/30 font-bold rounded-xl transition-all text-[10px] cursor-pointer shadow-sm animate-pulse"
+                                    title="Upload Ad Creative"
+                                  >
+                                    <Upload className="w-3.5 h-3.5" />
+                                    <span>Upload Media</span>
+                                  </button>
+                                )}
                                 {booking.paymentStatus === 'completed' && booking.approvalStatus === 'approved' && (
                                   <button
                                     onClick={() => openAnalyticsModal(booking.bookingId)}
@@ -1335,8 +1394,8 @@ export default function AdvertiserDashboard() {
           <div className="animate-fade-in max-w-4xl mx-auto p-4 sm:p-6 rounded-2xl bg-card border border-[#0069a8]/80 shadow-[0_0_20px_rgba(0,105,168,0.3)] dark:shadow-[0_0_35px_rgba(0,105,168,0.55)] space-y-6 transition-all duration-500">
             
             {activeUploadBooking ? (
-              /* ACTIVE PAID CAMPAIGN MEDIA UPLOAD PANEL */
               <div className="space-y-6 animate-fade-in">
+                {/* ACTIVE PAID CAMPAIGN MEDIA UPLOAD PANEL */}
                 <div className="border-b border-border/40 pb-4">
                   <div className="space-y-1">
                     <div className="flex items-center space-x-2">
@@ -1377,47 +1436,22 @@ export default function AdvertiserDashboard() {
                   </div>
                 </div>
 
-                {/* Modern Media Creative Type Tab Selector */}
+                {/* Modern Media Creative Type Header Badge */}
                 <div className="space-y-4 pt-2">
                   <div className="flex items-center justify-between">
-                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground">Select Creative Type</label>
-                    <div className="flex bg-muted p-1.5 rounded-xl border border-border/40 text-xs font-bold space-x-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMediaTypeTab('videos');
-                          setMediaUrl('');
-                          setUploadedImages([]);
-                        }}
-                        className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center space-x-2 ${mediaTypeTab === 'videos'
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                      >
-                        <Video className="w-4 h-4 text-blue-500" />
-                        <span>Ad Video</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMediaTypeTab('images');
-                          setMediaUrl('');
-                          setUploadedImages([]);
-                        }}
-                        className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center space-x-2 ${mediaTypeTab === 'images'
-                          ? 'bg-background text-foreground shadow-sm'
-                          : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                      >
-                        <Upload className="w-4 h-4 text-amber-500" />
-                        <span>Ad Images (Up to 2)</span>
-                      </button>
-                    </div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground">Campaign Creative Format</label>
+                    <span className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border shadow-sm flex items-center space-x-1.5 ${activeUploadBooking?.mediaType === 'image' ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-purple-500/10 text-purple-500 border-purple-500/20'}`}>
+                      {activeUploadBooking?.mediaType === 'image' ? (
+                        <span>🖼️ Paid Format: Static Image Ad</span>
+                      ) : (
+                        <span>🎬 Paid Format: Dynamic Video Ad</span>
+                      )}
+                    </span>
                   </div>
 
-                  {mediaTypeTab === 'videos' ? (
-                    /* MODERN TWO-STAGE VIDEO UPLOAD SECTION */
+                  {activeUploadBooking?.mediaType !== 'image' ? (
                     <div className="space-y-4">
+                      {/* MODERN TWO-STAGE VIDEO UPLOAD SECTION */}
                       {/* Step 1: File selection target */}
                       <label className="flex flex-col items-center justify-center border-2 border-dashed border-primary/40 hover:border-primary hover:bg-primary/5 rounded-2xl p-6 cursor-pointer transition-all text-center bg-card/10 group">
                         <div className="w-10 h-10 rounded-2xl bg-blue-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
@@ -1502,8 +1536,8 @@ export default function AdvertiserDashboard() {
                       )}
                     </div>
                   ) : (
-                    /* MODERN TWO-STAGE IMAGE UPLOAD SECTION */
                     <div className="space-y-4">
+                      {/* MODERN TWO-STAGE IMAGE UPLOAD SECTION */}
                       {/* Step 1: File selection target box */}
                       {selectedImageFiles.length < 2 && !mediaUrl && (
                         <label className="flex flex-col items-center justify-center border-2 border-dashed border-amber-500/40 hover:border-amber-500 hover:bg-amber-500/5 rounded-2xl p-6 cursor-pointer transition-all text-center bg-card/10 group">
@@ -1607,26 +1641,11 @@ export default function AdvertiserDashboard() {
                       )}
                     </div>
                   )}
-
-                  {mediaUrl && (
-                    <div className="pt-4 border-t border-border/40">
-                      <button
-                        onClick={() => {
-                          showToast('success', 'Campaign creative saved successfully! Returning to campaigns list.');
-                          setActiveUploadBooking(null);
-                          setActiveTab('bookings');
-                        }}
-                        className="w-full bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all shadow-md cursor-pointer"
-                      >
-                        Finish & View Campaign
-                      </button>
-                    </div>
-                  )}
                 </div>
               </div>
             ) : (
-              /* CLEAN INITIAL BOOKING FORM (PAYWALL ENFORCED) */
               <>
+                {/* CLEAN INITIAL BOOKING FORM (PAYWALL ENFORCED) */}
                 <h1 className="font-outfit text-2xl font-black text-foreground mb-1">Book Advertising Spot</h1>
                 <p className="text-muted-foreground text-xs font-semibold mb-6">Select your target venue outlet and duration to proceed to payment checkout.</p>
 
@@ -1717,88 +1736,162 @@ export default function AdvertiserDashboard() {
                   </div>
                 </div>
 
-                {/* Step 2: Campaign Settings */}
-                <form onSubmit={handleInitiateBooking} className="space-y-4 pt-4 border-t border-border/40">
-                  <h3 className="font-outfit text-md font-bold text-foreground flex items-center">
-                    <Video className="w-4 h-4 mr-2 text-primary shrink-0" />
-                    <span>Ad Schedule & Package</span>
-                  </h3>
-
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Quantity of Devices</label>
-                      <input
-                        type="text"
-                        required
-                        value={quantity}
-                        onChange={(e) => handleQuantityChange(e.target.value)}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                      />
-                      {selectedOutlet && (
-                        <p className="text-[10px] text-muted-foreground mt-1 font-semibold">Max available: {selectedOutlet.quantity}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Duration (Days)</label>
-                      <select
-                        value={adDurationDays}
-                        onChange={(e) => setAdDurationDays(parseInt(e.target.value, 10))}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                      >
-                        <option value={7}>7 Days Plan</option>
-                        <option value={30}>30 Days Plan</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Frequency</label>
-                      <select
-                        value={frequency}
-                        onChange={(e) => setFrequency(e.target.value)}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                      >
-                        {getAvailableFrequencies().map((freq) => (
-                          <option key={freq} value={freq}>{getFrequencyLabel(freq)}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Ad Category</label>
-                      <select
-                        value={adCategory}
-                        onChange={(e) => setAdCategory(e.target.value)}
-                        className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                      >
-                        <option value="Electronics">Electronics & Gadgets</option>
-                        <option value="RealEstate">Real Estate & Housing</option>
-                        <option value="Automotive">Automotive & Vehicles</option>
-                        <option value="Beverages">Beverages & Soft Drinks</option>
-                        <option value="Fashion">Fashion & Apparel</option>
-                        <option value="Finance">Finance & Banking</option>
-                        <option value="Entertainment">Entertainment & Media</option>
-                        <option value="Other">Other Commercial Brands</option>
-                      </select>
-                    </div>
+                {/* Step 2: Creative Format Selection (Mandatory before unlocking Plan Section) */}
+                <div className="space-y-4 pt-6 border-t border-border/40">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-outfit text-md font-bold text-foreground flex items-center">
+                      <Layers className="w-4 h-4 mr-2 text-primary shrink-0" />
+                      <span>Step 2: Choose What You Want to Advertise</span>
+                    </h3>
+                    <span className="text-[10px] font-black uppercase tracking-wider bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20">
+                      Step 2 of 3
+                    </span>
                   </div>
+                  <p className="text-xs text-muted-foreground font-semibold">
+                    Select your creative ad format. Static image plans are cheaper than dynamic video motion plans.
+                  </p>
 
-                  {/* Submit Pay button */}
-                  <div className="pt-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                     <button
-                      type="submit"
-                      disabled={computedAmount === 0 || uploading}
-                      className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground font-bold py-4 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer"
+                      type="button"
+                      disabled={!selectedOutlet}
+                      onClick={() => setSelectedMediaType('image')}
+                      className={`p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between ${selectedMediaType === 'image'
+                        ? 'border-emerald-500 bg-emerald-500/10 text-foreground shadow-md'
+                        : 'border-border/60 hover:border-emerald-500/50 bg-card/10 text-muted-foreground'
+                        } ${!selectedOutlet ? 'opacity-40 cursor-not-allowed' : ''}`}
                     >
-                      <CreditCard className="w-4 h-4" />
-                      <span>
-                        {computedAmount > 0
-                          ? `Pay ₹${computedAmount / 100} via PhonePe Payment Gateway`
-                          : 'Select Venue & Plan to Pay'}
-                      </span>
+                      <div>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-2xl">🖼️</span>
+                          {selectedMediaType === 'image' && <CheckCircle className="w-5 h-5 text-emerald-500" />}
+                        </div>
+                        <h4 className="font-bold text-xs text-foreground">Static Image Ad</h4>
+                        <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                          Economical static banners (Upload up to 2 images for front & back display).
+                        </p>
+                      </div>
+                      <span className="text-[9px] font-black uppercase text-emerald-500 mt-3">Affordable Static Rates</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={!selectedOutlet}
+                      onClick={() => setSelectedMediaType('video')}
+                      className={`p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between ${selectedMediaType === 'video'
+                        ? 'border-purple-500 bg-purple-500/10 text-foreground shadow-md'
+                        : 'border-border/60 hover:border-purple-500/50 bg-card/10 text-muted-foreground'
+                        } ${!selectedOutlet ? 'opacity-40 cursor-not-allowed' : ''}`}
+                    >
+                      <div>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-2xl">🎬</span>
+                          {selectedMediaType === 'video' && <CheckCircle className="w-5 h-5 text-purple-500" />}
+                        </div>
+                        <h4 className="font-bold text-xs text-foreground">Dynamic Video Ad</h4>
+                        <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                          High-impact motion video clips (Up to 30s MP4/WEBM with sound).
+                        </p>
+                      </div>
+                      <span className="text-[9px] font-black uppercase text-purple-500 mt-3">Premium Dynamic Rates</span>
                     </button>
                   </div>
-                </form>
+                </div>
+
+                {/* Step 3: Campaign Schedule & Pricing Package (Unlocked only when media type selected) */}
+                {!selectedMediaType ? (
+                  <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-semibold flex items-center space-x-3 mt-6">
+                    <AlertCircle className="w-5 h-5 shrink-0" />
+                    <span>Please choose whether you want to advertise <strong>Static Image</strong> or <strong>Dynamic Video</strong> above to unlock pricing plans.</span>
+                  </div>
+                ) : (
+                  <form onSubmit={handleInitiateBooking} className="space-y-4 pt-6 border-t border-border/40 mt-6 animate-fade-in">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-outfit text-md font-bold text-foreground flex items-center">
+                        <CreditCard className="w-4 h-4 mr-2 text-primary shrink-0" />
+                        <span>Step 3: Select Plan & Proceed to Pay ({selectedMediaType === 'image' ? '🖼️ Static Image Pricing' : '🎬 Dynamic Video Pricing'})</span>
+                      </h3>
+                      <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-500 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                        Step 3 of 3
+                      </span>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Quantity of Devices</label>
+                        <input
+                          type="text"
+                          required
+                          value={quantity}
+                          onChange={(e) => handleQuantityChange(e.target.value)}
+                          className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                        />
+                        {selectedOutlet && (
+                          <p className="text-[10px] text-muted-foreground mt-1 font-semibold">Max available: {selectedOutlet.quantity}</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Duration (Days)</label>
+                        <select
+                          value={adDurationDays}
+                          onChange={(e) => setAdDurationDays(parseInt(e.target.value, 10))}
+                          className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                        >
+                          <option value={7}>7 Days Plan</option>
+                          <option value={30}>30 Days Plan</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Frequency</label>
+                        <select
+                          value={frequency}
+                          onChange={(e) => setFrequency(e.target.value)}
+                          className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                        >
+                          {getAvailableFrequencies().map((freq) => (
+                            <option key={freq} value={freq}>{getFrequencyLabel(freq)}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Ad Category</label>
+                        <select
+                          value={adCategory}
+                          onChange={(e) => setAdCategory(e.target.value)}
+                          className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                        >
+                          <option value="Electronics">Electronics & Gadgets</option>
+                          <option value="RealEstate">Real Estate & Housing</option>
+                          <option value="Automotive">Automotive & Vehicles</option>
+                          <option value="Beverages">Beverages & Soft Drinks</option>
+                          <option value="Fashion">Fashion & Apparel</option>
+                          <option value="Finance">Finance & Banking</option>
+                          <option value="Entertainment">Entertainment & Media</option>
+                          <option value="Other">Other Commercial Brands</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Submit Pay button */}
+                    <div className="pt-4">
+                      <button
+                        type="submit"
+                        disabled={computedAmount === 0 || uploading}
+                        className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground font-bold py-4 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer"
+                      >
+                        <CreditCard className="w-4 h-4" />
+                        <span>
+                          {computedAmount > 0
+                            ? `Pay ₹${computedAmount / 100} via PhonePe Payment Gateway (${selectedMediaType === 'image' ? 'Static Image Rate' : 'Dynamic Video Rate'})`
+                            : 'Select Plan to Calculate Price'}
+                        </span>
+                      </button>
+                    </div>
+                  </form>
+                )}
               </>
             )}
           </div>

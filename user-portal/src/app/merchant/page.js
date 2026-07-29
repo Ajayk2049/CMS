@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { useRouter } from 'next/navigation';
 import {
@@ -514,6 +514,55 @@ export default function MerchantDashboard() {
       fetchHostPromos(selectedOutletId);
     }
   }, [activeTab, token, selectedOutletId]);
+
+  // Warn user if refreshing/closing tab during active promo streaming uploads
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (isStreamingPromos) {
+        e.preventDefault();
+        e.returnValue = 'Active promo upload in progress. Are you sure you want to leave? Your changes may not be saved.';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isStreamingPromos]);
+
+  // Calculate real-time staged promo file uploads in local browser memory
+  const stagedVideoUploadsCount = useMemo(() => {
+    return Object.keys(promoDraftSlots).filter(k => {
+      const item = promoDraftSlots[k];
+      return k.startsWith('video_') && item?.fileObj && !item?.isDeleted;
+    }).length;
+  }, [promoDraftSlots]);
+
+  const stagedImageUploadsCount = useMemo(() => {
+    return Object.keys(promoDraftSlots).filter(k => {
+      const item = promoDraftSlots[k];
+      return k.startsWith('image_') && item?.fileObj && !item?.isDeleted;
+    }).length;
+  }, [promoDraftSlots]);
+
+  const stagedScreenVideoUploadsCount = useMemo(() => {
+    return Object.keys(promoDraftSlots).filter(k => {
+      const item = promoDraftSlots[k];
+      return (k.startsWith('screen_video_') || k.startsWith('screen_')) && item?.fileObj && item?.mediaType === 'video' && !item?.isDeleted;
+    }).length;
+  }, [promoDraftSlots]);
+
+  const stagedScreenImageUploadsCount = useMemo(() => {
+    return Object.keys(promoDraftSlots).filter(k => {
+      const item = promoDraftSlots[k];
+      return (k.startsWith('screen_image_') || k.startsWith('screen_')) && item?.fileObj && item?.mediaType === 'image' && !item?.isDeleted;
+    }).length;
+  }, [promoDraftSlots]);
+
+  // Derived real-time remaining quota values reflecting local browser staged uploads instantly
+  const effectiveTabletVideoRemaining = Math.max(0, (promoQuotaStats.dailyVideoChangesRemaining ?? promoQuotaStats.dailyVideoQuota ?? 4) - stagedVideoUploadsCount);
+  const effectiveTabletImageRemaining = Math.max(0, (promoQuotaStats.dailyImageChangesRemaining ?? promoQuotaStats.dailyImageQuota ?? 10) - stagedImageUploadsCount);
+
+  const effectiveScreenVideoRemaining = Math.max(0, (promoQuotaStats.dailyScreenVideoChangesRemaining ?? promoQuotaStats.dailyScreenVideoQuota ?? 4) - stagedScreenVideoUploadsCount);
+  const effectiveScreenImageRemaining = Math.max(0, (promoQuotaStats.dailyScreenImageChangesRemaining ?? promoQuotaStats.dailyScreenImageQuota ?? 10) - stagedScreenImageUploadsCount);
 
   // Fetch host applications
   const [isFetchingApps, setIsFetchingApps] = useState(false);
@@ -1189,11 +1238,26 @@ export default function MerchantDashboard() {
       return;
     }
 
+    // Sort modified keys so Image files upload FIRST and Video files upload SECOND
+    const imageKeys = modifiedKeys.filter(k => {
+      const item = promoDraftSlots[k];
+      return item.fileObj && (item.mediaType === 'image' || k.includes('image'));
+    });
+    const videoKeys = modifiedKeys.filter(k => {
+      const item = promoDraftSlots[k];
+      return item.fileObj && (item.mediaType === 'video' || k.includes('video'));
+    });
+    const remainingKeys = modifiedKeys.filter(k => !imageKeys.includes(k) && !videoKeys.includes(k));
+
+    const sortedKeys = [...imageKeys, ...videoKeys, ...remainingKeys];
+
     setIsStreamingPromos(true);
     try {
       const slotsPayload = [];
+      const totalFilesToUpload = sortedKeys.filter(k => promoDraftSlots[k]?.fileObj).length;
+      let filesUploadedSoFar = 0;
 
-      for (const key of modifiedKeys) {
+      for (const key of sortedKeys) {
         const item = promoDraftSlots[key];
         const lastUnderscore = key.lastIndexOf('_');
         const slotType = key.substring(0, lastUnderscore);
@@ -1210,6 +1274,8 @@ export default function MerchantDashboard() {
 
         let finalMediaUrl = item.mediaUrl;
         if (item.fileObj) {
+          filesUploadedSoFar++;
+          showToast(`Uploading file ${filesUploadedSoFar} of ${totalFilesToUpload} (${item.mediaType.toUpperCase()})...`, 'info');
           const arrayBuffer = await item.fileObj.arrayBuffer();
           const uploadRes = await axios.post(`${API_BASE}/host/promos/upload-media`, arrayBuffer, {
             headers: {
@@ -2851,7 +2917,7 @@ export default function MerchantDashboard() {
                     <div>
                       <span className="text-[10px] font-black uppercase text-blue-500 tracking-wider">Tablet Video Changes Left</span>
                       <div className="text-lg font-black text-foreground mt-0.5">
-                        {promoQuotaStats.dailyVideoChangesRemaining} / {promoQuotaStats.dailyVideoQuota} Remaining
+                        {effectiveTabletVideoRemaining} / {promoQuotaStats.dailyVideoQuota ?? 4} Remaining
                       </div>
                       <span className="text-[9px] text-muted-foreground font-semibold">Resets daily at 2:00 AM IST</span>
                     </div>
@@ -2862,7 +2928,7 @@ export default function MerchantDashboard() {
                     <div>
                       <span className="text-[10px] font-black uppercase text-purple-500 tracking-wider">Tablet Image Changes Left</span>
                       <div className="text-lg font-black text-foreground mt-0.5">
-                        {promoQuotaStats.dailyImageChangesRemaining} / {promoQuotaStats.dailyImageQuota} Remaining
+                        {effectiveTabletImageRemaining} / {promoQuotaStats.dailyImageQuota ?? 10} Remaining
                       </div>
                       <span className="text-[9px] text-muted-foreground font-semibold">Resets daily at 2:00 AM IST</span>
                     </div>
@@ -3063,7 +3129,7 @@ export default function MerchantDashboard() {
                     <div>
                       <span className="text-[10px] font-black uppercase text-emerald-500 tracking-wider">Screen Video Changes Left</span>
                       <div className="text-lg font-black text-foreground mt-0.5">
-                        {promoQuotaStats.dailyScreenVideoChangesRemaining || promoQuotaStats.dailyScreenChangesRemaining} / {promoQuotaStats.dailyScreenVideoQuota || 4} Remaining
+                        {effectiveScreenVideoRemaining} / {promoQuotaStats.dailyScreenVideoQuota ?? 4} Remaining
                       </div>
                       <span className="text-[9px] text-muted-foreground font-semibold">Resets daily at 2:00 AM IST</span>
                     </div>
@@ -3074,7 +3140,7 @@ export default function MerchantDashboard() {
                     <div>
                       <span className="text-[10px] font-black uppercase text-teal-500 tracking-wider">Screen Image Changes Left</span>
                       <div className="text-lg font-black text-foreground mt-0.5">
-                        {promoQuotaStats.dailyScreenImageChangesRemaining || 10} / {promoQuotaStats.dailyScreenImageQuota || 10} Remaining
+                        {effectiveScreenImageRemaining} / {promoQuotaStats.dailyScreenImageQuota ?? 10} Remaining
                       </div>
                       <span className="text-[9px] text-muted-foreground font-semibold">Resets daily at 2:00 AM IST</span>
                     </div>

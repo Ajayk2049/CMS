@@ -11,6 +11,11 @@ const AdsRatesSchema = new mongoose.Schema({
     enum: ['tablet', 'screen'],
     required: true
   },
+  mediaType: {
+    type: String,
+    enum: ['video', 'image'],
+    default: 'video'
+  },
   durationDays: {
     type: Number,
     required: true,

@@ -141,71 +141,78 @@ class DeviceAuthController {
         };
       });
 
-      // CLOSED AD VENUES: return ONLY in-house venue promos (no 3rd-party ads)
-      if (hostApp.allowOpenAds === false) {
-        return res.status(200).send({
-          success: true,
-          data: promoAds
+      let thirdPartyAds = [];
+      if (hostApp.allowOpenAds !== false) {
+        const AdBooking = require('../models/AdBooking');
+        const bookings = await AdBooking.find({
+          outletId: hostApplicationId,
+          deviceType: deviceType,
+          paymentStatus: 'completed',
+          approvalStatus: 'approved'
+        });
+
+        const now = new Date();
+        const activeBookings = bookings.filter(b => {
+          const expiryDate = new Date(b.createdAt);
+          expiryDate.setDate(expiryDate.getDate() + b.adDurationDays);
+          return expiryDate >= now;
+        });
+
+        thirdPartyAds = activeBookings.map(b => {
+          let frequencyMinutes = 0;
+          const freq = (b.frequency || '').toLowerCase().trim();
+          if (freq.includes('continuous') || freq === '0') {
+            frequencyMinutes = 0;
+          } else if (freq.includes('hourly') || freq === '1_per_hour' || freq === 'once_hourly') {
+            frequencyMinutes = 60;
+          } else {
+            const match = freq.match(/(\d+)\s*(?:min|minute|hr|hour)/);
+            if (match) {
+              const val = parseInt(match[1], 10);
+              if (freq.includes('hr') || freq.includes('hour')) {
+                frequencyMinutes = val * 60;
+              } else {
+                frequencyMinutes = val;
+              }
+            }
+          }
+
+          const rawUrls = (b.mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean);
+          const resolvedUrls = rawUrls.map(u => resolveMediaUrl(u, req.headers.host));
+          const firstUrl = resolvedUrls[0] || '';
+          const isVideo = firstUrl.endsWith('.mp4') || firstUrl.endsWith('.webm');
+
+          return {
+            bookingId: b.bookingId,
+            mediaUrl: firstUrl,
+            mediaUrls: resolvedUrls,
+            frequencyMinutes: frequencyMinutes,
+            durationSeconds: isVideo ? 15 : 6,
+            title: `Campaign ${b.bookingId}`,
+            mediaType: isVideo ? 'video' : 'static'
+          };
         });
       }
 
-      // OPEN AD VENUES: combine 3rd-party ads + venue promos
-      const bookings = await AdBooking.find({
-        outletId: hostApplicationId,
-        deviceType: deviceType,
-        paymentStatus: 'completed',
-        approvalStatus: 'approved'
-      });
-
-      // Filter out campaigns whose ad duration has expired
-      const now = new Date();
-      const activeBookings = bookings.filter(b => {
-        const expiryDate = new Date(b.createdAt);
-        expiryDate.setDate(expiryDate.getDate() + b.adDurationDays);
-        return expiryDate >= now;
-      });
-
-      const thirdPartyAds = activeBookings.map(b => {
-        let frequencyMinutes = 0; // Default 0 means continuous loop
-        const freq = (b.frequency || '').toLowerCase().trim();
-        if (freq.includes('continuous') || freq === '0') {
-          frequencyMinutes = 0;
-        } else if (freq.includes('hourly') || freq === '1_per_hour' || freq === 'once_hourly') {
-          frequencyMinutes = 60;
-        } else {
-          const match = freq.match(/(\d+)\s*(?:min|minute|hr|hour)/);
-          if (match) {
-            const val = parseInt(match[1], 10);
-            if (freq.includes('hr') || freq.includes('hour')) {
-              frequencyMinutes = val * 60;
-            } else {
-              frequencyMinutes = val;
-            }
-          }
-        }
-
-        const rawUrls = (b.mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean);
-        const resolvedUrls = rawUrls.map(u => resolveMediaUrl(u, req.headers.host));
-        const firstUrl = resolvedUrls[0] || '';
-        const isVideo = firstUrl.endsWith('.mp4') || firstUrl.endsWith('.webm');
-
-        return {
-          bookingId: b.bookingId,
-          mediaUrl: firstUrl,
-          mediaUrls: resolvedUrls,
-          frequencyMinutes: frequencyMinutes,
-          durationSeconds: isVideo ? 15 : 6,
-          title: `Campaign ${b.bookingId}`,
-          mediaType: isVideo ? 'video' : 'static'
-        };
-      });
-
       // Combine: 3rd-party ads + venue promos in a unified playlist
-      // If combined list is empty, devices will show their default screen (menu/catalog)
       const combinedPlaylist = [...thirdPartyAds, ...promoAds];
+
+      // Generate lightweight ETag hash for fast 304 Not Modified validation during backup polling
+      const crypto = require('crypto');
+      const payloadString = JSON.stringify(combinedPlaylist);
+      const etag = `W/"${crypto.createHash('md5').update(payloadString).digest('hex')}"`;
+
+      res.header('ETag', etag);
+      res.header('Cache-Control', 'private, no-cache, must-revalidate');
+
+      const clientEtag = req.headers['if-none-match'];
+      if (clientEtag && clientEtag === etag) {
+        return res.status(304).send();
+      }
 
       return res.status(200).send({
         success: true,
+        etag: etag,
         data: combinedPlaylist
       });
     } catch (error) {

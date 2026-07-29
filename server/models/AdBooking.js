@@ -29,6 +29,11 @@ const AdBookingSchema = new mongoose.Schema({
     enum: ['tablet', 'screen'],
     required: true
   },
+  mediaType: {
+    type: String,
+    enum: ['video', 'image'],
+    default: 'video'
+  },
   quantity: {
     type: Number,
     required: true,

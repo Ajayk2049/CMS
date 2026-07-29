@@ -92,8 +92,8 @@ const HostApplicationSchema = new mongoose.Schema({
     index: true
   },
   // Modular Quota Overrides (null means system default)
-  // Tablet: 2 videos / 4 daily, 5 images / 10 daily
-  // Screen: 2 videos / 4 daily, 5 images / 10 daily
+  // Open Ads Mode: Video 2 slots / 4 daily, Image 3 slots / 10 daily
+  // Closed Mode: Video 3 slots / 6 daily, Image 8 slots / 15 daily
   customMaxVideoSlots: {
     type: Number,
     default: null
