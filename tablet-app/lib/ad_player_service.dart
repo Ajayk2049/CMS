@@ -17,7 +17,7 @@ class AdPlayerState {
   });
 }
 
-typedef AdImpressionCallback = void Function(String adSource);
+typedef AdImpressionCallback = void Function(String adSource, int durationSeconds);
 
 class AdPlayerService {
   final ValueNotifier<AdPlayerState> state = ValueNotifier(const AdPlayerState());
@@ -130,7 +130,7 @@ class AdPlayerService {
     if (source.startsWith('static__') || source.startsWith('img__')) {
       _staticTimer?.cancel();
       _channel.invokeMethod('pause');
-      onImpression?.call(source);
+      onImpression?.call(source, kStaticAdDisplayDuration.inSeconds);
       _emitState();
       _staticTimer = Timer(kStaticAdDisplayDuration, () {
         if (!_disposed && !_isPaused) _advance();
@@ -162,8 +162,9 @@ class AdPlayerService {
       case 'onVideoComplete':
         final args = call.arguments as Map;
         final path = args['path'] as String;
+        final dur = (args['duration'] as num?)?.toInt() ?? 0;
         if (path == _currentSource) {
-          onImpression?.call(path);
+          onImpression?.call(path, dur);
           if (!_disposed && !_isPaused) _advance();
         }
         break;

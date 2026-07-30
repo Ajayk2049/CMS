@@ -11,8 +11,7 @@ const {
   loginSchema,
   verifyOtpSchema,
   sendOtpSchema,
-  resetPasswordSchema,
-  addRoleSchema
+  resetPasswordSchema
 } = require('../utils/zodSchemas');
 
 // Native secure password hashing functions
@@ -396,62 +395,7 @@ class AuthController {
     }
   }
 
-  /**
-   * Add a new role to an authenticated user
-   */
-  async addRole(req, res) {
-    const parseResult = addRoleSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).send({ success: false, message: parseResult.error.errors[0]?.message || 'Invalid request' });
-    }
-    const { role, password } = parseResult.data;
 
-    try {
-      const user = await User.findById(req.user.uid);
-      if (!user) {
-        return res.status(404).send({ success: false, message: 'User not found' });
-      }
-
-      // S3: Verify current password before adding role
-      const isPasswordValid = verifyPassword(password, user.password);
-      if (!isPasswordValid) {
-        return res.status(400).send({ success: false, message: 'Invalid password' });
-      }
-
-      let userRoles = user.roles || [];
-      if (userRoles.length === 0) {
-        userRoles = [user.role];
-      }
-
-      if (userRoles.includes(role)) {
-        return res.status(400).send({ success: false, message: 'Role already added to this account' });
-      }
-
-      userRoles.push(role);
-      user.roles = userRoles;
-      user.role = role; // set active role to the newly added role
-      await user.save();
-
-      const token = generateToken(user, role);
-
-      return res.status(200).send({
-        success: true,
-        message: `Role ${role} added successfully`,
-        data: {
-          user: {
-            uid: user._id,
-            phone: user.phone,
-            role: user.role,
-            roles: user.roles
-          },
-          token
-        }
-      });
-    } catch (error) {
-      console.error('addRole Error:', error.message);
-      return res.status(500).send({ success: false, message: 'Failed to add role due to server error' });
-    }
-  }
 
   /**
    * Switch the currently active role for an authenticated user

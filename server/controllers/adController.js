@@ -9,13 +9,17 @@ const { v4: uuidv4 } = require('uuid');
 
 const resolveMediaUrl = (mediaUrl, host) => {
   if (!mediaUrl) return '';
-  if (mediaUrl.includes('/uploads/')) {
-    const parts = mediaUrl.split('/uploads/');
-    return `http://${host}/uploads/${parts[1]}`;
-  }
-  if (mediaUrl.startsWith('http')) return mediaUrl;
-  const cleanUrl = mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`;
-  return `http://${host}${cleanUrl}`;
+  const urls = mediaUrl.split(',').map(s => s.trim()).filter(Boolean);
+  const resolvedList = urls.map(urlStr => {
+    if (urlStr.includes('/uploads/')) {
+      const parts = urlStr.split('/uploads/');
+      return `http://${host}/uploads/${parts[1]}`;
+    }
+    if (urlStr.startsWith('http')) return urlStr;
+    const cleanUrl = urlStr.startsWith('/') ? urlStr : `/${urlStr}`;
+    return `http://${host}${cleanUrl}`;
+  });
+  return resolvedList.join(', ');
 };
 
 const deleteMediaFile = (mediaUrl) => {
@@ -703,9 +707,12 @@ class AdController {
 
       const fileUrl = `/uploads/ads/videos/${targetSubdir}/${uniqueFilename}`;
 
-      // Immediately persist mediaUrl to AdBooking record in MongoDB so refresh doesn't prompt re-upload
+      // Immediately persist mediaUrl and actual probed video duration to AdBooking record in MongoDB
       if (targetBookingObj) {
         targetBookingObj.mediaUrl = fileUrl;
+        if (typeof durationSeconds === 'number' && durationSeconds > 0) {
+          targetBookingObj.mediaDuration = Math.round(durationSeconds);
+        }
         await targetBookingObj.save();
         if (global.broadcastToAdmins) {
           global.broadcastToAdmins('new_campaign', { bookingId: targetBookingObj.bookingId });
@@ -846,7 +853,11 @@ class AdController {
 
       if (targetBookingObj) {
         try {
-          let existingUrls = targetBookingObj.mediaUrl ? targetBookingObj.mediaUrl.split(',').map(s => s.trim()).filter(Boolean) : [];
+          const isFirstInBatch = req.query.isFirst === 'true' || req.query.slotIndex === '0';
+          let existingUrls = [];
+          if (!isFirstInBatch && targetBookingObj.mediaUrl) {
+            existingUrls = targetBookingObj.mediaUrl.split(',').map(s => s.trim()).filter(Boolean);
+          }
           existingUrls.push(fileUrl);
           targetBookingObj.mediaUrl = existingUrls.join(', ');
           await targetBookingObj.save();
@@ -1017,17 +1028,48 @@ class AdController {
         });
       }
 
-      // Fetch impressions for this booking
+      // Dynamic duration resolution:
+      // - Image Ads: Platform decided duration (1 image = 8s, 2 images = 16s)
+      // - Video Ads: Actual probed video file duration (mediaDuration)
+      const rawUrls = (booking.mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean);
+      const isImageCampaign = booking.mediaType === 'image' || rawUrls.some(u => u.endsWith('.webp') || u.endsWith('.png') || u.endsWith('.jpg') || u.endsWith('.jpeg'));
+
+      const defaultDuration = isImageCampaign 
+        ? (rawUrls.length >= 2 ? 16 : 8)
+        : (booking.mediaDuration || 15);
+
+      // Full historical aggregate stats across impressions for this booking
+      const aggregateStats = await AdImpression.aggregate([
+        { $match: { bookingId } },
+        {
+          $group: {
+            _id: null,
+            totalPlays: { $sum: 1 },
+            totalDurationSeconds: { $sum: { $ifNull: ["$durationSeconds", defaultDuration] } },
+            totalClicks: { $sum: { $ifNull: ["$interactiveClicks", 0] } },
+            uniqueDevices: { $addToSet: "$deviceId" }
+          }
+        }
+      ]);
+
+      const agg = aggregateStats.length > 0 ? aggregateStats[0] : {
+        totalPlays: 0,
+        totalDurationSeconds: 0,
+        totalClicks: 0,
+        uniqueDevices: []
+      };
+
+      // Cumulative total plays and duration stored directly on AdBooking schema (preserves full history across log trimming)
+      const totalPlays = Math.max(booking.totalPlays || 0, agg.totalPlays);
+      const totalDurationSeconds = Math.max(booking.totalDurationSeconds || 0, agg.totalDurationSeconds);
+      const totalClicks = agg.totalClicks;
+      const uniqueDevicesCount = (agg.uniqueDevices || []).filter(Boolean).length;
+
+      // Fetch ONLY the 10 most recent impressions for display
       const impressions = await AdImpression.find({ bookingId })
         .sort({ createdAt: -1 })
-        .limit(100)
+        .limit(10)
         .lean();
-
-      // Aggregate statistics
-      const totalPlays = impressions.length;
-      const uniqueDevices = new Set(impressions.map(imp => imp.deviceId).filter(Boolean));
-      const totalDurationSeconds = impressions.reduce((sum, imp) => sum + (imp.durationSeconds || 15), 0);
-      const totalClicks = impressions.reduce((sum, imp) => sum + (imp.interactiveClicks || 0), 0);
 
       // Resolve venue details for recent impressions
       const venueIds = [...new Set(impressions.map(imp => imp.hostApplicationId).filter(Boolean))];
@@ -1039,12 +1081,13 @@ class AdController {
 
       const formattedImpressions = impressions.map(imp => {
         const venue = imp.hostApplicationId ? venueMap[imp.hostApplicationId.toString()] : null;
+        const dur = (imp.durationSeconds && imp.durationSeconds !== 15) ? imp.durationSeconds : defaultDuration;
         return {
           id: imp._id,
           deviceId: imp.deviceId || 'Tablet Kiosk',
           outletName: venue ? venue.outletName : (booking.targetScreenType === 'screen' ? 'Digital Display Screen' : 'Venue Tablet'),
           city: venue ? venue.city : '',
-          durationSeconds: imp.durationSeconds || 15,
+          durationSeconds: dur,
           interactiveClicks: imp.interactiveClicks || 0,
           createdAt: imp.createdAt
         };
@@ -1057,7 +1100,7 @@ class AdController {
           campaignName: booking.targetAudience || `Ad ${bookingId}`,
           targetScreenType: booking.targetScreenType,
           totalPlays,
-          uniqueDevicesCount: uniqueDevices.size,
+          uniqueDevicesCount,
           totalDurationSeconds,
           totalDurationMinutes: (totalDurationSeconds / 60).toFixed(1),
           totalClicks,

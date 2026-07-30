@@ -93,6 +93,14 @@ const AdBookingSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  totalPlays: {
+    type: Number,
+    default: 0
+  },
+  totalDurationSeconds: {
+    type: Number,
+    default: 0
+  },
   createdAt: {
     type: Date,
     default: Date.now

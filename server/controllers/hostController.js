@@ -1442,6 +1442,191 @@ class HostController {
       return res.status(500).send({ success: false, message: 'Failed to delete promo slot' });
     }
   }
+  /**
+   * Get Venue Analytics (Food sales by time slot, revenue, table frequency)
+   */
+  async getVenueAnalytics(req, res) {
+    try {
+      const daysParam = req.query.days;
+      const days = parseInt(daysParam || '0', 10);
+      const hostApp = await HostApplication.findOne({ userId: req.user.uid });
+      if (!hostApp) {
+        return res.status(404).send({ success: false, message: 'Host venue application not found' });
+      }
+
+      let startDate = new Date();
+      if (days === 0) {
+        startDate.setHours(0, 0, 0, 0);
+      } else {
+        startDate.setDate(startDate.getDate() - days);
+      }
+
+      // Fetch all non-cancelled orders for this host venue within date range
+      const orders = await Order.find({
+        hostApplicationId: hostApp._id,
+        createdAt: { $gte: startDate }
+      });
+
+      // Fetch Menu to get item names and prices
+      const menu = await Menu.findOne({ hostApplicationId: hostApp._id });
+      const menuItemsMap = {};
+      if (menu && menu.items) {
+        menu.items.forEach(item => {
+          menuItemsMap[item.itemId] = {
+            name: item.name,
+            price: item.price,
+            category: item.category,
+            imageUrl: item.imageUrl || ''
+          };
+        });
+      }
+
+      let totalRevenuePaise = 0;
+      let totalCompletedOrders = 0;
+
+      // Aggregators
+      const slotSales = {
+        all: { itemCounts: {}, totalRevenue: 0, orderCount: 0 },
+        breakfast: { itemCounts: {}, totalRevenue: 0, orderCount: 0 }, // 8am - 12pm (8..11)
+        lunch: { itemCounts: {}, totalRevenue: 0, orderCount: 0 },     // 1pm - 4pm (13..15)
+        dinner: { itemCounts: {}, totalRevenue: 0, orderCount: 0 }     // 5pm - 11pm (17..22)
+      };
+
+      const tableFrequency = {};
+
+      orders.forEach(order => {
+        if (order.tableStatus === 'cancelled') return;
+
+        totalRevenuePaise += (order.totalAmount || 0);
+        totalCompletedOrders += 1;
+
+        // Table tracking
+        const tbl = order.tableNumber || 'Table N/A';
+        if (!tableFrequency[tbl]) {
+          tableFrequency[tbl] = { tableNumber: tbl, orderCount: 0, totalAmount: 0 };
+        }
+        tableFrequency[tbl].orderCount += 1;
+        tableFrequency[tbl].totalAmount += (order.totalAmount || 0);
+
+        // Determine Time-of-day slot based on local order hour
+        const orderHour = new Date(order.createdAt).getHours();
+        let slotKey = null;
+        if (orderHour >= 8 && orderHour < 12) {
+          slotKey = 'breakfast';
+        } else if (orderHour >= 13 && orderHour < 16) {
+          slotKey = 'lunch';
+        } else if (orderHour >= 17 && orderHour < 23) {
+          slotKey = 'dinner';
+        }
+
+        // Process order items
+        if (order.items && order.items.length > 0) {
+          order.items.forEach(it => {
+            const itemId = it.itemId;
+            const qty = it.quantity || 1;
+            const itemPricePaise = it.price || (menuItemsMap[itemId]?.price) || 0;
+            const itemRev = itemPricePaise * qty;
+
+            // Increment ALL
+            if (!slotSales.all.itemCounts[itemId]) {
+              slotSales.all.itemCounts[itemId] = { itemId, name: it.name || menuItemsMap[itemId]?.name || itemId, qty: 0, revenuePaise: 0, imageUrl: menuItemsMap[itemId]?.imageUrl || '' };
+            }
+            slotSales.all.itemCounts[itemId].qty += qty;
+            slotSales.all.itemCounts[itemId].revenuePaise += itemRev;
+            slotSales.all.totalRevenue += itemRev;
+
+            // Increment Specific Slot if matched
+            if (slotKey) {
+              if (!slotSales[slotKey].itemCounts[itemId]) {
+                slotSales[slotKey].itemCounts[itemId] = { itemId, name: it.name || menuItemsMap[itemId]?.name || itemId, qty: 0, revenuePaise: 0, imageUrl: menuItemsMap[itemId]?.imageUrl || '' };
+              }
+              slotSales[slotKey].itemCounts[itemId].qty += qty;
+              slotSales[slotKey].itemCounts[itemId].revenuePaise += itemRev;
+              slotSales[slotKey].totalRevenue += itemRev;
+            }
+          });
+        }
+        if (slotKey) {
+          slotSales[slotKey].orderCount += 1;
+        }
+        slotSales.all.orderCount += 1;
+      });
+
+      // Helper to process top items for a slot
+      const formatSlotData = (slotObj) => {
+        const itemsArr = Object.values(slotObj.itemCounts);
+        itemsArr.sort((a, b) => b.qty - a.qty);
+        const topSeller = itemsArr[0] || null;
+        const maxQty = topSeller ? topSeller.qty : 1;
+
+        const rankedItems = itemsArr.slice(0, 3).map(item => ({
+          ...item,
+          percentageShare: Math.round((item.qty / maxQty) * 100)
+        }));
+
+        return {
+          totalRevenuePaise: slotObj.totalRevenue,
+          orderCount: slotObj.orderCount,
+          topSeller,
+          rankedItems
+        };
+      };
+
+      // Find Peak Revenue Slot (Strict check: return '--' if zero orders/revenue)
+      let peakSlotName = '--';
+      let maxSlotRev = 0;
+
+      if (totalCompletedOrders > 0 && totalRevenuePaise > 0) {
+        if (slotSales.breakfast.totalRevenue > maxSlotRev) {
+          peakSlotName = 'Breakfast';
+          maxSlotRev = slotSales.breakfast.totalRevenue;
+        }
+        if (slotSales.lunch.totalRevenue > maxSlotRev) {
+          peakSlotName = 'Lunch';
+          maxSlotRev = slotSales.lunch.totalRevenue;
+        }
+        if (slotSales.dinner.totalRevenue > maxSlotRev) {
+          peakSlotName = 'Dinner';
+          maxSlotRev = slotSales.dinner.totalRevenue;
+        }
+      }
+
+      // Process Tables Frequency
+      const tablesArr = Object.values(tableFrequency);
+      tablesArr.sort((a, b) => b.orderCount - a.orderCount);
+
+      const mostActiveTable = tablesArr[0] || null;
+      const leastActiveTable = tablesArr.length > 1 ? tablesArr[tablesArr.length - 1] : null;
+
+      return res.status(200).send({
+        success: true,
+        data: {
+          days,
+          venueName: hostApp.outletName,
+          summary: {
+            totalRevenuePaise,
+            totalCompletedOrders,
+            avgOrderValuePaise: totalCompletedOrders > 0 ? Math.round(totalRevenuePaise / totalCompletedOrders) : 0,
+            peakSlotName
+          },
+          slots: {
+            all: formatSlotData(slotSales.all),
+            breakfast: formatSlotData(slotSales.breakfast),
+            lunch: formatSlotData(slotSales.lunch),
+            dinner: formatSlotData(slotSales.dinner)
+          },
+          tables: {
+            mostActiveTable,
+            leastActiveTable,
+            totalActiveTables: tablesArr.length
+          }
+        }
+      });
+    } catch (error) {
+      console.error('getVenueAnalytics Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to generate venue analytics' });
+    }
+  }
 }
 
 module.exports = new HostController();

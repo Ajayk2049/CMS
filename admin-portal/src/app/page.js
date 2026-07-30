@@ -97,14 +97,12 @@ export default function AdminPortal() {
   const [rates, setRates] = useState([]);
   const [devices, setDevices] = useState([]);
   const [users, setUsers] = useState([]);
-  const [reports, setReports] = useState([]);
   const [deviceRequests, setDeviceRequests] = useState([]);
   const [selectedDeviceReq, setSelectedDeviceReq] = useState(null);
   const [deviceReqFilter, setDeviceReqFilter] = useState('all');
 
   // Detail Modal / Sidebar states
   const [selectedUser, setSelectedUser] = useState(null);
-  const [selectedReport, setSelectedReport] = useState(null);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
   const [selectedHostApp, setSelectedHostApp] = useState(null);
 
@@ -484,17 +482,7 @@ export default function AdminPortal() {
       });
     });
 
-    // 3. Support Tickets (Reports)
-    reports.filter(r => r.status !== 'resolved').forEach(report => {
-      list.push({
-        id: `report_${report.reportId}`,
-        title: 'Support Ticket',
-        description: `${report.title} (${report.reporterRole})`,
-        type: 'report',
-        target: report,
-        time: new Date(report.createdAt)
-      });
-    });
+
 
     // 4. Expired Ad Subscriptions (campaigns whose duration has elapsed)
     const now = new Date();
@@ -687,7 +675,6 @@ export default function AdminPortal() {
     fetchRates(authToken);
     fetchDevices(authToken);
     fetchUsers(authToken);
-    fetchReports(authToken);
     fetchDeviceRequests(authToken);
   };
 
@@ -781,17 +768,6 @@ export default function AdminPortal() {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       setUsers(res.data.data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const fetchReports = async (authToken) => {
-    try {
-      const res = await axios.get(`${API_BASE}/admin/reports`, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      setReports(res.data.data);
     } catch (err) {
       console.error(err);
     }
@@ -936,24 +912,7 @@ export default function AdminPortal() {
     }
   };
 
-  const handleUpdateReport = async (e) => {
-    e.preventDefault();
-    try {
-      await axios.patch(
-        `${API_BASE}/admin/reports/${selectedReport.reportId}`,
-        {
-          status: reportActionForm.status,
-          actionTaken: reportActionForm.actionTaken
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      showNotification('success', 'Report resolution updated');
-      fetchReports(token);
-      setSelectedReport(null);
-    } catch (err) {
-      showNotification('error', err.response?.data?.message || 'Failed to update report');
-    }
-  };
+
 
   const handleUpdateUser = async (e) => {
     e.preventDefault();
@@ -1069,18 +1028,7 @@ export default function AdminPortal() {
       return;
     }
 
-    // 4. Search in reports
-    const foundReport = reports.find(r => r.reportId.toLowerCase().includes(query));
-    if (foundReport) {
-      setActiveTab('reports');
-      setSelectedReport(foundReport);
-      setReportActionForm({
-        status: foundReport.status,
-        actionTaken: foundReport.actionTaken || ''
-      });
-      showNotification('success', `Support ticket found`);
-      return;
-    }
+
 
     // 5. Search in host applications
     const foundHostApp = hosts.find(h => h._id.toLowerCase().includes(query) || h.outletName.toLowerCase().includes(query));
@@ -1309,19 +1257,6 @@ export default function AdminPortal() {
     );
   });
 
-  const filteredReportsList = reports.filter(r => {
-    if (!searchQuery) return true;
-    const query = searchQuery.trim().toLowerCase();
-    return (
-      r.reportId.toLowerCase().includes(query) ||
-      r.title.toLowerCase().includes(query) ||
-      r.description.toLowerCase().includes(query) ||
-      (r.reporterId?.name || '').toLowerCase().includes(query) ||
-      (r.reporterId?.phone || '').includes(query) ||
-      r.reporterRole.toLowerCase().includes(query)
-    );
-  });
-
   const filteredDeviceReqs = deviceRequests.filter(r => {
     const isFilterMatch = deviceReqFilter === 'all' || r.status === deviceReqFilter;
     if (!isFilterMatch) return false;
@@ -1341,8 +1276,7 @@ export default function AdminPortal() {
     { id: 'devices', label: 'Devices', icon: <Smartphone className="w-4 h-4" /> },
     { id: 'users', label: 'Users', icon: <Users className="w-4 h-4" /> },
     { id: 'requests', label: 'Requests', icon: <FileCheck className="w-4 h-4" /> },
-    { id: 'rates', label: 'Ad Rates', icon: <Percent className="w-4 h-4" /> },
-    { id: 'reports', label: 'Reports', icon: <ClipboardList className="w-4 h-4" /> }
+    { id: 'rates', label: 'Ad Rates', icon: <Percent className="w-4 h-4" /> }
   ];
 
   return (
@@ -1687,20 +1621,26 @@ export default function AdminPortal() {
                     <p className="text-[10px] text-muted-foreground mt-1 font-semibold">Moderation queue waiting</p>
                   </div>
 
-                  {/* Support tickets */}
+                  {/* Active Venue Outlets */}
                   <div
-                    onClick={() => setActiveTab('reports')}
+                    onClick={() => {
+                      setActiveTab('requests');
+                      setRequestsSubTab('hosts');
+                    }}
                     className="glassmorphism p-5 rounded-2xl bg-card/30 relative overflow-hidden border border-border/50 cursor-pointer shadow-sm group"
                   >
-                    <div className="absolute right-4 top-4 p-2 bg-red-500/10 rounded-xl group-hover:bg-red-500/20 transition-all">
-                      <ClipboardList className="w-4 h-4 text-red-500" />
+                    <div className="absolute right-4 top-4 p-2 bg-purple-500/10 rounded-xl group-hover:bg-purple-500/20 transition-all">
+                      <Building className="w-4 h-4 text-purple-500" />
                     </div>
-                    <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Support Tickets</p>
+                    <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Active Outlets</p>
                     <h3 className="font-outfit text-2xl font-black mt-2">
-                      {reports.filter(r => r.status !== 'resolved').length}
+                      {hosts.filter(h => h.status === 'approved').length}
                     </h3>
-                    <p className="text-[10px] text-muted-foreground mt-1 font-semibold">Open issues to resolve</p>
+                    <p className="text-[10px] text-muted-foreground mt-1 font-semibold">
+                      <span className="text-purple-500 font-bold">{hosts.filter(h => h.status === 'pending').length} pending apps</span> / {hosts.length} total
+                    </p>
                   </div>
+
                 </div>
 
                 {/* Telemetry Status Row */}
@@ -1719,6 +1659,8 @@ export default function AdminPortal() {
                       const online = devices.filter(d => d.status === 'online').length;
                       const offline = total - online;
                       const onlinePercentage = total > 0 ? Math.round((online / total) * 100) : 0;
+                      const tabletsCount = devices.filter(d => d.deviceType === 'tablet').length;
+                      const screensCount = devices.filter(d => d.deviceType === 'screen').length;
 
                       return (
                         <div className="grid md:grid-cols-3 gap-6 items-center">
@@ -1743,6 +1685,9 @@ export default function AdminPortal() {
                               <span className="text-xl font-black text-foreground mt-1 block">
                                 {online}{' '}
                                 <span className="text-xs font-semibold text-muted-foreground">/ {total} deployed</span>
+                              </span>
+                              <span className="text-[10px] text-muted-foreground font-semibold mt-0.5 block">
+                                {tabletsCount} Tablets • {screensCount} Display Screens
                               </span>
                             </div>
                           </div>
@@ -1835,43 +1780,38 @@ export default function AdminPortal() {
                     )}
                   </div>
 
-                  {/* Active support tickets widget */}
+                  {/* Recently registered user accounts widget */}
                   <div className="glassmorphism p-5 rounded-2xl bg-card/30 space-y-4 border border-border/50">
-                    <h4 className="font-outfit text-xs font-bold border-b border-border/40 pb-3 text-foreground">Active Tickets</h4>
+                    <h4 className="font-outfit text-xs font-bold border-b border-border/40 pb-3 text-foreground">New User Registrations</h4>
 
-                    {reports.filter(r => r.status !== 'resolved').slice(0, 3).length === 0 ? (
-                      <p className="text-xs text-muted-foreground py-8 text-center font-medium">All support tickets resolved.</p>
+                    {users.slice(0, 3).length === 0 ? (
+                      <p className="text-xs text-muted-foreground py-8 text-center font-medium">No registered user accounts.</p>
                     ) : (
                       <div className="space-y-3">
-                        {reports.filter(r => r.status !== 'resolved').slice(0, 3).map((rep) => (
+                        {users.slice(0, 3).map((u) => (
                           <div
-                            key={rep.reportId}
+                            key={u._id}
                             onClick={() => {
-                              setActiveTab('reports');
-                              setSelectedReport(rep);
-                              setReportActionForm({
-                                status: rep.status,
-                                actionTaken: rep.actionTaken || ''
-                              });
+                              setActiveTab('users');
+                              setSelectedUser(u);
                             }}
-                            className="flex justify-between items-start border-b border-border/40 pb-2 last:border-b-0 last:pb-0 cursor-pointer hover:bg-card/10 p-1.5 rounded-xl transition-all"
-                            title="Click to resolve ticket"
+                            className="flex justify-between items-center border-b border-border/40 pb-2 last:border-b-0 last:pb-0 cursor-pointer hover:bg-card/10 p-1.5 rounded-xl transition-all"
+                            title="Click to manage user details"
                           >
                             <div>
-                              <p className="text-xs font-bold text-foreground">{rep.title}</p>
-                              <p className="text-[10px] text-muted-foreground mt-0.5 capitalize">
-                                {rep.reporterId?.name || rep.reporterRole} ({rep.reporterId?.phone})
-                              </p>
+                              <p className="text-xs font-bold text-foreground">{u.name || u.phone}</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">{u.phone}</p>
                             </div>
-                            <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full capitalize shrink-0 ${rep.status === 'pending' ? 'bg-orange-500/10 text-orange-500' : 'bg-blue-500/10 text-blue-500'
-                              }`}>
-                              {rep.status}
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider bg-primary/10 text-primary border border-primary/20 shrink-0">
+                              {u.role}
                             </span>
                           </div>
                         ))}
                       </div>
                     )}
                   </div>
+
+
 
                 </div>
               </motion.div>
@@ -3028,146 +2968,6 @@ export default function AdminPortal() {
                       ))
                     )}
                   </div>
-
-                </div>
-              </motion.div>
-            )}
-
-            {/* 6. SUPPORT TICKETS & RESOLUTIONS */}
-            {activeTab === 'reports' && (
-              <motion.div
-                key="reports-tab"
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -15 }}
-                className="space-y-6"
-              >
-                <div className="grid lg:grid-cols-3 gap-6 items-start">
-
-                  {/* Reports list table */}
-                  <div className={`mx-1 mt-2 overflow-x-auto animate-fade-in transition-all ${selectedReport ? 'lg:col-span-2' : 'lg:col-span-3'
-                    }`}>
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="border-b border-border/80 text-muted-foreground font-bold uppercase tracking-wider bg-card/10">
-                          <th className="p-4 pl-6">Ticket ID</th>
-                          <th className="p-4">Title / Issue</th>
-                          <th className="p-4">Reporter</th>
-                          <th className="p-4">Ticket Status</th>
-                          <th className="p-4 text-right pr-6">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border/60">
-                        {filteredReportsList.length === 0 ? (
-                          <tr>
-                            <td colSpan="5" className="p-8 text-center text-muted-foreground font-medium">
-                              No support tickets submitted.
-                            </td>
-                          </tr>
-                        ) : (
-                          filteredReportsList.map((ticket) => (
-                            <tr key={ticket._id} className="hover:bg-card/20 transition-all">
-                              <td className="p-4 pl-6 font-bold tracking-tight text-foreground">{ticket.reportId}</td>
-                              <td className="p-4">
-                                <p className="font-bold text-foreground">{ticket.title}</p>
-                                <p className="text-[10px] text-muted-foreground mt-0.5 truncate max-w-xs">{ticket.description}</p>
-                              </td>
-                              <td className="p-4 text-muted-foreground font-semibold">
-                                {ticket.reporterId?.name || ticket.reporterId?.phone || 'Account'} ({ticket.reporterRole})
-                              </td>
-                              <td className="p-4">
-                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${ticket.status === 'resolved'
-                                  ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
-                                  : ticket.status === 'in-progress'
-                                    ? 'bg-blue-500/10 text-blue-500 border-blue-500/20'
-                                    : 'bg-orange-500/10 text-orange-500 border-orange-500/20'
-                                  }`}>
-                                  {ticket.status}
-                                </span>
-                              </td>
-                              <td className="p-4 text-right pr-6">
-                                <button
-                                  onClick={() => {
-                                    setSelectedReport(ticket);
-                                    setReportActionForm({
-                                      status: ticket.status,
-                                      actionTaken: ticket.actionTaken || ''
-                                    });
-                                  }}
-                                  className="p-1.5 bg-muted hover:bg-primary hover:text-primary-foreground border border-border rounded-lg text-muted-foreground transition-all cursor-pointer font-bold text-[10px]"
-                                >
-                                  Moderate
-                                </button>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Resolution drawers */}
-                  {selectedReport && (
-                    <motion.div
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      className="p-6 rounded-2xl bg-card/10 border border-border/40 space-y-6 relative"
-                    >
-                      <button
-                        onClick={() => setSelectedReport(null)}
-                        className="absolute right-4 top-4 p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-all cursor-pointer"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-
-                      <div>
-                        <span className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2.5 py-1 rounded-full border border-primary/20">
-                          Resolve Support Case
-                        </span>
-                        <h4 className="font-outfit text-sm font-bold mt-4 text-foreground">{selectedReport.title}</h4>
-                        <p className="text-[10px] text-muted-foreground mt-1 font-semibold">
-                          Reporter: {selectedReport.reporterId?.name || 'N/A'} ({selectedReport.reporterId?.phone || 'Unknown'}) [{selectedReport.reporterRole}]
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-2 font-semibold bg-background/50 p-3.5 rounded-xl border border-border/40">
-                          {selectedReport.description}
-                        </p>
-                      </div>
-
-                      <form onSubmit={handleUpdateReport} className="space-y-4">
-                        <div>
-                          <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Update Ticket Status</label>
-                          <select
-                            value={reportActionForm.status}
-                            onChange={(e) => setReportActionForm({ ...reportActionForm, status: e.target.value })}
-                            className="w-full bg-background border border-input rounded-xl px-3 py-2.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                          >
-                            <option value="pending">Pending review</option>
-                            <option value="in-progress">In progress</option>
-                            <option value="resolved">Resolved / Fixed</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Action / Resolution Logs</label>
-                          <textarea
-                            required
-                            rows="4"
-                            placeholder="Describe action taken to fix this issue..."
-                            value={reportActionForm.actionTaken}
-                            onChange={(e) => setReportActionForm({ ...reportActionForm, actionTaken: e.target.value })}
-                            className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary"
-                          />
-                        </div>
-
-                        <button
-                          type="submit"
-                          className="w-full bg-primary text-primary-foreground font-bold py-3.5 rounded-xl transition-all shadow-lg glow-hover cursor-pointer"
-                        >
-                          Save Resolution Logs
-                        </button>
-                      </form>
-                    </motion.div>
-                  )}
 
                 </div>
               </motion.div>

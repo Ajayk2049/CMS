@@ -567,7 +567,7 @@ class _KioskScreenState extends State<KioskScreen> {
     _adSync.setProtectedPaths(_adPlayer.activeFilePaths);
   }
 
-  void _trackAdImpression(String adSource) async {
+  void _trackAdImpression(String adSource, [int durationSeconds = 0]) async {
     String bookingId = 'unknown';
     if (adSource.startsWith('static__') || adSource.startsWith('img__')) {
       final parts = adSource.split('__');
@@ -590,11 +590,75 @@ class _KioskScreenState extends State<KioskScreen> {
       final req = AdImpressionRequest()
         ..deviceId = widget.deviceId
         ..bookingId = bookingId
-        ..durationSeconds = 15
+        ..durationSeconds = durationSeconds
         ..interactiveClicks = 0;
       await _deviceClient!.trackAdImpression(req, options: _callOptions);
+      // Attempt background flush of any queued offline impressions upon successful connection
+      _flushOfflineImpressions();
     } catch (e) {
-      debugPrint('gRPC Track ad impression telemetry failed: $e');
+      debugPrint('gRPC Track ad impression telemetry failed, saving offline: $e');
+      _enqueueOfflineImpression(bookingId, durationSeconds);
+    }
+  }
+
+  void _enqueueOfflineImpression(String bookingId, int durationSeconds) async {
+    if (bookingId == 'unknown' || bookingId.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> queue = prefs.getStringList('offline_ad_impressions') ?? [];
+      final itemJson = '{"b":"$bookingId","d":$durationSeconds,"t":${DateTime.now().millisecondsSinceEpoch}}';
+      queue.add(itemJson);
+      await prefs.setStringList('offline_ad_impressions', queue);
+      debugPrint('Offline ad impression enqueued. Total queue size: ${queue.length}');
+    } catch (err) {
+      debugPrint('Error enqueuing offline ad impression: $err');
+    }
+  }
+
+  void _flushOfflineImpressions() async {
+    if (_deviceClient == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> queue = prefs.getStringList('offline_ad_impressions') ?? [];
+      if (queue.isEmpty) return;
+
+      debugPrint('Flushing ${queue.length} offline ad impressions to server...');
+      final batchReq = BatchAdImpressionRequest();
+      for (final raw in queue) {
+        try {
+          final parts = raw.replaceAll('{', '').replaceAll('}', '').split(',');
+          String b = '';
+          int d = 0;
+          for (final p in parts) {
+            final kv = p.split(':');
+            if (kv.length == 2) {
+              final k = kv[0].replaceAll('"', '').trim();
+              final v = kv[1].replaceAll('"', '').trim();
+              if (k == 'b') b = v;
+              if (k == 'd') d = int.tryParse(v) ?? 0;
+            }
+          }
+          if (b.isNotEmpty && b != 'unknown') {
+            batchReq.impressions.add(AdImpressionRequest()
+              ..deviceId = widget.deviceId
+              ..bookingId = b
+              ..durationSeconds = d
+              ..interactiveClicks = 0);
+          }
+        } catch (_) {}
+      }
+
+      if (batchReq.impressions.isNotEmpty) {
+        final res = await _deviceClient!.batchTrackAdImpressions(batchReq, options: _callOptions);
+        if (res.success) {
+          await prefs.remove('offline_ad_impressions');
+          debugPrint('Successfully flushed offline ad impressions batch');
+        }
+      } else {
+        await prefs.remove('offline_ad_impressions');
+      }
+    } catch (e) {
+      debugPrint('Flush offline impressions attempt deferred: $e');
     }
   }
 

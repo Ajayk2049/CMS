@@ -6,7 +6,6 @@ const AdsRates = require('../models/AdsRates');
 const Device = require('../models/Device');
 const User = require('../models/User');
 const PhonePeTransaction = require('../models/PhonePeTransaction');
-const Report = require('../models/Report');
 const Menu = require('../models/Menu');
 const MediaLog = require('../models/MediaLog');
 const phonePeService = require('../services/phonePeService');
@@ -532,58 +531,7 @@ class AdminController {
     }
   }
 
-  /**
-   * Get all reports
-   */
-  async getReports(req, res) {
-    try {
-      const reports = await Report.find({})
-        .populate('reporterId', 'phone name role')
-        .sort({ createdAt: -1 });
-      return res.status(200).send({ success: true, data: reports });
-    } catch (error) {
-      console.error('getReports Error:', error.message);
-      return res.status(500).send({ success: false, message: 'Failed to fetch reports' });
-    }
-  }
 
-  /**
-   * Update report status and action Taken
-   */
-  async updateReport(req, res) {
-    const { reportId } = req.params || {};
-    const { status, actionTaken } = req.body || {};
-
-    if (!status || !['pending', 'in-progress', 'resolved'].includes(status)) {
-      return res.status(400).send({ success: false, message: 'Valid status is required' });
-    }
-
-    try {
-      const report = await Report.findOne({ reportId });
-      if (!report) {
-        return res.status(404).send({ success: false, message: 'Report not found' });
-      }
-
-      report.status = status;
-      if (actionTaken !== undefined) {
-        report.actionTaken = actionTaken;
-      }
-      await report.save();
-
-      if (global.broadcastToAdmins) {
-        global.broadcastToAdmins('report_updated', { reportId: report.reportId, status: report.status });
-      }
-
-      return res.status(200).send({
-        success: true,
-        message: 'Report updated successfully',
-        data: report
-      });
-    } catch (error) {
-      console.error('updateReport Error:', error.message);
-      return res.status(500).send({ success: false, message: 'Failed to update report' });
-    }
-  }
 
   /**
    * Update user details (Name, Phone, Email, Roles)
@@ -701,7 +649,6 @@ class AdminController {
       await Menu.deleteMany({ hostApplicationId: { $in: hostAppIds } });
       await Device.deleteMany({ hostApplicationId: { $in: hostAppIds } });
       await AdBooking.deleteMany({ advertiserId: userId });
-      await Report.deleteMany({ reporterId: userId });
 
       return res.status(200).send({
         success: true,

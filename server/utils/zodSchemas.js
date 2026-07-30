@@ -71,19 +71,11 @@ const resetPasswordSchema = z.object({
     })
 });
 
-const addRoleSchema = z.object({
-  role: z.enum(['merchant', 'advertiser'], {
-    errorMap: () => ({ message: 'Role must be merchant or advertiser' })
-  }),
-  password: z.string({ required_error: 'Current password is required' }).min(1, 'Password is required')
-});
-
 module.exports = {
   deviceActivationSchema,
   registerSchema,
   loginSchema,
   verifyOtpSchema,
   sendOtpSchema,
-  resetPasswordSchema,
-  addRoleSchema
+  resetPasswordSchema
 };

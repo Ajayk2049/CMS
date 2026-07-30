@@ -34,7 +34,8 @@ import {
   Lock,
   Star,
   Video,
-  Upload
+  Upload,
+  LayoutDashboard
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -179,7 +180,6 @@ export default function MerchantDashboard() {
   };
   const [zipError, setZipError] = useState('');
   const [roleActionLoading, setRoleActionLoading] = useState(false);
-  const [showBecomeAdvertiserModal, setShowBecomeAdvertiserModal] = useState(false);
   const [showGetMoreDevicesModal, setShowGetMoreDevicesModal] = useState(false);
   const [showEditApplicationModal, setShowEditApplicationModal] = useState(false);
   const [editingApplicationId, setEditingApplicationId] = useState('');
@@ -226,6 +226,29 @@ export default function MerchantDashboard() {
     }
     return '';
   });
+
+  // Analytics Dashboard states
+  const [analyticsDays, setAnalyticsDays] = useState(0);
+  const [analyticsSlotFilter, setAnalyticsSlotFilter] = useState('all');
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  const fetchVenueAnalytics = async (authToken, days = 0) => {
+    if (!authToken) return;
+    setAnalyticsLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/host/analytics?days=${days}`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (res.data.success) {
+        setAnalyticsData(res.data.data);
+      }
+    } catch (err) {
+      console.error('fetchVenueAnalytics Error:', err.message);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  };
 
   // Applications tab states
   const [applications, setApplications] = useState([]);
@@ -1572,26 +1595,6 @@ export default function MerchantDashboard() {
     }
   };
 
-  const handleBecomeAdvertiser = async () => {
-    setError('');
-    setInfo('');
-    setRoleActionLoading(true);
-    setShowBecomeAdvertiserModal(false);
-    try {
-      const res = await axios.post(`${API_BASE}/auth/add-role`, { role: 'advertiser' }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      localStorage.setItem('token', res.data.data.token);
-      localStorage.setItem('role', res.data.data.user.role);
-      localStorage.setItem('roles', JSON.stringify(res.data.data.user.roles));
-      router.push('/advertiser');
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to register as advertiser.');
-    } finally {
-      setRoleActionLoading(false);
-    }
-  };
-
   const handleRequestMoreDevices = async (e) => {
     e.preventDefault();
     if (!selectedOutletId) {
@@ -1801,14 +1804,17 @@ export default function MerchantDashboard() {
           {hasApprovedVenue && (
             <>
               <button
-                onClick={() => setActiveTab('devices')}
-                className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'devices'
+                onClick={() => {
+                  setActiveTab('dashboard');
+                  fetchVenueAnalytics(token, analyticsDays);
+                }}
+                className={`flex items-center space-x-2 px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${activeTab === 'dashboard'
                   ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
                   }`}
               >
-                <MonitorSmartphone className={`w-4 h-4  ${activeTab === 'devices' ? 'text-primary-foreground' : 'text-primary'}`} />
-                <span className="hidden sm:inline">Devices</span>
+                <LayoutDashboard className={`w-4 h-4  ${activeTab === 'dashboard' ? 'text-primary-foreground' : 'text-primary'}`} />
+                <span className="hidden sm:inline">Dashboard</span>
               </button>
               {applications.some(app => app.status === 'approved' && app.requestTablet) && (
                 <>
@@ -1913,6 +1919,17 @@ export default function MerchantDashboard() {
                     <button
                       onClick={() => {
                         setUserMenuOpen(false);
+                        setActiveTab('devices');
+                      }}
+                      className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                    >
+                      <MonitorSmartphone className="w-4 h-4 text-emerald-500" />
+                      <span>Devices</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
                         openEditApplicationModal(applications[0]);
                       }}
                       className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
@@ -1937,7 +1954,7 @@ export default function MerchantDashboard() {
                       <span>Get More Devices</span>
                     </button>
 
-                    {roles.includes('advertiser') ? (
+                    {roles.includes('advertiser') && (
                       <button
                         onClick={() => {
                           setUserMenuOpen(false);
@@ -1948,18 +1965,6 @@ export default function MerchantDashboard() {
                       >
                         <RefreshCw className={`w-4 h-4 text-indigo-500 ${roleActionLoading ? 'animate-spin' : ''}`} />
                         <span>Switch to Advertiser</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          setShowBecomeAdvertiserModal(true);
-                        }}
-                        disabled={roleActionLoading}
-                        className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
-                      >
-                        <Megaphone className="w-4 h-4 text-blue-500" />
-                        <span>Become Advertiser</span>
                       </button>
                     )}
                   </div>
@@ -1994,6 +1999,286 @@ export default function MerchantDashboard() {
         {info && (
           <div className="mb-8 p-4 rounded-xl bg-primary/10 border border-primary/20 text-primary text-xs font-semibold">
             {info}
+          </div>
+        )}
+
+        {/* 0. Venue Analytics Dashboard Tab */}
+        {activeTab === 'dashboard' && (
+          <div className="animate-fade-in space-y-6">
+            {/* Header Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-border/40">
+              <div>
+                <h1 className="font-outfit text-2xl font-black text-foreground flex items-center space-x-2">
+                  <LayoutDashboard className="w-6 h-6 text-primary" />
+                  <span>Venue Analytics Dashboard</span>
+                </h1>
+                <p className="text-muted-foreground text-xs font-semibold mt-1">
+                  Food sales performance & order activity for <span className="text-foreground font-bold">{analyticsData?.venueName || 'Your Venue'}</span>
+                </p>
+              </div>
+
+              {/* Date Filter Selector */}
+              <div className="flex items-center space-x-2 bg-card border border-border/40 p-1.5 rounded-2xl shadow-sm overflow-x-auto">
+                {[
+                  { label: 'Today', value: 0 },
+                  { label: 'Last 7 Days', value: 7 },
+                  { label: 'Last 15 Days', value: 15 },
+                  { label: 'Last 30 Days', value: 30 }
+                ].map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => {
+                      setAnalyticsDays(item.value);
+                      fetchVenueAnalytics(token, item.value);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                      analyticsDays === item.value
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Key Summary Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-5 rounded-2xl bg-card border border-border/40 shadow-sm space-y-2 relative overflow-hidden">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Total Food Revenue</span>
+                <p className="text-2xl font-black text-foreground font-outfit">
+                  ₹{(((analyticsData?.summary?.totalRevenuePaise || 0) / 100)).toLocaleString('en-IN')}
+                </p>
+                <span className="text-[10px] text-muted-foreground font-medium block">
+                  {analyticsDays === 0 ? "Today's gross sales" : `Last ${analyticsDays} days gross sales`}
+                </span>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-card border border-border/40 shadow-sm space-y-2 relative overflow-hidden">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Total Orders</span>
+                <p className="text-2xl font-black text-primary font-outfit">
+                  {analyticsData?.summary?.totalCompletedOrders || 0}
+                </p>
+                <span className="text-[10px] text-muted-foreground font-medium block">
+                  Completed tablet/QR orders
+                </span>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-card border border-border/40 shadow-sm space-y-2 relative overflow-hidden">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Avg Order Value</span>
+                <p className="text-2xl font-black text-foreground font-outfit">
+                  ₹{(((analyticsData?.summary?.avgOrderValuePaise || 0) / 100)).toLocaleString('en-IN')}
+                </p>
+                <span className="text-[10px] text-muted-foreground font-medium block">
+                  Per customer transaction
+                </span>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-card border border-border/40 shadow-sm space-y-2 relative overflow-hidden">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Peak Revenue Slot</span>
+                <p className="text-2xl font-black text-primary font-outfit">
+                  {analyticsData?.summary?.peakSlotName || '--'}
+                </p>
+                <span className="text-[10px] text-muted-foreground font-medium block">
+                  Highest earning time period
+                </span>
+              </div>
+            </div>
+
+            {/* Time Slot Switcher & Item Analytics */}
+            <div className="p-6 rounded-2xl bg-card border border-border/40 shadow-sm space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-border/40">
+                <div>
+                  <h3 className="font-outfit text-base font-bold text-foreground">Time-of-Day Food Sales</h3>
+                  <p className="text-xs text-muted-foreground font-semibold">
+                    Select a time slot to view best-selling dishes during that period
+                  </p>
+                </div>
+
+                {/* 4 Clean Slot Buttons */}
+                <div className="flex items-center gap-2 overflow-x-auto py-1">
+                  {[
+                    { id: 'all', label: 'ALL (Overall)' },
+                    { id: 'breakfast', label: 'Breakfast' },
+                    { id: 'lunch', label: 'Lunch' },
+                    { id: 'dinner', label: 'Dinner' }
+                  ].map((slot) => (
+                    <button
+                      key={slot.id}
+                      type="button"
+                      onClick={() => setAnalyticsSlotFilter(slot.id)}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                        analyticsSlotFilter === slot.id
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted'
+                      }`}
+                    >
+                      {slot.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Active Slot Item Performance Grid */}
+              {(() => {
+                const currentSlotData = analyticsData?.slots?.[analyticsSlotFilter];
+                const topSeller = currentSlotData?.topSeller;
+                const rankedItems = currentSlotData?.rankedItems || [];
+
+                if (!currentSlotData || rankedItems.length === 0) {
+                  return (
+                    <div className="p-8 rounded-xl border border-dashed border-border/40 text-center space-y-2">
+                      <p className="text-sm font-bold text-muted-foreground">No dish orders recorded for this time slot yet.</p>
+                      <p className="text-xs text-muted-foreground">Orders placed during this slot will automatically rank here.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid md:grid-cols-12 gap-6 items-start">
+                    {/* #1 Best Seller Spotlight Card */}
+                    <div className="md:col-span-5 p-5 rounded-2xl border border-primary/30 bg-primary/5 space-y-4 relative overflow-hidden">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-primary bg-primary/10 px-3 py-1 rounded-full border border-primary/20">
+                          Top Seller
+                        </span>
+                        <span className="text-xs font-bold text-muted-foreground">
+                          {analyticsSlotFilter.toUpperCase()} SLOT
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-4">
+                        {topSeller.imageUrl ? (
+                          <img
+                            src={resolveMediaUrl(topSeller.imageUrl)}
+                            alt={topSeller.name}
+                            className="w-16 h-16 rounded-xl object-cover border border-border/40 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-16 h-16 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold text-xl shrink-0">
+                            🍽️
+                          </div>
+                        )}
+                        <div>
+                          <h4 className="font-outfit text-lg font-bold text-foreground">{topSeller.name}</h4>
+                          <p className="text-xs font-semibold text-muted-foreground mt-0.5">
+                            {topSeller.qty} units sold
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="pt-3 border-t border-border/20 flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground font-semibold">Total Sales</span>
+                        <span className="font-mono font-bold text-foreground text-sm">
+                          ₹{((topSeller.revenuePaise || 0) / 100).toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Top 3 Ranked Dish List (with Uniform Progress Meter Bars) */}
+                    <div className="md:col-span-7 space-y-4">
+                      <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                        Top 3 Performing Dishes (Ranked)
+                      </h4>
+
+                      <div className="space-y-3">
+                        {rankedItems.map((item, idx) => (
+                          <div key={item.itemId} className="space-y-1.5 p-3 rounded-xl border border-border/40 bg-muted/10">
+                            <div className="flex items-center justify-between text-xs">
+                              <div className="flex items-center space-x-2 font-bold text-foreground">
+                                <span className="text-primary font-mono text-xs">#{idx + 1}</span>
+                                <span>{item.name}</span>
+                              </div>
+                              <div className="flex items-center space-x-3 text-xs">
+                                <span className="font-semibold text-muted-foreground">{item.qty} sold</span>
+                                <span className="font-mono font-bold text-foreground">
+                                  ₹{((item.revenuePaise || 0) / 100).toLocaleString('en-IN')}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Uniform Progress Fill Meter */}
+                            <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                              <div
+                                className="bg-primary h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${item.percentageShare}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Table Utilization Frequency Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Most Active Table */}
+              <div className="p-5 rounded-2xl bg-card border border-border/40 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-foreground uppercase tracking-wider">
+                    Most Active Table
+                  </span>
+                  <span className="text-[10px] font-bold text-primary bg-primary/10 px-2.5 py-0.5 rounded-full">High Turnover</span>
+                </div>
+
+                {analyticsData?.tables?.mostActiveTable ? (
+                  <div className="flex items-center justify-between pt-1">
+                    <div>
+                      <h4 className="font-outfit text-xl font-bold text-foreground">
+                        {analyticsData.tables.mostActiveTable.tableNumber}
+                      </h4>
+                      <p className="text-xs font-semibold text-muted-foreground mt-0.5">
+                        {analyticsData.tables.mostActiveTable.orderCount} total orders completed
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-muted-foreground block font-semibold">Total Revenue</span>
+                      <span className="font-mono text-lg font-bold text-foreground">
+                        ₹{((analyticsData.tables.mostActiveTable.totalAmount || 0) / 100).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs font-semibold text-muted-foreground pt-1">No table activity recorded yet.</p>
+                )}
+              </div>
+
+              {/* Least Active Table */}
+              <div className="p-5 rounded-2xl bg-card border border-border/40 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-foreground uppercase tracking-wider">
+                    Least Active Table
+                  </span>
+                  <span className="text-[10px] font-bold text-muted-foreground bg-muted px-2.5 py-0.5 rounded-full">Low Utilization</span>
+                </div>
+
+                {analyticsData?.tables?.leastActiveTable ? (
+                  <div className="flex items-center justify-between pt-1">
+                    <div>
+                      <h4 className="font-outfit text-xl font-bold text-foreground">
+                        {analyticsData.tables.leastActiveTable.tableNumber}
+                      </h4>
+                      <p className="text-xs font-semibold text-muted-foreground mt-0.5">
+                        {analyticsData.tables.leastActiveTable.orderCount} total orders completed
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-muted-foreground block font-semibold">Total Revenue</span>
+                      <span className="font-mono text-lg font-bold text-foreground">
+                        ₹{((analyticsData.tables.leastActiveTable.totalAmount || 0) / 100).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs font-semibold text-muted-foreground pt-1">No low-activity tables flagged.</p>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -4208,45 +4493,7 @@ export default function MerchantDashboard() {
         </div>
       )}
 
-      {/* Become Advertiser Modal */}
-      {showBecomeAdvertiserModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="w-full max-w-md bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative space-y-6">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
-                <Megaphone className="w-5 h-5 text-white" />
-              </div>
-              <div className="text-left">
-                <h3 className="font-outfit text-md font-bold tracking-tight">Become an Advertiser</h3>
-                <p className="text-[10px] text-muted-foreground font-semibold mt-0.5">Activate advertising campaigns on your account</p>
-              </div>
-            </div>
 
-            <p className="text-xs text-muted-foreground font-medium leading-relaxed">
-              By activating the Advertiser profile, you will be able to book ad campaigns on tabletop tablets and large wall screens, manage your video assets, and view campaign analytical reports.
-              <br /><br />
-              This will use your same phone number and credentials, allowing you to seamlessly switch between your Host and Advertiser spaces.
-            </p>
-
-            <div className="flex space-x-3 pt-2">
-              <button
-                onClick={handleBecomeAdvertiser}
-                disabled={roleActionLoading}
-                className="flex-1 bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all text-xs cursor-pointer shadow-lg glow-hover flex items-center justify-center space-x-2"
-              >
-                <span>{roleActionLoading ? 'Activating...' : 'Activate Advertiser Persona'}</span>
-              </button>
-              <button
-                onClick={() => setShowBecomeAdvertiserModal(false)}
-                disabled={roleActionLoading}
-                className="px-5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Get More Devices Modal */}
       {showGetMoreDevicesModal && (

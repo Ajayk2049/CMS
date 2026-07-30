@@ -34,7 +34,8 @@ import {
   ListVideo,
   IndianRupee,
   BarChart3,
-  Activity
+  Activity,
+  Eye
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -91,7 +92,6 @@ export default function AdvertiserDashboard() {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
   const [roleActionLoading, setRoleActionLoading] = useState(false);
-  const [showBecomeHostModal, setShowBecomeHostModal] = useState(false);
   const [expandedCampaigns, setExpandedCampaigns] = useState({});
   const [previewVideoUrl, setPreviewVideoUrl] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -102,6 +102,12 @@ export default function AdvertiserDashboard() {
   const [analyticsBookingId, setAnalyticsBookingId] = useState('');
   const [analyticsData, setAnalyticsData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(0);
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
+
+  // Media Creative Preview Modal state (matching Admin panel popup)
+  const [showMediaModal, setShowMediaModal] = useState(false);
+  const [activeMediaUrl, setActiveMediaUrl] = useState('');
 
   const fetchCampaignAnalytics = async (bookingId, isSilent = false) => {
     if (!bookingId) return;
@@ -112,6 +118,9 @@ export default function AdvertiserDashboard() {
       });
       if (res.data.success) {
         setAnalyticsData(res.data.data);
+        if (!isSilent) {
+          setLastRefreshedAt(Date.now());
+        }
       }
     } catch (err) {
       console.error('fetchCampaignAnalytics Error:', err);
@@ -126,16 +135,41 @@ export default function AdvertiserDashboard() {
   const openAnalyticsModal = (bookingId) => {
     setAnalyticsBookingId(bookingId);
     setAnalyticsData(null);
+    setLastRefreshedAt(0);
+    setCooldownRemaining(0);
     setShowAnalyticsModal(true);
     fetchCampaignAnalytics(bookingId);
   };
 
+  // Cooldown countdown timer effect
+  useEffect(() => {
+    if (!lastRefreshedAt) {
+      setCooldownRemaining(0);
+      return;
+    }
+
+    const updateCooldown = () => {
+      const elapsed = Math.floor((Date.now() - lastRefreshedAt) / 1000);
+      const remaining = 120 - elapsed;
+      if (remaining > 0) {
+        setCooldownRemaining(remaining);
+      } else {
+        setCooldownRemaining(0);
+      }
+    };
+
+    updateCooldown();
+    const timer = setInterval(updateCooldown, 1000);
+    return () => clearInterval(timer);
+  }, [lastRefreshedAt]);
+
+  // Auto-polling every 2 minutes (120,000ms)
   useEffect(() => {
     let interval = null;
     if (showAnalyticsModal && analyticsBookingId && token) {
       interval = setInterval(() => {
         fetchCampaignAnalytics(analyticsBookingId, true);
-      }, 30000);
+      }, 120000);
     }
     return () => {
       if (interval) clearInterval(interval);
@@ -565,8 +599,8 @@ export default function AdvertiserDashboard() {
 
   // Step 1: Handle local browser image file selection (Generates local preview only, no upload)
   const handleImageFileSelect = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
     const targetBooking = activeUploadBooking;
     const targetDeviceType = targetBooking ? targetBooking.deviceType : selectedDeviceType;
@@ -576,24 +610,34 @@ export default function AdvertiserDashboard() {
       return;
     }
 
-    if (selectedImageFiles.length >= 2) {
+    const availableSlots = 2 - selectedImageFiles.length;
+    if (availableSlots <= 0) {
       showToast('error', 'You can select a maximum of 2 images per campaign.');
       return;
     }
 
-    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
-      showToast('error', 'Unsupported file type. Only JPG, JPEG, PNG, and WEBP are allowed.');
-      return;
+    const filesToProcess = files.slice(0, availableSlots);
+    const validFiles = [];
+    const validPreviews = [];
+
+    filesToProcess.forEach(file => {
+      const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+      if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
+        validFiles.push(file);
+        validPreviews.push(URL.createObjectURL(file));
+      } else {
+        showToast('error', `Skipped ${file.name}: Only JPG, JPEG, PNG, and WEBP are allowed.`);
+      }
+    });
+
+    if (validFiles.length > 0) {
+      const updatedFiles = [...selectedImageFiles, ...validFiles];
+      const updatedPreviews = [...localImagePreviewUrls, ...validPreviews];
+      setSelectedImageFiles(updatedFiles);
+      setLocalImagePreviewUrls(updatedPreviews);
+      showToast('info', `${updatedFiles.length}/2 Images selected! Preview below and click "Upload Ad" to proceed.`);
     }
 
-    const blobUrl = URL.createObjectURL(file);
-    const updatedFiles = [...selectedImageFiles, file];
-    const updatedPreviews = [...localImagePreviewUrls, blobUrl];
-
-    setSelectedImageFiles(updatedFiles);
-    setLocalImagePreviewUrls(updatedPreviews);
-    showToast('info', `Image ${updatedFiles.length}/2 selected! Preview below and click "Upload Ad" to proceed.`);
     if (e && e.target) e.target.value = '';
   };
 
@@ -629,7 +673,7 @@ export default function AdvertiserDashboard() {
       const serverUrls = [];
       for (let i = 0; i < selectedImageFiles.length; i++) {
         const imgFile = selectedImageFiles[i];
-        let uploadUrl = `${API_BASE}/ads/upload-image?deviceType=${targetDeviceType}`;
+        let uploadUrl = `${API_BASE}/ads/upload-image?deviceType=${targetDeviceType}&slotIndex=${i}${i === 0 ? '&isFirst=true' : ''}`;
         if (targetBooking) {
           uploadUrl += `&bookingId=${targetBooking._id}`;
         }
@@ -801,24 +845,6 @@ export default function AdvertiserDashboard() {
     }
   };
 
-  const handleBecomeHost = async () => {
-    setRoleActionLoading(true);
-    setShowBecomeHostModal(false);
-    try {
-      const res = await axios.post(`${API_BASE}/auth/add-role`, { role: 'merchant' }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      localStorage.setItem('token', res.data.data.token);
-      localStorage.setItem('role', res.data.data.user.role);
-      localStorage.setItem('roles', JSON.stringify(res.data.data.user.roles));
-      router.push('/merchant');
-    } catch (err) {
-      showToast('error', err.response?.data?.message || 'Failed to register as host.');
-    } finally {
-      setRoleActionLoading(false);
-    }
-  };
-
   const handleVerifyPayment = async (bookingId, explicitToken = null, isAutoVerify = false) => {
     const activeToken = explicitToken || token;
     if (!activeToken) return;
@@ -941,33 +967,19 @@ export default function AdvertiserDashboard() {
                   <p className="text-xs font-bold text-foreground mt-1 truncate">{name || phone}</p>
                 </div>
 
-                {bookings.length > 0 && (
+                {bookings.length > 0 && roles.includes('merchant') && (
                   <div className="p-1.5 space-y-1 border-b border-border/40">
-                    {roles.includes('merchant') ? (
-                      <button
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          handleSwitchRole('merchant');
-                        }}
-                        disabled={roleActionLoading}
-                        className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
-                      >
-                        <RefreshCw className={`w-4 h-4 text-indigo-500 ${roleActionLoading ? 'animate-spin' : ''}`} />
-                        <span>Switch to Host</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          setShowBecomeHostModal(true);
-                        }}
-                        disabled={roleActionLoading}
-                        className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
-                      >
-                        <Megaphone className="w-4 h-4 text-blue-500" />
-                        <span>Become Host</span>
-                      </button>
-                    )}
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        handleSwitchRole('merchant');
+                      }}
+                      disabled={roleActionLoading}
+                      className="w-full flex items-center space-x-2 px-2.5 py-2 text-left hover:bg-muted rounded-lg transition-colors cursor-pointer text-foreground font-bold"
+                    >
+                      <RefreshCw className={`w-4 h-4 text-indigo-500 ${roleActionLoading ? 'animate-spin' : ''}`} />
+                      <span>Switch to Host</span>
+                    </button>
                   </div>
                 )}
 
@@ -1157,6 +1169,7 @@ export default function AdvertiserDashboard() {
                                     <span>Upload Media</span>
                                   </button>
                                 )}
+
                                 {booking.paymentStatus === 'completed' && booking.approvalStatus === 'approved' && (
                                   <button
                                     onClick={() => openAnalyticsModal(booking.bookingId)}
@@ -1211,96 +1224,26 @@ export default function AdvertiserDashboard() {
                                     )}
                                   </div>
 
-                                  {/* Right Panel Media Creative Preview */}
-                                  <div className="flex flex-col space-y-2">
-                                    {(() => {
-                                      if (booking.approvalStatus === 'rejected') {
-                                        return (
-                                          <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-xs space-y-1.5">
-                                            <div className="flex items-center space-x-1.5 text-destructive font-bold">
-                                              <span>🗑️ Media Files Deleted</span>
-                                            </div>
-                                            <p className="text-muted-foreground leading-relaxed font-semibold">
-                                              Media creative files (videos/images) were unlinked and permanently deleted from server storage upon campaign rejection.
-                                            </p>
-                                          </div>
-                                        );
-                                      }
-
-                                      const mediaUrls = (booking.mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean);
-                                      const firstUrl = mediaUrls[0] || '';
-                                      const isVideo = booking.adType === 'video' || firstUrl.endsWith('.mp4') || firstUrl.endsWith('.webm');
-
-                                      if (isVideo) {
-                                        return (
-                                          <>
-                                            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Video Asset Preview</span>
-                                            <div className="w-full max-w-[320px] aspect-video rounded-xl border border-border/40 bg-black overflow-hidden relative">
-                                              <video
-                                                src={resolveMediaUrl(firstUrl)}
-                                                controls
-                                                className="w-full h-full object-contain"
-                                              />
-                                            </div>
-                                            <a
-                                              href={resolveMediaUrl(firstUrl)}
-                                              target="_blank"
-                                              rel="noreferrer"
-                                              className="text-xs text-primary hover:underline font-bold mt-1 inline-block"
-                                            >
-                                              View Raw Video Link
-                                            </a>
-                                          </>
-                                        );
-                                      }
-
-                                      return (
-                                        <>
-                                          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                                            {mediaUrls.length > 1 ? 'Image Creatives (Front & Back)' : 'Image Creative Preview'}
-                                          </span>
-                                          <div className="flex items-center gap-3 overflow-x-auto py-1">
-                                            {mediaUrls.map((rawUrl, idx) => {
-                                              const resolvedUrl = resolveMediaUrl(rawUrl);
-                                              return (
-                                                <div key={idx} className="flex flex-col items-center space-y-1">
-                                                  <div className="bg-black/80 rounded-xl border border-border/40 p-2 w-[180px] h-[135px] flex items-center justify-center overflow-hidden relative shadow-sm">
-                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                    <img
-                                                      src={resolvedUrl}
-                                                      alt={`Creative ${idx + 1}`}
-                                                      className="max-w-full max-h-full object-contain block"
-                                                      onError={(e) => {
-                                                        console.error('Image preview load failed for URL:', resolvedUrl);
-                                                        const base = API_BASE.split('/api/v1')[0];
-                                                        if (rawUrl.includes('/uploads/')) {
-                                                          const sub = rawUrl.split('/uploads/')[1];
-                                                          const fallbackUrl = `${base}/uploads/${sub}`;
-                                                          if (e.target.src !== fallbackUrl) {
-                                                            e.target.src = fallbackUrl;
-                                                          }
-                                                        }
-                                                      }}
-                                                    />
-                                                  </div>
-                                                  <span className="text-[9px] font-bold text-muted-foreground uppercase">
-                                                    {mediaUrls.length > 1 ? (idx === 0 ? 'Front (Image 1)' : 'Back (Image 2)') : 'Image Asset'}
-                                                  </span>
-                                                  <a
-                                                    href={resolvedUrl}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="text-[10px] text-primary hover:underline font-semibold"
-                                                  >
-                                                    View Raw Asset
-                                                  </a>
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-                                        </>
-                                      );
-                                    })()}
+                                  {/* Right Panel - Media Asset Action */}
+                                  <div className="flex flex-col justify-center items-center p-4 rounded-xl border border-border/40 bg-muted/10 space-y-3 text-center">
+                                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                                      Media Creative Attachments
+                                    </span>
+                                    {booking.mediaUrl && booking.mediaUrl.trim() !== '' ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setActiveMediaUrl(booking.mediaUrl);
+                                          setShowMediaModal(true);
+                                        }}
+                                        className="flex items-center justify-center space-x-2 px-4 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 font-bold rounded-xl transition-all text-xs cursor-pointer shadow-sm w-full max-w-[220px]"
+                                      >
+                                        <Eye className="w-4 h-4" />
+                                        <span>View Media Attachment</span>
+                                      </button>
+                                    ) : (
+                                      <span className="text-xs font-semibold text-muted-foreground">No media attached yet</span>
+                                    )}
                                   </div>
                                 </div>
                               </td>
@@ -1549,6 +1492,7 @@ export default function AdvertiserDashboard() {
                           </span>
                           <input
                             type="file"
+                            multiple
                             accept="image/png,image/jpeg,image/jpg,image/webp"
                             onChange={handleImageFileSelect}
                             disabled={uploading}
@@ -1621,19 +1565,19 @@ export default function AdvertiserDashboard() {
                       )}
 
                       {/* Final Uploaded Media Confirmation Box */}
-                      {uploadedImages.length > 0 && mediaUrl && (
+                      {(mediaUrl || activeUploadBooking?.mediaUrl) && (
                         <div className="p-4 rounded-xl border border-emerald-500/40 bg-emerald-500/5 space-y-3 animate-fade-in">
                           <div className="flex items-center justify-between">
                             <p className="text-xs font-bold text-foreground">Final Uploaded & Optimized Images</p>
                             <span className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-2.5 py-1 rounded-full">Optimized & Saved</span>
                           </div>
                           <div className="grid grid-cols-2 gap-4">
-                            {uploadedImages.map((imgItem, idx) => (
+                            {((activeUploadBooking?.mediaUrl || mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean)).map((imgItem, idx) => (
                               <div key={idx} className="border border-border/40 rounded-xl overflow-hidden bg-muted/20 p-2.5 space-y-2">
                                 <div className={`w-full rounded-lg bg-black overflow-hidden relative shadow-sm ${activeUploadBooking?.deviceType === 'tablet' ? 'aspect-[3/4]' : 'aspect-[16/9]'}`}>
                                   <img src={resolveMediaUrl(imgItem)} alt={`Creative ${idx + 1}`} className="w-full h-full object-contain" />
                                 </div>
-                                <span className="text-xs font-bold text-foreground">{idx === 0 ? 'Front Creative' : 'Back Creative'}</span>
+                                <span className="text-xs font-bold text-foreground">{idx === 0 ? 'Front Creative (Image 1)' : 'Back Creative (Image 2)'}</span>
                               </div>
                             ))}
                           </div>
@@ -1898,45 +1842,7 @@ export default function AdvertiserDashboard() {
         )}
       </main>
 
-      {/* Become Host Modal */}
-      {showBecomeHostModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="w-full max-w-md bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20 shrink-0">
-                <Building className="w-5 h-5 text-white" />
-              </div>
-              <div className="text-left">
-                <h3 className="font-outfit text-md font-bold tracking-tight">Become a Host</h3>
-                <p className="text-[10px] text-muted-foreground font-semibold mt-0.5">Apply for tabletop devices/screens at your outlet</p>
-              </div>
-            </div>
 
-            <p className="text-xs text-muted-foreground font-medium leading-relaxed">
-              By activating the Host profile, you can apply to host tablet ordering kiosks and wall display screens at your physical venue, manage your digital restaurant menu catalogs, and monitor live customer orders.
-              <br /><br />
-              This will use your same phone number and credentials, allowing you to seamlessly switch between your Advertiser and Host dashboards.
-            </p>
-
-            <div className="flex space-x-3 pt-2">
-              <button
-                onClick={handleBecomeHost}
-                disabled={roleActionLoading}
-                className="flex-1 bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all text-xs cursor-pointer shadow-lg glow-hover flex items-center justify-center space-x-2"
-              >
-                <span>{roleActionLoading ? 'Activating...' : 'Activate Host Profile'}</span>
-              </button>
-              <button
-                onClick={() => setShowBecomeHostModal(false)}
-                disabled={roleActionLoading}
-                className="px-5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Video Preview Modal */}
       {previewVideoUrl && (
@@ -1988,12 +1894,18 @@ export default function AdvertiserDashboard() {
               <div className="flex items-center space-x-2">
                 <button
                   onClick={() => fetchCampaignAnalytics(analyticsBookingId)}
-                  disabled={analyticsLoading}
-                  className="p-2 hover:bg-muted border border-border/40 rounded-xl text-muted-foreground hover:text-foreground transition-all cursor-pointer text-xs font-bold flex items-center space-x-1"
-                  title="Refresh Live Data"
+                  disabled={analyticsLoading || cooldownRemaining > 0}
+                  className={`p-2 border border-border/40 rounded-xl text-xs font-bold flex items-center space-x-1 transition-all ${
+                    analyticsLoading || cooldownRemaining > 0
+                      ? 'bg-muted/40 text-muted-foreground opacity-60 cursor-not-allowed'
+                      : 'hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer'
+                  }`}
+                  title={cooldownRemaining > 0 ? `Refresh available in ${cooldownRemaining}s` : "Refresh Live Data"}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${analyticsLoading ? 'animate-spin' : ''}`} />
-                  <span className="hidden sm:inline">Refresh</span>
+                  <span className="hidden sm:inline">
+                    {cooldownRemaining > 0 ? `Refresh (${cooldownRemaining}s)` : 'Refresh'}
+                  </span>
                 </button>
                 <button
                   onClick={() => {
@@ -2025,7 +1937,7 @@ export default function AdvertiserDashboard() {
                         <Play className="w-3.5 h-3.5 text-blue-500" />
                       </div>
                       <span className="text-2xl font-black font-outfit text-foreground">{analyticsData.totalPlays}</span>
-                      <span className="text-[9px] text-muted-foreground font-semibold mt-1">Total Impressions</span>
+                      <span className="text-[9px] text-muted-foreground font-semibold mt-1">Full Campaign Impressions</span>
                     </div>
 
                     <div className="p-4 rounded-xl bg-card border border-border/40 flex flex-col justify-between shadow-sm">
@@ -2052,9 +1964,9 @@ export default function AdvertiserDashboard() {
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center space-x-2">
                         <Activity className="w-3.5 h-3.5 text-primary" />
-                        <span>Playback Impression Log</span>
+                        <span>Playback Impression Log (Last 10 Plays)</span>
                       </h4>
-                      <span className="text-[10px] text-muted-foreground font-semibold">Updated live every 30s</span>
+                      <span className="text-[10px] text-muted-foreground font-semibold">Auto-refreshes every 2m</span>
                     </div>
 
                     {analyticsData.recentImpressions.length === 0 ? (
@@ -2097,6 +2009,90 @@ export default function AdvertiserDashboard() {
                   </div>
                 </>
               ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Media Creative Preview Modal Popup (Matching Admin Panel) */}
+      {showMediaModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="w-full max-w-4xl bg-card border border-border/40 p-6 rounded-2xl shadow-2xl relative max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center mb-3 pb-3 border-b border-border/40">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 flex items-center justify-center">
+                  <Eye className="w-4 h-4" />
+                </div>
+                <h3 className="font-outfit text-base font-bold text-foreground">Media Creative Preview</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowMediaModal(false);
+                  setActiveMediaUrl('');
+                }}
+                className="p-1.5 hover:bg-muted border border-border/40 rounded-xl text-muted-foreground transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="w-full flex-1 max-h-[60vh] md:max-h-[68vh] rounded-2xl overflow-hidden bg-slate-950 flex items-center justify-center p-2">
+              {activeMediaUrl ? (
+                (() => {
+                  const mediaUrls = activeMediaUrl.split(',').map(s => s.trim()).filter(Boolean);
+                  const firstUrl = mediaUrls[0] || '';
+                  const isVideo = firstUrl.endsWith('.mp4') || firstUrl.endsWith('.webm');
+
+                  if (isVideo) {
+                    return (
+                      <video
+                        key={firstUrl}
+                        src={resolveMediaUrl(firstUrl)}
+                        controls
+                        className="w-full max-h-[60vh] md:max-h-[65vh] object-contain bg-black rounded-xl"
+                      />
+                    );
+                  }
+
+                  // Render Image / Dual-Image Preview Grid (Matching Admin Panel Popup Exactly)
+                  return (
+                    <div className="w-full flex justify-center items-center gap-4 py-4 overflow-x-auto">
+                      {mediaUrls.map((rawUrl, idx) => {
+                        const resolvedUrl = resolveMediaUrl(rawUrl);
+                        return (
+                          <div key={idx} className="flex flex-col items-center">
+                            <div className="bg-black/80 rounded-xl border border-border/40 shadow-lg p-3 min-w-[200px] min-h-[160px] flex items-center justify-center">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={resolvedUrl}
+                                alt={`Creative ${idx + 1}`}
+                                style={{ maxWidth: mediaUrls.length > 1 ? '260px' : '400px', maxHeight: '320px', objectFit: 'contain', display: 'block' }}
+                                onError={(e) => {
+                                  console.error('Image load failed for URL:', resolvedUrl);
+                                  const base = API_BASE.split('/api/v1')[0];
+                                  if (rawUrl.includes('/uploads/')) {
+                                    const sub = rawUrl.split('/uploads/')[1];
+                                    const fallbackUrl = `${base}/uploads/${sub}`;
+                                    if (e.target.src !== fallbackUrl) {
+                                      e.target.src = fallbackUrl;
+                                    }
+                                  }
+                                }}
+                              />
+                            </div>
+                            <span className="text-[10px] font-extrabold text-slate-300 mt-2 uppercase tracking-wider">
+                              {mediaUrls.length > 1 ? (idx === 0 ? 'Front (Image 1)' : 'Back (Image 2)') : 'Image Asset'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="flex items-center justify-center h-full text-muted-foreground font-semibold text-xs">
+                  No media URL provided
+                </div>
+              )}
             </div>
           </div>
         </div>

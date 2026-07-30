@@ -6,6 +6,7 @@ service DeviceService {
   rpc RegisterDevice (RegisterDeviceRequest) returns (RegisterDeviceResponse);
   rpc SendHeartbeat (HeartbeatRequest) returns (HeartbeatResponse);
   rpc TrackAdImpression (AdImpressionRequest) returns (AdImpressionResponse);
+  rpc BatchTrackAdImpressions (BatchAdImpressionRequest) returns (AdImpressionResponse);
 }
 
 message RegisterDeviceRequest {
@@ -43,4 +44,8 @@ message AdImpressionRequest {
 message AdImpressionResponse {
   bool success = 1;
   string message = 2;
+}
+
+message BatchAdImpressionRequest {
+  repeated AdImpressionRequest impressions = 1;
 }

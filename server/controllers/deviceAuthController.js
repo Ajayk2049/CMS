@@ -181,13 +181,15 @@ class DeviceAuthController {
           const resolvedUrls = rawUrls.map(u => resolveMediaUrl(u, req.headers.host));
           const firstUrl = resolvedUrls[0] || '';
           const isVideo = firstUrl.endsWith('.mp4') || firstUrl.endsWith('.webm');
+          const isImageAd = b.mediaType === 'image' || !isVideo;
+          const imageDuration = resolvedUrls.length >= 2 ? 16 : 8;
 
           return {
             bookingId: b.bookingId,
             mediaUrl: firstUrl,
             mediaUrls: resolvedUrls,
             frequencyMinutes: frequencyMinutes,
-            durationSeconds: isVideo ? 15 : 6,
+            durationSeconds: isImageAd ? imageDuration : (b.mediaDuration || 30),
             title: `Campaign ${b.bookingId}`,
             mediaType: isVideo ? 'video' : 'static'
           };

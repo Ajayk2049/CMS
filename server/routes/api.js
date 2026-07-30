@@ -47,7 +47,6 @@ function registerRoutes(fastify, options, done) {
   fastify.post('/auth/reset-password', authRateLimitConfig, authController.resetPassword);
   fastify.post('/auth/device/activate', deviceAuthController.activateDevice);
   fastify.get('/auth/device/ads', { preHandler: authenticate }, deviceAuthController.getDeviceAds);
-  fastify.post('/auth/add-role', { preHandler: authenticate }, authController.addRole);
   fastify.post('/auth/switch-role', { preHandler: authenticate }, authController.switchRole);
 
   // PhonePe Webhook callback (public)
@@ -81,6 +80,7 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.post('/host/promos/upload-media', { bodyLimit: 104857600 }, hostController.uploadHostPromoMedia.bind(hostController));
     merchantRoutes.post('/host/promos/stream', hostController.streamHostPromos.bind(hostController));
     merchantRoutes.post('/host/promos/delete-slot', hostController.deleteHostPromoSlot.bind(hostController));
+    merchantRoutes.get('/host/analytics', hostController.getVenueAnalytics.bind(hostController));
     next();
   });
 
@@ -130,8 +130,7 @@ function registerRoutes(fastify, options, done) {
     adminRoutes.put('/admin/users/:userId', adminController.updateUser);
     adminRoutes.post('/admin/users/:userId/reset-password', adminController.adminResetPassword);
     adminRoutes.delete('/admin/users/:userId', adminController.deleteUser);
-    adminRoutes.get('/admin/reports', adminController.getReports);
-    adminRoutes.patch('/admin/reports/:reportId', adminController.updateReport);
+
     adminRoutes.get('/admin/device-requests', adminController.getDeviceRequests);
     adminRoutes.post('/admin/device-requests/review', adminController.reviewDeviceRequest);
     next();

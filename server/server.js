@@ -22,7 +22,6 @@ const Order = require('./models/Order');
 const AdBooking = require('./models/AdBooking');
 const PhonePeTransaction = require('./models/PhonePeTransaction');
 const AdsRates = require('./models/AdsRates');
-const Report = require('./models/Report');
 const HostApplication = require('./models/HostApplication');
 const AdImpression = require('./models/AdImpression');
 
@@ -404,55 +403,7 @@ async function startFastify() {
     console.log('[Seeding] Default advertising rates seeded');
   }
 
-  // Seed demo merchant, advertiser, and reports if none exist
-  const reportCount = await Report.countDocuments({});
-  if (reportCount === 0) {
-    let demoMerchant = await User.findOne({ role: 'merchant' });
-    if (!demoMerchant) {
-      demoMerchant = new User({
-        phone: '+918888888888',
-        password: 'merchant',
-        role: 'merchant',
-        isDemo: true
-      });
-      await demoMerchant.save();
-      console.log('[Seeding] Demo Merchant user created (+918888888888)');
-    }
 
-    let demoAdvertiser = await User.findOne({ role: 'advertiser' });
-    if (!demoAdvertiser) {
-      demoAdvertiser = new User({
-        phone: '+917777777777',
-        password: 'advertiser',
-        role: 'advertiser',
-        isDemo: true
-      });
-      await demoAdvertiser.save();
-      console.log('[Seeding] Demo Advertiser user created (+917777777777)');
-    }
-
-    const defaultReports = [
-      {
-        reportId: 'REP_M_A123',
-        reporterId: demoMerchant._id,
-        reporterRole: 'merchant',
-        title: 'Tablet touchscreen unresponsive',
-        description: 'Device DEV_TAB_X987 at Table 4 is not responding to user touch events. Screen turns on and displays ads, but customers cannot open the ordering menu.',
-        status: 'pending'
-      },
-      {
-        reportId: 'REP_A_B456',
-        reporterId: demoAdvertiser._id,
-        reporterRole: 'advertiser',
-        title: 'Payment processed but ad still pending',
-        description: 'Paid 1500 INR via PhonePe for booking campaign ad spot, but status is showing pending after webhook callbacks. Transaction ID: TXN_DEMO_99823.',
-        status: 'in-progress',
-        actionTaken: 'Contacted PhonePe gateway sandbox to verify transaction status. Waiting for callback verification.'
-      }
-    ];
-    await Report.insertMany(defaultReports);
-    console.log('[Seeding] Default support reports seeded');
-  }
 
   await fastify.listen({ port: config.port, host: '0.0.0.0' });
   console.log(`[REST/WS Server] Listening on port ${config.port}`);
@@ -727,15 +678,59 @@ const deviceServiceHandlers = {
         const booking = await AdBooking.findOne({ bookingId });
         const deviceDoc = await Device.findOne({ deviceId });
 
+        // Dynamic duration resolution:
+        // - Image Ads: Platform decided duration (1 image = 8s, 2 images = 16s)
+        // - Video Ads: Actual video runtime (from gRPC telemetry or probed booking.mediaDuration)
+        let resolvedDuration = Number(durationSeconds) > 0 ? Number(durationSeconds) : 0;
+        if (booking) {
+          const rawUrls = (booking.mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean);
+          const isImageCampaign = booking.mediaType === 'image' || rawUrls.some(u => u.endsWith('.webp') || u.endsWith('.png') || u.endsWith('.jpg') || u.endsWith('.jpeg'));
+
+          if (isImageCampaign) {
+            resolvedDuration = rawUrls.length >= 2 ? 16 : 8;
+          } else {
+            resolvedDuration = (resolvedDuration > 0 && resolvedDuration !== 15)
+              ? resolvedDuration
+              : (booking.mediaDuration || 15);
+          }
+        } else if (resolvedDuration === 0) {
+          resolvedDuration = 8;
+        }
+
         await AdImpression.create({
           bookingId,
-          advertiserId: booking ? booking.userId : null,
+          advertiserId: booking ? (booking.advertiserId || booking.userId) : null,
           deviceId: deviceId || null,
           hostApplicationId: booking ? booking.hostApplicationId : (deviceDoc ? deviceDoc.hostApplicationId : null),
-          durationSeconds: Number(durationSeconds) || 15,
+          durationSeconds: resolvedDuration,
           interactiveClicks: Number(interactiveClicks) || 0,
           createdAt: new Date()
         });
+
+        // Atomically increment cumulative lifetime stats on AdBooking document (never lost even after log trimming)
+        if (booking) {
+          await AdBooking.updateOne(
+            { bookingId },
+            {
+              $inc: {
+                totalPlays: 1,
+                totalDurationSeconds: resolvedDuration
+              }
+            }
+          );
+        }
+
+        // Retention policy: Keep only the 10 most recent impression logs per bookingId
+        const recentImpressions = await AdImpression.find({ bookingId })
+          .sort({ createdAt: -1 })
+          .select('_id')
+          .skip(10)
+          .lean();
+
+        if (recentImpressions.length > 0) {
+          const oldIds = recentImpressions.map(doc => doc._id);
+          await AdImpression.deleteMany({ _id: { $in: oldIds } });
+        }
       }
 
       callback(null, {
@@ -744,8 +739,83 @@ const deviceServiceHandlers = {
       });
     } catch (err) {
       console.error('TrackAdImpression Error:', err.message);
-      const code = err.code || grpc.status.INTERNAL;
-      callback({ code, message: err.message });
+      callback(null, { success: false, message: err.message });
+    }
+  },
+
+  BatchTrackAdImpressions: async (call, callback) => {
+    const { impressions } = call.request || {};
+    try {
+      const claims = verifyGrpcToken(call);
+      const { deviceId } = claims;
+      const deviceDoc = await Device.findOne({ deviceId });
+
+      if (Array.isArray(impressions) && impressions.length > 0) {
+        console.log(`[gRPC telemetry] Device ${deviceId} syncing ${impressions.length} batched offline ad impressions`);
+
+        for (const item of impressions) {
+          const { bookingId, durationSeconds, interactiveClicks } = item;
+          if (!bookingId || bookingId === 'unknown') continue;
+
+          const booking = await AdBooking.findOne({ bookingId });
+          let resolvedDuration = Number(durationSeconds) > 0 ? Number(durationSeconds) : 0;
+          if (booking) {
+            const rawUrls = (booking.mediaUrl || '').split(',').map(s => s.trim()).filter(Boolean);
+            const isImageCampaign = booking.mediaType === 'image' || rawUrls.some(u => u.endsWith('.webp') || u.endsWith('.png') || u.endsWith('.jpg') || u.endsWith('.jpeg'));
+            if (isImageCampaign) {
+              resolvedDuration = rawUrls.length >= 2 ? 16 : 8;
+            } else {
+              resolvedDuration = (resolvedDuration > 0 && resolvedDuration !== 15) ? resolvedDuration : (booking.mediaDuration || 15);
+            }
+          } else if (resolvedDuration === 0) {
+            resolvedDuration = 8;
+          }
+
+          // Create detail log record
+          await AdImpression.create({
+            bookingId,
+            advertiserId: booking ? (booking.advertiserId || booking.userId) : null,
+            deviceId: deviceId || null,
+            hostApplicationId: booking ? booking.hostApplicationId : (deviceDoc ? deviceDoc.hostApplicationId : null),
+            durationSeconds: resolvedDuration,
+            interactiveClicks: Number(interactiveClicks) || 0,
+            createdAt: new Date()
+          });
+
+          // Atomically increment cumulative lifetime stats on AdBooking
+          if (booking) {
+            await AdBooking.updateOne(
+              { bookingId },
+              {
+                $inc: {
+                  totalPlays: 1,
+                  totalDurationSeconds: resolvedDuration
+                }
+              }
+            );
+          }
+
+          // Rolling 10-log window cleanup per bookingId
+          const recentImpressions = await AdImpression.find({ bookingId })
+            .sort({ createdAt: -1 })
+            .select('_id')
+            .skip(10)
+            .lean();
+
+          if (recentImpressions.length > 0) {
+            const oldIds = recentImpressions.map(doc => doc._id);
+            await AdImpression.deleteMany({ _id: { $in: oldIds } });
+          }
+        }
+      }
+
+      callback(null, {
+        success: true,
+        message: 'Batched telemetry logged successfully'
+      });
+    } catch (err) {
+      console.error('BatchTrackAdImpressions Error:', err.message);
+      callback(null, { success: false, message: err.message });
     }
   }
 };

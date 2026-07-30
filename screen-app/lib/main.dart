@@ -1234,11 +1234,11 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
   // =====================================================================
   // TELEMETRY
   // =====================================================================
-  void _trackImpression(String adSource) {
+  void _trackImpression(String adSource, [int durationSeconds = 0]) {
     String bookingId = 'unknown';
-    if (adSource.startsWith('static__')) {
+    if (adSource.startsWith('static__') || adSource.startsWith('img__')) {
       final parts = adSource.split('__');
-      if (parts.length >= 2) bookingId = parts[1];
+      if (parts.length >= 2) bookingId = parts[1].split('_').first;
     } else {
       final fileName = adSource.split('/').last.split('\\').last;
       if (fileName.startsWith('ad_')) {
@@ -1257,7 +1257,7 @@ class _AdPlayerScreenState extends State<AdPlayerScreen> with WidgetsBindingObse
       final req = AdImpressionRequest()
         ..deviceId = widget.deviceId
         ..bookingId = bookingId
-        ..durationSeconds = 15
+        ..durationSeconds = durationSeconds
         ..interactiveClicks = 0;
       _deviceClient.trackAdImpression(req, options: _callOptions).ignore();
     } catch (e) {
