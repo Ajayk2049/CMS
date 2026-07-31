@@ -24,6 +24,7 @@ import imgTablet4 from '@/assets/Tablet/New Project.png';
 import imgScreen1 from '@/assets/Screen/HUAWEI-IdeaHub-S-HUAWEI-IdeaHub-Pro-angle.webp';
 import imgScreen2 from '@/assets/Screen/M6APro_V2-EDLA.webp';
 import imgAibotLogo from '@/assets/Aibot_Logo.png';
+import imgHeroBanner from '@/assets/HeroBanner.png';
 
 const tabletImages = [imgTablet1, imgTablet2, imgTablet3, imgTablet4];
 const screenImages = [imgScreen1, imgScreen2];
@@ -101,28 +102,11 @@ export default function LandingPage() {
     }
   };
 
-  const slideVariants = {
-    initial: (direction) => ({
-      x: direction > 0 ? 300 : -300,
-      opacity: 0
-    }),
-    animate: {
-      x: 0,
-      opacity: 1,
-      transition: { x: { type: "spring", stiffness: 300, damping: 30 }, opacity: { duration: 0.2 } }
-    },
-    exit: (direction) => ({
-      x: direction < 0 ? 300 : -300,
-      opacity: 0,
-      transition: { x: { type: "spring", stiffness: 300, damping: 30 }, opacity: { duration: 0.2 } }
-    })
-  };
-
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col justify-between overflow-x-hidden">
-      {/* Navigation Header */}
-      <header className="fixed top-0 left-0 right-0 z-50 glassmorphism bg-background/80 border-b border-border">
-        <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
+      {/* Solid Navigation Header */}
+      <header className="fixed top-0 left-0 right-0 z-50 bg-background border-b border-border">
+        <div className="w-full max-w-[1700px] mx-auto px-8 md:px-12 h-14 flex items-center justify-between">
           <div className="flex items-center space-x-8">
             <motion.div
               initial={{ opacity: 0, x: -20 }}
@@ -163,58 +147,75 @@ export default function LandingPage() {
       </header>
 
       {/* Hero Section */}
-      <section className="relative pt-36 pb-24 px-6 overflow-hidden">
+      <section className="relative pt-36 pb-20 px-6 overflow-hidden">
         {/* Decorative Gradients */}
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-[#0069a8]/5 dark:bg-[#0069a8]/10 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute top-1/3 left-1/3 w-[350px] h-[350px] bg-[#0069a8]/10 dark:bg-[#0069a8]/15 rounded-full blur-[100px] pointer-events-none" />
 
-        <motion.div
-          initial="hidden"
-          animate="visible"
-          variants={staggerContainer}
-          className="max-w-5xl mx-auto text-center relative z-10"
-        >
-          <motion.h1
-            variants={fadeInUp}
-            className="font-outfit text-5xl md:text-7xl font-extrabold tracking-tight text-foreground mb-6 leading-tight"
-          >
-            Transform Tables Into <br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#0069a8] via-[#005182] to-[#0089d7]">
-              Interactive Ad Channels
-            </span>
-          </motion.h1>
-
-          <motion.p
-            variants={fadeInUp}
-            className="max-w-2xl mx-auto text-lg text-muted-foreground mb-10 leading-relaxed"
-          >
-            DigiAds enables venues to digitize, manage, and stream interactive food catalogs directly on tabletop kiosks, while providing advertisers with a high-ROI targeted ad delivery network.
-          </motion.p>
-
+        <div className="w-full max-w-[1700px] mx-auto px-8 md:px-12 grid lg:grid-cols-12 gap-8 lg:gap-12 items-center relative z-10">
+          {/* Left Column: Text & Navigation Buttons */}
           <motion.div
-            variants={fadeInUp}
-            className="flex flex-col sm:flex-row items-center justify-center gap-5"
+            initial="hidden"
+            animate="visible"
+            variants={staggerContainer}
+            className="lg:col-span-5 text-left space-y-6"
           >
-            <a
-              href={`${userPortalUrl}/register?role=merchant`}
-              className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 bg-primary text-primary-foreground font-bold px-8 py-4 rounded-2xl glow-hover transition-all shadow-xl hover:bg-primary/90 animate-none"
+            <motion.h1
+              variants={fadeInUp}
+              className="font-outfit text-4xl md:text-5xl xl:text-6xl font-extrabold tracking-tight text-foreground leading-tight"
             >
-              <span>Apply to Host (Merchants)</span>
-              <ArrowRight className="w-5 h-5" />
-            </a>
-            <a
-              href={`${userPortalUrl}/register?role=advertiser`}
-              className="w-full sm:w-auto inline-flex items-center justify-center space-x-2 bg-background border border-border text-foreground font-bold px-8 py-4 rounded-2xl hover:bg-muted transition-all shadow-xl"
+              Transform Tables Into <br />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#0069a8] via-[#005182] to-[#0089d7]">
+                Interactive Ad Channels
+              </span>
+            </motion.h1>
+
+            <motion.p
+              variants={fadeInUp}
+              className="text-base md:text-lg text-muted-foreground leading-relaxed max-w-xl"
             >
-              <span>Book an Ad Campaign</span>
-            </a>
+              DigiAds enables venues to digitize, manage, and stream interactive food catalogs directly on tabletop kiosks, while providing advertisers with a high-ROI targeted ad delivery network.
+            </motion.p>
+
+            <motion.div
+              variants={fadeInUp}
+              className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 pt-2"
+            >
+              <a
+                href={`${userPortalUrl}/register?role=merchant`}
+                className="inline-flex items-center justify-center space-x-2 bg-primary text-primary-foreground font-bold px-7 py-3.5 rounded-2xl glow-hover transition-all shadow-xl hover:bg-primary/90"
+              >
+                <span>Apply to Host (Merchants)</span>
+                <ArrowRight className="w-5 h-5" />
+              </a>
+              <a
+                href={`${userPortalUrl}/register?role=advertiser`}
+                className="inline-flex items-center justify-center space-x-2 bg-background border border-border text-foreground font-bold px-7 py-3.5 rounded-2xl hover:bg-muted transition-all shadow-sm"
+              >
+                <span>Book an Ad Campaign</span>
+              </a>
+            </motion.div>
           </motion.div>
-        </motion.div>
+
+          {/* Right Column: Seamless Hero Banner Image (Takes 7/12 columns) */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.6, ease: 'easeOut' }}
+            className="lg:col-span-7 flex items-center justify-end"
+          >
+            <img
+              src={imgHeroBanner.src}
+              alt="DigiAds Kiosk Hardware Banner"
+              className="w-full max-w-none h-auto object-contain drop-shadow-2xl hover:scale-[1.02] transition-transform duration-500"
+            />
+          </motion.div>
+        </div>
       </section>
 
-      {/* Features Grid */}
-      <section id="features" className="py-20 px-6 bg-muted/20 relative border-y border-border">
-        <div className="max-w-6xl mx-auto">
+      {/* Features Grid (Seamless without borders) */}
+      <section id="features" className="py-20 px-6 bg-muted/20 relative">
+        <div className="w-full max-w-[1700px] mx-auto px-8 md:px-12">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -259,7 +260,7 @@ export default function LandingPage() {
 
       {/* Interactive Mockups Section */}
       <section id="demo" className="py-24 px-6 relative overflow-hidden">
-        <div className="max-w-6xl mx-auto">
+        <div className="w-full max-w-[1700px] mx-auto px-8 md:px-12">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -303,7 +304,7 @@ export default function LandingPage() {
 
           {/* Two-Column Responsive Layout */}
           <div className="grid lg:grid-cols-12 gap-12 items-center">
-            {/* Left Column: Description (takes 5 columns on large screens) */}
+            {/* Left Column: Description */}
             <div className="lg:col-span-5 text-left space-y-6">
               <AnimatePresence mode="wait">
                 {activeTab === 'tablet' ? (
@@ -374,7 +375,7 @@ export default function LandingPage() {
               </AnimatePresence>
             </div>
 
-            {/* Right Column: Carousel Frame (takes 7 columns on large screens) */}
+            {/* Right Column: Carousel Frame */}
             <div className="lg:col-span-7 flex flex-col justify-center items-center relative">
               <AnimatePresence mode="wait">
                 {activeTab === 'tablet' ? (
@@ -493,10 +494,10 @@ export default function LandingPage() {
       </section>
 
       {/* About Us Section */}
-      <section id="about" className="py-20 px-6 bg-muted/10 relative border-t border-border overflow-hidden">
+      <section id="about" className="py-20 px-6 bg-muted/10 relative overflow-hidden">
         {/* Glow effect */}
         <div className="absolute -right-40 top-1/2 -translate-y-1/2 w-[350px] h-[350px] bg-blue-500/10 rounded-full blur-[100px] pointer-events-none" />
-        <div className="max-w-6xl mx-auto">
+        <div className="w-full max-w-[1700px] mx-auto px-8 md:px-12">
           <div className="grid md:grid-cols-12 gap-12 items-center">
             {/* Logo side */}
             <motion.div
@@ -549,8 +550,8 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-border bg-card py-12 px-6">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6 text-sm text-muted-foreground">
+      <footer className="bg-card py-12 px-6">
+        <div className="w-full max-w-[1700px] mx-auto px-8 md:px-12 flex flex-col md:flex-row items-center justify-between gap-6 text-sm text-muted-foreground">
           <div className="flex items-center space-x-2">
             <div className="w-8 h-8 rounded-lg bg-[#0069a8] flex items-center justify-center shadow-md shadow-[#0069a8]/20 overflow-hidden p-0.5">
               <img src="/brandicon.png" alt="DigiAds Logo" className="w-full h-full object-contain rounded-md" />

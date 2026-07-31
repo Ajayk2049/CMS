@@ -95,17 +95,17 @@ function registerRoutes(fastify, options, done) {
     advertiserRoutes.get('/ads/book', adController.bookAd); // initiates payment url
     advertiserRoutes.post('/ads/book', adController.bookAd); // supports post fallback
     advertiserRoutes.get('/ads/bookings', adController.getMyBookings);
-    advertiserRoutes.get('/ads/analytics/:bookingId', adController.getCampaignAnalytics);
     advertiserRoutes.post('/ads/verify-payment/:bookingId', adController.verifyPayment);
     advertiserRoutes.post('/ads/upload', { bodyLimit: 104857600 }, adController.uploadVideo);
     advertiserRoutes.post('/ads/upload-image', { bodyLimit: 10485760 }, adController.uploadImage);
     next();
   });
 
-  // Common Ad Rates Route (accessible by authenticated users)
+  // Common Ad Routes (accessible by authenticated users)
   fastify.register((commonRoutes, opts, next) => {
     commonRoutes.addHook('preHandler', authenticate);
     commonRoutes.get('/ads/rates', adController.getRates);
+    commonRoutes.get('/ads/analytics/:bookingId', adController.getCampaignAnalytics);
     next();
   });
 

@@ -1013,15 +1013,18 @@ class AdController {
       const AdImpression = require('../models/AdImpression');
       const HostApplication = require('../models/HostApplication');
 
-      const booking = await AdBooking.findOne({ 
-        bookingId, 
-        $or: [{ advertiserId: req.user.uid }, { userId: req.user.uid }] 
-      });
+      const isAdminUser = req.user.role === 'admin' || (Array.isArray(req.user.roles) && req.user.roles.includes('admin'));
+      const query = { bookingId };
+      if (!isAdminUser) {
+        query.$or = [{ advertiserId: req.user.uid }, { userId: req.user.uid }];
+      }
+
+      const booking = await AdBooking.findOne(query);
       if (!booking) {
         return res.status(404).send({ success: false, message: 'Ad campaign booking not found or access denied' });
       }
 
-      if (booking.paymentStatus !== 'completed' || booking.approvalStatus !== 'approved') {
+      if (!isAdminUser && (booking.paymentStatus !== 'completed' || booking.approvalStatus !== 'approved')) {
         return res.status(403).send({ 
           success: false, 
           message: 'Analytics are only available for paid and approved ad campaigns.' 
