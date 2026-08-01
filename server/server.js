@@ -898,7 +898,7 @@ const orderServiceHandlers = {
         await order.save();
       } else {
         // Create a new order if no active session exists
-        const orderId = `ORD_K_${uuidv4().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+        const orderId = `ORD_${uuidv4().replace(/-/g, '').slice(0, 5).toUpperCase()}`;
 
         order = new Order({
           orderId,

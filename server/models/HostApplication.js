@@ -168,6 +168,31 @@ const HostApplicationSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // Modular Thermal Bill Configuration
+  billConfig: {
+    logoUrl: { type: String, default: '' },
+    restaurantName: { type: String, default: '' },
+    addressLine1: { type: String, default: '' },
+    addressLine2: { type: String, default: '' },
+    cityZip: { type: String, default: '' },
+    gstin: { type: String, default: '' },
+    fssaiNo: { type: String, default: '' },
+    phone: { type: String, default: '' },
+    billPrefix: { type: String, default: 'INV' },
+    showKOTNumbers: { type: Boolean, default: true },
+    showCovers: { type: Boolean, default: true },
+    showCustomerDetail: { type: Boolean, default: true },
+    cgstPercent: { type: Number, default: 2.5 },
+    sgstPercent: { type: Number, default: 2.5 },
+    enableAutoRoundOff: { type: Boolean, default: true },
+    thankYouMessage: { type: String, default: 'Thank You & Visit Again !' },
+    crmContactName: { type: String, default: '' },
+    crmContactPhone: { type: String, default: '' },
+    deliveryPhone: { type: String, default: '' },
+    showPoweredBy: { type: Boolean, default: true },
+    qrImageUrl: { type: String, default: '' },
+    qrCaption: { type: String, default: 'Scan QR to pay / provide feedback' }
+  },
   createdAt: {
     type: Date,
     default: Date.now

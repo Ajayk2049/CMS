@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { useRouter } from 'next/navigation';
 import {
@@ -35,7 +36,12 @@ import {
   Star,
   Video,
   Upload,
-  LayoutDashboard
+  LayoutDashboard,
+  Printer,
+  FileText,
+  Receipt,
+  Image,
+  ShoppingBag
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -207,6 +213,8 @@ export default function MerchantDashboard() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [showGlobalTaxesModal, setShowGlobalTaxesModal] = useState(false);
   const [globalGstInput, setGlobalGstInput] = useState('0');
+  const [globalCgstInput, setGlobalCgstInput] = useState('2.5');
+  const [globalSgstInput, setGlobalSgstInput] = useState('2.5');
   const [globalOtherChargesInput, setGlobalOtherChargesInput] = useState('0');
   const [globalOtherChargesType, setGlobalOtherChargesType] = useState('percentage');
   const [globalTaxesLoading, setGlobalTaxesLoading] = useState(false);
@@ -214,6 +222,47 @@ export default function MerchantDashboard() {
   const [menuDefaultGst, setMenuDefaultGst] = useState(0);
   const [menuDefaultOtherCharges, setMenuDefaultOtherCharges] = useState(0);
   const [menuDefaultOtherChargesType, setMenuDefaultOtherChargesType] = useState('percentage');
+
+  // Bill Config & Thermal Print States
+  const [showConfigureBillModal, setShowConfigureBillModal] = useState(false);
+  const [billConfigLoading, setBillConfigLoading] = useState(false);
+  const [billConfigSaving, setBillConfigSaving] = useState(false);
+  const [billConfigError, setBillConfigError] = useState('');
+  const [billUploadingImage, setBillUploadingImage] = useState(false);
+  const [billForm, setBillForm] = useState({
+    logoUrl: '',
+    restaurantName: '',
+    addressLine1: '',
+    addressLine2: '',
+    cityZip: '',
+    gstin: '',
+    fssaiNo: '',
+    phone: '',
+    billPrefix: 'INV',
+    showKOTNumbers: true,
+    showCovers: true,
+    showCustomerDetail: true,
+    cgstPercent: 2.5,
+    sgstPercent: 2.5,
+    enableAutoRoundOff: true,
+    thankYouMessage: 'Thank You & Visit Again !',
+    crmContactName: '',
+    crmContactPhone: '',
+    deliveryPhone: '',
+    showPoweredBy: true,
+    qrImageUrl: '',
+    qrCaption: ''
+  });
+
+  const [showPrintBillModal, setShowPrintBillModal] = useState(false);
+  const [printingOrder, setPrintingOrder] = useState(null);
+  const [activeBillConfig, setActiveBillConfig] = useState(null);
+
+  // Takeout / Pickup Order Modal states
+  const [showTakeoutModal, setShowTakeoutModal] = useState(false);
+  const [takeoutActiveCategory, setTakeoutActiveCategory] = useState('Starters');
+  const [takeoutCart, setTakeoutCart] = useState([]);
+  const [isSubmittingTakeout, setIsSubmittingTakeout] = useState(false);
   const [deviceFilterType, setDeviceFilterType] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('deviceFilterType') || 'tablet';
@@ -436,6 +485,117 @@ export default function MerchantDashboard() {
       setSelectedOutletId(approvedOutlets[0]._id);
     }
   }, [approvedOutlets, selectedOutletId]);
+
+  useEffect(() => {
+    if (selectedOutletId) {
+      fetchBillConfig(selectedOutletId);
+    }
+  }, [selectedOutletId]);
+
+  const fetchBillConfig = async (appId) => {
+    const currentToken = token || localStorage.getItem('token');
+    if (!currentToken || !appId) return;
+    setBillConfigLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/host/bill-config/${appId}`, {
+        headers: { Authorization: `Bearer ${currentToken}` }
+      });
+      if (res.data && res.data.data) {
+        const configData = res.data.data;
+        const currentApp = applications.find(a => a._id === appId);
+        const mergedConfig = {
+          logoUrl: configData.logoUrl || '',
+          restaurantName: configData.restaurantName || (currentApp ? currentApp.outletName : ''),
+          addressLine1: configData.addressLine1 || (currentApp ? `${currentApp.doorNo}, ${currentApp.street}` : ''),
+          addressLine2: configData.addressLine2 || (currentApp ? `${currentApp.city}, ${currentApp.state}` : ''),
+          cityZip: configData.cityZip || (currentApp ? currentApp.zipCode : ''),
+          gstin: configData.gstin || '',
+          fssaiNo: configData.fssaiNo || '',
+          phone: configData.phone || (currentApp ? currentApp.phone : ''),
+          billPrefix: configData.billPrefix || 'INV',
+          showKOTNumbers: configData.showKOTNumbers !== undefined ? configData.showKOTNumbers : true,
+          showCovers: configData.showCovers !== undefined ? configData.showCovers : true,
+          showCustomerDetail: configData.showCustomerDetail !== undefined ? configData.showCustomerDetail : true,
+          cgstPercent: configData.cgstPercent !== undefined ? configData.cgstPercent : 2.5,
+          sgstPercent: configData.sgstPercent !== undefined ? configData.sgstPercent : 2.5,
+          enableAutoRoundOff: configData.enableAutoRoundOff !== undefined ? configData.enableAutoRoundOff : true,
+          thankYouMessage: configData.thankYouMessage || 'Thank You & Visit Again !',
+          crmContactName: configData.crmContactName || '',
+          crmContactPhone: configData.crmContactPhone || '',
+          deliveryPhone: configData.deliveryPhone || '',
+          showPoweredBy: configData.showPoweredBy !== undefined ? configData.showPoweredBy : true,
+          qrImageUrl: configData.qrImageUrl || '',
+          qrCaption: configData.qrCaption !== undefined ? configData.qrCaption : ''
+        };
+        setBillForm(mergedConfig);
+        setActiveBillConfig(mergedConfig);
+      }
+    } catch (err) {
+      console.error('fetchBillConfig error:', err.message);
+    } finally {
+      setBillConfigLoading(false);
+    }
+  };
+
+  const handleSaveBillConfig = async () => {
+    const currentToken = token || localStorage.getItem('token');
+    if (!selectedOutletId || !currentToken) return;
+    setBillConfigSaving(true);
+    setBillConfigError('');
+    try {
+      const res = await axios.put(`${API_BASE}/host/bill-config/${selectedOutletId}`, billForm, {
+        headers: { Authorization: `Bearer ${currentToken}` }
+      });
+      if (res.data && res.data.success) {
+        showToast('Bill configuration saved successfully!', 'success');
+        setActiveBillConfig(res.data.data);
+        setShowConfigureBillModal(false);
+      }
+    } catch (err) {
+      console.error('handleSaveBillConfig error:', err.message);
+      setBillConfigError(err.response?.data?.message || 'Failed to save bill configuration');
+    } finally {
+      setBillConfigSaving(false);
+    }
+  };
+
+  const handleUploadBillImageFile = async (file, fieldName) => {
+    const currentToken = token || localStorage.getItem('token');
+    if (!file || !currentToken) return;
+    setBillUploadingImage(true);
+    setBillConfigError('');
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const res = await axios.post(`${API_BASE}/host/bill-config/upload-image`, arrayBuffer, {
+        headers: {
+          Authorization: `Bearer ${currentToken}`,
+          'Content-Type': file.type || 'image/png',
+          'X-Filename': file.name || 'image.png'
+        }
+      });
+      if (res.data && res.data.url) {
+        setBillForm(prev => ({
+          ...prev,
+          [fieldName]: res.data.url
+        }));
+        showToast('Image uploaded successfully!');
+      }
+    } catch (err) {
+      console.error('handleUploadBillImageFile error:', err);
+      setBillConfigError(err.response?.data?.message || 'Failed to upload image');
+    } finally {
+      setBillUploadingImage(false);
+    }
+  };
+
+  const openPrintBillModal = async (order) => {
+    setPrintingOrder(order);
+    const targetAppId = order.hostApplicationId || selectedOutletId || (approvedOutlets[0] ? approvedOutlets[0]._id : null);
+    if (targetAppId) {
+      await fetchBillConfig(targetAppId);
+    }
+    setShowPrintBillModal(true);
+  };
 
   useEffect(() => {
     if (selectedOutletId) {
@@ -686,6 +846,72 @@ export default function MerchantDashboard() {
     }
   };
 
+  // Real-time WebSocket Order Stream & Fallback Polling
+  useEffect(() => {
+    if (!token) return;
+
+    // Initial fetch
+    fetchLiveOrders(token);
+    fetchPaymentOrders(token);
+
+    let ws = null;
+    let reconnectTimer = null;
+
+    const connectWebSocket = () => {
+      try {
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = API_BASE.replace(/^https?:\/\//, '').replace(/\/api\/v1\/?$/, '');
+        const wsUrl = `${wsProtocol}//${wsHost}/ws/orders?token=${token}`;
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log('[WS] Connected to Merchant Live Orders Feed');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.event === 'new_order' || data.event === 'order_update' || data.event === 'table_session') {
+              console.log('[WS] Live order update received:', data.event);
+              fetchLiveOrders(token);
+              fetchPaymentOrders(token);
+            }
+          } catch (e) {
+            console.error('[WS] Message parse error:', e);
+          }
+        };
+
+        ws.onclose = () => {
+          console.log('[WS] Socket closed. Attempting reconnect in 3s...');
+          reconnectTimer = setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = (err) => {
+          console.error('[WS] Connection error:', err);
+          if (ws) ws.close();
+        };
+      } catch (err) {
+        console.error('[WS] Failed to initialize WebSocket:', err);
+        reconnectTimer = setTimeout(connectWebSocket, 5000);
+      }
+    };
+
+    connectWebSocket();
+
+    // 4-second safety net polling fallback
+    const pollInterval = setInterval(() => {
+      fetchLiveOrders(token);
+      fetchPaymentOrders(token);
+    }, 4000);
+
+    return () => {
+      if (ws) ws.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      clearInterval(pollInterval);
+    };
+  }, [token]);
+
   // Save payment config
   const savePaymentConfig = async () => {
     if (!selectedOutletId || !paymentUpiInput || !paymentUpiInput.includes('@')) return;
@@ -730,12 +956,40 @@ export default function MerchantDashboard() {
     } catch (err) { console.error(err); }
   };
 
-  const markPaymentReceived = async (orderId) => {
+  const markPaymentReceived = async (orderId, paymentType = 'CASH') => {
     try {
-      await axios.post(`${API_BASE}/host/orders/payment-received`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
+      await axios.post(`${API_BASE}/host/orders/payment-received`, { orderId, paymentType }, { headers: { Authorization: `Bearer ${token}` } });
       fetchLiveOrders(token);
       fetchPaymentOrders(token);
-    } catch (err) { console.error(err); }
+    } catch (err) { console.error('markPaymentReceived error:', err); }
+  };
+
+  const handleCreateTakeoutOrder = async () => {
+    const targetAppId = activeOrderVenueTab || selectedOutletId || (approvedOutlets[0] ? approvedOutlets[0]._id : null);
+    if (!targetAppId || takeoutCart.length === 0) return;
+    setIsSubmittingTakeout(true);
+    try {
+      const itemsPayload = takeoutCart.map(cItem => ({
+        itemId: cItem.item.itemId || cItem.item._id,
+        name: cItem.item.name,
+        quantity: cItem.quantity,
+        price: Number(cItem.item.price || 0)
+      }));
+
+      await axios.post(`${API_BASE}/host/orders/takeout`, {
+        hostApplicationId: targetAppId,
+        items: itemsPayload
+      }, { headers: { Authorization: `Bearer ${token}` } });
+
+      setShowTakeoutModal(false);
+      setTakeoutCart([]);
+      fetchLiveOrders(token);
+      fetchPaymentOrders(token);
+    } catch (err) {
+      console.error('handleCreateTakeoutOrder error:', err);
+    } finally {
+      setIsSubmittingTakeout(false);
+    }
   };
 
   const serviceWaiter = async (orderId) => {
@@ -2032,11 +2286,10 @@ export default function MerchantDashboard() {
                       setAnalyticsDays(item.value);
                       fetchVenueAnalytics(token, item.value);
                     }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                      analyticsDays === item.value
-                        ? 'bg-primary text-primary-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
-                    }`}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${analyticsDays === item.value
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                      }`}
                   >
                     {item.label}
                   </button>
@@ -2109,11 +2362,10 @@ export default function MerchantDashboard() {
                       key={slot.id}
                       type="button"
                       onClick={() => setAnalyticsSlotFilter(slot.id)}
-                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                        analyticsSlotFilter === slot.id
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted'
-                      }`}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${analyticsSlotFilter === slot.id
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted'
+                        }`}
                     >
                       {slot.label}
                     </button>
@@ -2942,12 +3194,26 @@ export default function MerchantDashboard() {
                     {applications.find(app => app.status === 'approved')?.outletName || 'VENUE'}
                   </h1>
 
-                  <div className="flex items-center space-x-2 text-xs font-bold text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-xl shrink-0">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                    </span>
-                    <span>LIVE</span>
+                  <div className="flex items-center space-x-3">
+                    <button
+                      onClick={() => {
+                        setTakeoutCart([]);
+                        setTakeoutActiveCategory(menuCategories[0] || 'Starters');
+                        setShowTakeoutModal(true);
+                      }}
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground font-black px-4 py-2 rounded-xl text-xs flex items-center space-x-1.5 cursor-pointer shadow-md tracking-wider uppercase transition-all"
+                    >
+                      <ShoppingBag className="w-4 h-4" />
+                      <span>+ Pickup Order</span>
+                    </button>
+
+                    <div className="flex items-center space-x-2 text-xs font-bold text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-xl shrink-0">
+                      <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                      </span>
+                      <span>LIVE</span>
+                    </div>
                   </div>
                 </div>
 
@@ -2976,14 +3242,14 @@ export default function MerchantDashboard() {
                     <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
                       <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
                       <p className="text-sm font-bold text-foreground">Waiting for live orders...</p>
-                      <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">When customers place orders at dining tables in this venue, they will pop up here instantly.</p>
+                      <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">When customers place orders at dining tables or counter pickups, they will pop up here instantly.</p>
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-left border-collapse text-xs">
                         <thead>
                           <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
-                            <th className="pb-3 pr-2">Table</th>
+                            <th className="pb-3 pr-2">Table / Type</th>
                             <th className="pb-3 pr-2">Order ID</th>
                             <th className="pb-3 pr-2">Items</th>
                             <th className="pb-3 pr-2">Status</th>
@@ -2995,19 +3261,24 @@ export default function MerchantDashboard() {
                           {sortedOrders.map((ord) => (
                             <tr key={ord.orderId} className="hover:bg-muted/10">
                               <td className="py-4 pr-2">
-                                <div className="flex items-center space-x-2">
-                                  {ord.orderStatus === 'placed' && (
-                                    <span className="relative flex h-2 w-2 shrink-0">
-                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                <div className="flex flex-col space-y-1">
+                                  <div className="flex items-center space-x-2">
+                                    {ord.orderStatus === 'placed' && (
+                                      <span className="relative flex h-2.5 w-2.5 shrink-0">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                                      </span>
+                                    )}
+                                    <span className={`font-black px-3.5 py-1.5 rounded-xl text-sm whitespace-nowrap shadow-sm ${ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT'
+                                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                                        : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20'
+                                      }`}>
+                                      {ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' ? '🛍️ TAKEOUT' : `Table ${ord.tableNumber}`}
                                     </span>
-                                  )}
-                                  <span className="font-black text-blue-500 dark:text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded text-xs whitespace-nowrap">
-                                    Table &nbsp; {ord.tableNumber}
-                                  </span>
+                                  </div>
                                 </div>
                               </td>
-                              <td className="py-4 pr-2 font-mono font-bold text-foreground">
+                              <td className="py-4 pr-2 font-mono font-bold text-foreground text-xs">
                                 {ord.orderId}
                               </td>
                               <td className="py-4 pr-2">
@@ -3018,7 +3289,7 @@ export default function MerchantDashboard() {
                                     </div>
                                   ))}
                                   <div className="w-12 border-t-2 border-border/50 my-1.5"></div>
-                                  <div className="text-[10px] font-bold text-foreground">
+                                  <div className="text-xs font-bold text-foreground">
                                     Total: ₹{(ord.totalAmount / 100).toFixed(2)}
                                   </div>
                                 </div>
@@ -3030,7 +3301,7 @@ export default function MerchantDashboard() {
                                     e.stopPropagation();
                                     updateOrderStatus(ord.orderId, e.target.value);
                                   }}
-                                  className={`text-[9px] font-black uppercase px-2.5 py-1.5 rounded-xl border focus:outline-none cursor-pointer w-fit ${ord.orderStatus === 'placed'
+                                  className={`text-xs font-black uppercase px-3.5 py-2.5 rounded-xl border focus:outline-none cursor-pointer w-fit shadow-sm tracking-wide ${ord.orderStatus === 'placed'
                                     ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
                                     : ord.orderStatus === 'cooking'
                                       ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30'
@@ -3051,13 +3322,13 @@ export default function MerchantDashboard() {
                                       e.stopPropagation();
                                       serviceWaiter(ord.orderId);
                                     }}
-                                    className="bg-red-600 text-white text-[11px] font-black uppercase px-3 py-1.5 rounded-xl animate-pulse cursor-pointer shrink-0 border border-red-700 shadow-md select-none"
+                                    className="bg-red-600 text-white text-xs font-black uppercase px-4 py-2 rounded-xl animate-pulse cursor-pointer shrink-0 border border-red-700 shadow-md select-none"
                                     style={{ animationDuration: '0.8s' }}
                                   >
                                     Call Waiter ({ord.waiterCallOption || 'Others'}) x{ord.waiterCallCount || 1}
                                   </button>
                                 ) : ord.waiterCallStatus === 'serviced' ? (
-                                  <div className="bg-zinc-500/15 text-zinc-600 dark:text-zinc-400 border border-zinc-500/30 text-[10px] font-black uppercase px-2.5 py-1.5 rounded-xl w-fit shrink-0 select-none">
+                                  <div className="bg-zinc-500/15 text-zinc-600 dark:text-zinc-400 border border-zinc-500/30 text-xs font-black uppercase px-3.5 py-2 rounded-xl w-fit shrink-0 select-none">
                                     Serviced x{ord.waiterCallCount || 1}
                                   </div>
                                 ) : (
@@ -3065,57 +3336,67 @@ export default function MerchantDashboard() {
                                 )}
                               </td>
                               <td className="py-4 pr-2">
-                                {ord.tableStatus === 'close_table' ? (
-                                  confirmingPaymentOrderId === ord.orderId ? (
-                                    <div className="flex items-center space-x-1.5 animate-fade-in whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                                      <span className="text-[9px] font-black text-foreground uppercase">Received?</span>
+                                <div className="flex items-center space-x-2 flex-wrap gap-1.5">
+                                  {confirmingPaymentOrderId === ord.orderId ? (
+                                    <div className="flex items-center space-x-2 animate-fade-in whitespace-nowrap bg-muted/40 p-1.5 rounded-xl border border-border/40 shadow-sm" onClick={(e) => e.stopPropagation()}>
+                                      <span className="text-xs font-black text-foreground uppercase px-1">Via:</span>
                                       <button
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          markPaymentReceived(ord.orderId);
+                                          markPaymentReceived(ord.orderId, 'CASH');
                                           setConfirmingPaymentOrderId(null);
                                         }}
-                                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-2 py-1 rounded text-[9px] transition-colors cursor-pointer uppercase tracking-wider"
+                                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3 py-1.5 rounded-xl text-xs transition-colors cursor-pointer uppercase tracking-wider flex items-center space-x-1 shadow-sm"
                                       >
-                                        Yes
+                                        <span>💵 Cash</span>
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          markPaymentReceived(ord.orderId, 'UPI');
+                                          setConfirmingPaymentOrderId(null);
+                                        }}
+                                        className="bg-blue-600 hover:bg-blue-700 text-white font-black px-3 py-1.5 rounded-xl text-xs transition-colors cursor-pointer uppercase tracking-wider flex items-center space-x-1 shadow-sm"
+                                      >
+                                        <span>📱 UPI</span>
                                       </button>
                                       <button
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           setConfirmingPaymentOrderId(null);
                                         }}
-                                        className="bg-muted hover:bg-muted/80 text-foreground font-bold px-2 py-1 rounded text-[9px] transition-colors cursor-pointer border border-border/40 uppercase tracking-wider"
+                                        className="bg-muted hover:bg-muted/80 text-foreground font-bold px-2 py-1.5 rounded-xl text-xs transition-colors cursor-pointer border border-border/40 uppercase"
                                       >
-                                        No
+                                        ✕
                                       </button>
                                     </div>
-                                  ) : (
+                                  ) : (ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' || ord.tableStatus === 'close_table') ? (
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setConfirmingPaymentOrderId(ord.orderId);
                                       }}
-                                      className="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-[9px] font-black uppercase px-3 py-1.5 rounded-xl flex items-center justify-center cursor-pointer transition-all shadow-sm w-fit shrink-0 animate-pulse"
+                                      className="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-xs font-black uppercase px-4 py-2.5 rounded-xl flex items-center justify-center cursor-pointer transition-all shadow-sm w-fit shrink-0 tracking-wide"
                                     >
-                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 shrink-0 animate-pulse" />
+                                      <span className="w-2 h-2 rounded-full bg-emerald-500 mr-2 shrink-0 animate-pulse" />
                                       Payment Received
                                     </button>
-                                  )
-                                ) : (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      closeTable(ord.orderId);
-                                    }}
-                                    disabled={ord.orderStatus !== 'served'}
-                                    className={`text-[9px] font-black uppercase px-3 py-1.5 rounded-xl border transition-all shadow-sm shrink-0 w-fit cursor-pointer ${ord.orderStatus === 'served'
-                                      ? 'bg-destructive/10 hover:bg-destructive/20 text-destructive border-destructive/20'
-                                      : 'bg-muted text-muted-foreground border-border/40 opacity-50 cursor-not-allowed'
-                                      }`}
-                                  >
-                                    Clear Table
-                                  </button>
-                                )}
+                                  ) : (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        closeTable(ord.orderId);
+                                      }}
+
+                                      className={`text-xs font-black uppercase px-4 py-2.5 rounded-xl border transition-all shadow-sm shrink-0 w-fit cursor-pointer tracking-wide ${ord.orderStatus === 'served'
+                                        ? 'bg-destructive/10 hover:bg-destructive/20 text-destructive border-destructive/20'
+                                        : 'bg-muted text-muted-foreground border-border/40 opacity-50 cursor-not-allowed'
+                                        }`}
+                                    >
+                                      Clear Table
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -3168,11 +3449,10 @@ export default function MerchantDashboard() {
               <button
                 type="button"
                 onClick={() => setActivePromoSubTab('tablet')}
-                className={`px-5 py-2.5 rounded-xl font-outfit text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center space-x-2 ${
-                  activePromoSubTab === 'tablet'
-                    ? 'bg-primary text-primary-foreground shadow-md'
-                    : 'bg-card/40 text-muted-foreground hover:bg-muted/60 hover:text-foreground border border-border/40'
-                }`}
+                className={`px-5 py-2.5 rounded-xl font-outfit text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center space-x-2 ${activePromoSubTab === 'tablet'
+                  ? 'bg-primary text-primary-foreground shadow-md'
+                  : 'bg-card/40 text-muted-foreground hover:bg-muted/60 hover:text-foreground border border-border/40'
+                  }`}
               >
                 <Tablet className="w-4 h-4" />
                 <span>Tabletop Tablets</span>
@@ -3181,11 +3461,10 @@ export default function MerchantDashboard() {
               <button
                 type="button"
                 onClick={() => setActivePromoSubTab('screen')}
-                className={`px-5 py-2.5 rounded-xl font-outfit text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center space-x-2 ${
-                  activePromoSubTab === 'screen'
-                    ? 'bg-primary text-primary-foreground shadow-md'
-                    : 'bg-card/40 text-muted-foreground hover:bg-muted/60 hover:text-foreground border border-border/40'
-                }`}
+                className={`px-5 py-2.5 rounded-xl font-outfit text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center space-x-2 ${activePromoSubTab === 'screen'
+                  ? 'bg-primary text-primary-foreground shadow-md'
+                  : 'bg-card/40 text-muted-foreground hover:bg-muted/60 hover:text-foreground border border-border/40'
+                  }`}
               >
                 <Tv className="w-4 h-4" />
                 <span>Wall Display Screens</span>
@@ -3627,17 +3906,32 @@ export default function MerchantDashboard() {
                 PAYMENT
               </h1>
 
-              <button
-                onClick={() => {
-                  setConfirmPasswordInput('');
-                  setPasswordVerifyError('');
-                  setShowPasswordModal(true);
-                }}
-                className="bg-[#0069a8] hover:bg-[#005b94] text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
-              >
-                <Lock className="w-4 h-4" />
-                <span>Configure UPI Payments</span>
-              </button>
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={() => {
+                    if (selectedOutletId) {
+                      fetchBillConfig(selectedOutletId);
+                    }
+                    setShowConfigureBillModal(true);
+                  }}
+                  className="bg-card hover:bg-muted border border-border/40 text-foreground font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-all cursor-pointer shadow-sm flex items-center justify-center space-x-1.5"
+                >
+                  <FileText className="w-4 h-4 text-[#0069a8]" />
+                  <span>Configure Bill</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setConfirmPasswordInput('');
+                    setPasswordVerifyError('');
+                    setShowPasswordModal(true);
+                  }}
+                  className="bg-[#0069a8] hover:bg-[#005b94] text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                >
+                  <Lock className="w-4 h-4" />
+                  <span>Configure UPI Payments</span>
+                </button>
+              </div>
             </div>
 
             {/* Always show history/orders table */}
@@ -3657,17 +3951,21 @@ export default function MerchantDashboard() {
                       <th className="pb-3 pr-2">Items</th>
                       <th className="pb-3 pr-2">Status</th>
                       <th className="pb-3 pr-2">Payment Status</th>
+                      <th className="pb-3 pr-2">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {paymentOrders.map((ord) => (
                       <tr key={ord.orderId} className="hover:bg-muted/10">
                         <td className="py-4 pr-2">
-                          <span className="font-black text-blue-500 dark:text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded text-xs whitespace-nowrap">
-                            Table &nbsp; {ord.tableNumber}
+                          <span className={`font-black px-3.5 py-1.5 rounded-xl text-sm whitespace-nowrap shadow-sm ${ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT'
+                              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                              : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20'
+                            }`}>
+                            {ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' ? '🛍️ TAKEOUT' : `Table ${ord.tableNumber}`}
                           </span>
                         </td>
-                        <td className="py-4 pr-2 font-mono font-bold text-foreground">
+                        <td className="py-4 pr-2 font-mono font-bold text-foreground text-xs">
                           {ord.orderId}
                         </td>
                         <td className="py-4 pr-2">
@@ -3678,22 +3976,32 @@ export default function MerchantDashboard() {
                               </div>
                             ))}
                             <div className="w-12 border-t-2 border-border/50 my-1.5"></div>
-                            <div className="text-[10px] font-bold text-foreground">
+                            <div className="text-xs font-bold text-foreground">
                               Total: ₹{(ord.totalAmount / 100).toFixed(2)}
                             </div>
                           </div>
                         </td>
                         <td className="py-4 pr-2">
-                          <span className="w-fit text-[9px] font-black uppercase px-2.5 py-1 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
-                            <span className="w-1.5 h-1.5 rounded-full mr-1.5 shrink-0 bg-emerald-500" />
+                          <span className="w-fit text-xs font-black uppercase px-3.5 py-2 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 shadow-sm">
+                            <span className="w-2 h-2 rounded-full mr-2 shrink-0 bg-emerald-500" />
                             Completed
                           </span>
                         </td>
                         <td className="py-4 pr-2">
-                          <span className="w-fit text-[9px] font-black uppercase px-2.5 py-1 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
-                            <span className="w-1.5 h-1.5 rounded-full mr-1.5 shrink-0 bg-emerald-500" />
-                            Paid
+                          <span className="w-fit text-xs font-black uppercase px-3.5 py-2 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 shadow-sm">
+                            <span className="w-2 h-2 rounded-full mr-2 shrink-0 bg-emerald-500" />
+                            Paid {ord.paymentType ? `(${ord.paymentType})` : ''}
                           </span>
+                        </td>
+                        <td className="py-4 pr-2">
+                          <button
+                            onClick={() => openPrintBillModal(ord)}
+                            className="bg-card hover:bg-muted text-foreground border border-border/40 text-xs font-black uppercase px-4 py-2.5 rounded-xl flex items-center space-x-2 cursor-pointer transition-all shadow-md whitespace-nowrap tracking-wide"
+                            title="Print Thermal Bill"
+                          >
+                            <Printer className="w-4 h-4 text-primary" />
+                            <span>Print Bill</span>
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -4828,6 +5136,816 @@ export default function MerchantDashboard() {
         </div>
       )}
 
+      {/* Unified Thermal Receipt Rendering Helper */}
+      {(() => {
+        // Shared thermal receipt template for 100% parity across Configure Bill & Print Bill modals
+        globalThis.__renderUnifiedThermalReceipt = (config, order, isPrintMode = false) => {
+          const items = order?.items || [
+            { name: 'Empire Special Porota', quantity: 2, price: 4900 },
+            { name: 'Green Salad', quantity: 1, price: 7500 },
+            { name: 'Chilly Chicken (Half)', quantity: 1, price: 26000 }
+          ];
+
+          const subtotalPaise = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+          const subtotal = subtotalPaise > 0 ? (subtotalPaise / 100) : ((order?.totalAmount || 0) / 100);
+          const cgstRate = config.cgstPercent !== undefined ? config.cgstPercent : 2.5;
+          const sgstRate = config.sgstPercent !== undefined ? config.sgstPercent : 2.5;
+          const cgstAmt = subtotal * (cgstRate / 100);
+          const sgstAmt = subtotal * (sgstRate / 100);
+          const totalGstAmt = cgstAmt + sgstAmt;
+          const rawTotal = subtotal + totalGstAmt;
+          const roundedTotal = config.enableAutoRoundOff !== false ? Math.round(rawTotal) : rawTotal;
+          const roundOff = (roundedTotal - rawTotal).toFixed(2);
+          const paymentTypeStr = order?.paymentType || order?.paymentMethod || (order?.paymentStatus === 'completed' ? 'ONLINE / UPI' : 'CASH / PENDING');
+          const orderTypeStr = (order?.orderType === 'TAKEOUT' || order?.tableNumber === 'TAKEOUT') ? 'TAKEOUT' : 'DINE';
+          const orderIdStr = order?.orderId ? order.orderId : `${config.billPrefix || 'INV'}-873`;
+          const tableNumStr = order?.tableNumber !== undefined ? order.tableNumber : '17';
+          const dateStr = order?.createdAt ? new Date(order.createdAt).toISOString().slice(0, 10) : '2026-08-01';
+
+          return (
+            <div
+              id={isPrintMode ? "thermal-print-area" : undefined}
+              className="bg-white text-black font-mono text-[9.5px] p-2 rounded-xl shadow-xl border border-gray-300 w-full max-w-[270px] mx-auto leading-tight select-none"
+            >
+              {/* Logo Section - Bigger logo, zero bottom margin */}
+              {config.logoUrl && (
+                <div className="flex justify-center mb-0">
+                  <img
+                    src={resolveMediaUrl(config.logoUrl)}
+                    alt="Logo"
+                    className="max-h-16 w-auto max-w-[220px] object-contain mx-auto"
+                  />
+                </div>
+              )}
+
+              {/* Ultra-Compact Venue Header */}
+              <div className="text-center leading-tight space-y-0 pt-0.5">
+                <h3 className="font-semibold text-xl uppercase tracking-tight">{config.restaurantName}</h3>
+                {config.addressLine1 && <p className="text-[9px] text-gray-800">{config.addressLine1}</p>}
+                {(config.addressLine2 || config.cityZip) && (
+                  <p className="text-[9px] text-gray-800">
+                    {[config.addressLine2, config.cityZip].filter(Boolean).join(', ')}
+                  </p>
+                )}
+                {config.gstin && <p className="text-[9px] font-bold text-gray-900">GSTIN: {config.gstin}</p>}
+                {(config.fssaiNo || config.phone) && (
+                  <p className="text-[8.5px] text-gray-800">
+                    {[config.fssaiNo ? `FSSAI: ${config.fssaiNo}` : null, config.phone ? `Ph: ${config.phone}` : null].filter(Boolean).join(' | ')}
+                  </p>
+                )}
+              </div>
+
+              <div className="border-b border-dashed border-gray-400 my-1" />
+
+              {/* Order Metadata */}
+              <div className="space-y-0.5 text-[9px]">
+                <div className="flex justify-between font-bold text-gray-900">
+                  <span>ORDER #: {orderIdStr}</span>
+                  <span>TYPE: {orderTypeStr}</span>
+                </div>
+                {orderTypeStr !== 'TAKEOUT' && (
+                  <div>TABLE NUMBER: {tableNumStr}</div>
+                )}
+                <div className="flex justify-between text-[8.5px] text-gray-700">
+                  <span>BILL NO: {config.billPrefix || 'INV'}-{order?.orderId ? order.orderId.slice(-5) : '13658'}</span>
+                  <span>DATE: {dateStr}</span>
+                </div>
+                {config.showKOTNumbers && <div>KOTS: 101, 102</div>}
+                {config.showCovers && <div>COVERS: 1</div>}
+                <div className="font-bold text-gray-900">PAYMENT TYPE: {paymentTypeStr}</div>
+              </div>
+
+              {config.showCustomerDetail && (
+                <>
+                  <div className="border-b border-dashed border-gray-400 my-1" />
+                  <div className="text-[9px] space-y-0.5">
+                    <div className="font-bold text-gray-800">CUSTOMER DETAIL</div>
+                    <div>NAME: {order?.customer?.name || 'Bhaira'}</div>
+                    <div>MOBILE: {order?.customer?.mobile || '6369087866'}</div>
+                  </div>
+                </>
+              )}
+
+              <div className="border-b border-dashed border-gray-400 my-1" />
+
+              {/* Item Table Header - Fluid Automatic Widths */}
+              <div className="flex justify-between font-bold text-[9px] border-b border-gray-300 pb-0.5">
+                <span className="w-5 shrink-0">NO.</span>
+                <span className="flex-1 px-1">ITEM</span>
+                <span className="w-7 text-center shrink-0">QTY</span>
+                <span className="w-12 text-right shrink-0">AMT</span>
+              </div>
+
+              {/* Items - Fluid Automatic Widths (Takes full available width automatically) */}
+              <div className="space-y-0.5 my-1 text-[9px]">
+                {items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-start leading-tight">
+                    <span className="w-5 shrink-0 font-semibold">{idx + 1}.</span>
+                    <span className="flex-1 px-1 font-bold text-gray-900 break-words pr-1">{item.name}</span>
+                    <span className="w-7 text-center shrink-0">{item.quantity}</span>
+                    <span className="w-12 text-right shrink-0">{((item.price * item.quantity) / 100).toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-b border-dashed border-gray-400 my-1" />
+
+              {/* Item Summary & Totals */}
+              <div className="space-y-0.5 text-[9px]">
+                <div className="flex justify-between font-bold text-gray-900">
+                  <span>SUB TOTAL:</span>
+                  <span>{subtotal.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-gray-800">
+                  <span>GST ({(cgstRate + sgstRate).toFixed(1)}%):</span>
+                  <span>{totalGstAmt.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-gray-700 pl-2 text-[8.5px]">
+                  <span>CGST @ {cgstRate}%:</span>
+                  <span>{cgstAmt.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-gray-700 pl-2 text-[8.5px]">
+                  <span>SGST @ {sgstRate}%:</span>
+                  <span>{sgstAmt.toFixed(2)}</span>
+                </div>
+                {config.enableAutoRoundOff !== false && (
+                  <div className="flex justify-between text-gray-800">
+                    <span>ROUND OFF:</span>
+                    <span>{roundOff}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-extrabold text-[11px] pt-1 border-t-2 border-black text-gray-900 mt-1">
+                  <span>TOTAL INVOICE VALUE:</span>
+                  <span>{roundedTotal}</span>
+                </div>
+              </div>
+
+              <div className="flex justify-between">
+                <span>UNIQUE ITEMS: {items.length}</span>
+                <span>TOTAL QTY: {items.reduce((sum, i) => sum + i.quantity, 0)}</span>
+              </div>
+
+              {/* Ultra-Compact Footer (Left: Thank you & contact info, Right: QR Code) */}
+              <div className="pt-2 mt-1 border-t border-dashed border-gray-400 flex items-center justify-between">
+                {/* Left Side: Greetings & Contact info */}
+                <div className="flex-1 text-left pr-2 space-y-0.5">
+                  <p className="font-extrabold text-[10.5px] text-gray-900 leading-tight uppercase">{config.thankYouMessage || 'THANK YOU & VISIT AGAIN !'}</p>
+
+                  {config.showPoweredBy !== false && (
+                    <p className="text-[6.5px] text-gray-500 font-light uppercase">POWERED BY - DIGIADS</p>
+                  )}
+
+                  {config.crmContactPhone && (
+                    <p className="text-[9px] text-gray-800 font-semibold uppercase">CRM {config.crmContactName || ''}: {config.crmContactPhone}</p>
+                  )}
+                  {config.deliveryPhone && <p className="text-[9px] text-gray-800 font-semibold uppercase">HOME DELIVERY: {config.deliveryPhone}</p>}
+                </div>
+
+                {/* Right Side: QR Code Image */}
+                {config.qrImageUrl && (
+                  <div className="shrink-0 flex flex-col items-center text-center pl-2">
+                    <img src={resolveMediaUrl(config.qrImageUrl)} alt="QR Code" className="w-16 h-16 object-contain p-0.5 border bg-white rounded shadow-sm" />
+                    {config.qrCaption ? (
+                      <p className="text-[8px] mt-0.5 font-bold text-gray-700 max-w-[85px] leading-tight uppercase">{config.qrCaption}</p>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        };
+        return null;
+      })()}
+
+      {/* Configure Bill Modal */}
+      {showConfigureBillModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[150] p-4 animate-fade-in exclude-uppercase">
+          <div className="bg-card border border-border/40 rounded-2xl w-full max-w-5xl p-6 relative flex flex-col space-y-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setShowConfigureBillModal(false)}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div>
+              <h3 className="font-outfit text-xl font-black text-foreground flex items-center space-x-2">
+                <FileText className="w-5 h-5 text-primary" />
+                <span>Configure Thermal Bill & Receipts</span>
+              </h3>
+              <p className="text-xs text-muted-foreground mt-1 font-semibold">
+                Customize 4-section layout, branding logo, venue contact info, CGST/SGST tax split, and custom QR images.
+              </p>
+            </div>
+
+            {billConfigError && (
+              <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-xl text-xs text-destructive font-bold text-left animate-fade-in">
+                {billConfigError}
+              </div>
+            )}
+
+            <div className="grid lg:grid-cols-12 gap-6">
+              {/* Left Column: Form Settings */}
+              <div className="lg:col-span-7 space-y-6">
+                {/* 1. Header Section */}
+                <div className="p-4 rounded-xl border border-border/40 bg-muted/10 space-y-4">
+                  <h4 className="font-outfit text-xs font-black uppercase tracking-wider text-primary border-b border-border/40 pb-2">
+                    1. Venue Header & Branding
+                  </h4>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] text-muted-foreground font-bold uppercase">Header Logo Image</label>
+                    <div className="flex items-center space-x-3">
+                      {billForm.logoUrl ? (
+                        <img src={resolveMediaUrl(billForm.logoUrl)} alt="Logo" className="w-12 h-12 object-contain rounded-lg border bg-black/20 p-1" />
+                      ) : (
+                        <div className="w-12 h-12 rounded-lg border border-dashed flex items-center justify-center text-muted-foreground bg-muted/20 text-[9px] font-bold">
+                          No Logo
+                        </div>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleUploadBillImageFile(e.target.files[0], 'logoUrl');
+                          }
+                        }}
+                        className="text-xs font-semibold text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">Restaurant / Venue Name</label>
+                      <input
+                        type="text"
+                        value={billForm.restaurantName}
+                        onChange={(e) => setBillForm({ ...billForm, restaurantName: e.target.value })}
+                        placeholder="Empire Restaurant"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">Bill Prefix</label>
+                      <input
+                        type="text"
+                        value={billForm.billPrefix}
+                        onChange={(e) => setBillForm({ ...billForm, billPrefix: e.target.value })}
+                        placeholder="INV"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-muted-foreground font-bold uppercase">Address Line 1</label>
+                    <input
+                      type="text"
+                      value={billForm.addressLine1}
+                      onChange={(e) => setBillForm({ ...billForm, addressLine1: e.target.value })}
+                      placeholder="161, MLA Layout, RT Nagar"
+                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">Address Line 2</label>
+                      <input
+                        type="text"
+                        value={billForm.addressLine2}
+                        onChange={(e) => setBillForm({ ...billForm, addressLine2: e.target.value })}
+                        placeholder="Bangalore"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">City & ZIP Code</label>
+                      <input
+                        type="text"
+                        value={billForm.cityZip}
+                        onChange={(e) => setBillForm({ ...billForm, cityZip: e.target.value })}
+                        placeholder="Bangalore - 560032"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">GSTIN Number</label>
+                      <input
+                        type="text"
+                        value={billForm.gstin}
+                        onChange={(e) => setBillForm({ ...billForm, gstin: e.target.value })}
+                        placeholder="29AADCN9372N1ZM"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">FSSAI Number</label>
+                      <input
+                        type="text"
+                        value={billForm.fssaiNo}
+                        onChange={(e) => setBillForm({ ...billForm, fssaiNo: e.target.value })}
+                        placeholder="11223344556677"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">Phone Number</label>
+                      <input
+                        type="text"
+                        value={billForm.phone}
+                        onChange={(e) => setBillForm({ ...billForm, phone: e.target.value })}
+                        placeholder="080-40414141"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Metadata & Toggles Section */}
+                <div className="p-4 rounded-xl border border-border/40 bg-muted/10 space-y-3">
+                  <h4 className="font-outfit text-xs font-black uppercase tracking-wider text-primary border-b border-border/40 pb-2">
+                    2. Table & Customer Details Toggles
+                  </h4>
+                  <div className="grid grid-cols-3 gap-3 text-xs font-semibold">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={billForm.showKOTNumbers}
+                        onChange={(e) => setBillForm({ ...billForm, showKOTNumbers: e.target.checked })}
+                        className="w-4 h-4 accent-primary rounded cursor-pointer"
+                      />
+                      <span>Show KOT Nos</span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={billForm.showCovers}
+                        onChange={(e) => setBillForm({ ...billForm, showCovers: e.target.checked })}
+                        className="w-4 h-4 accent-primary rounded cursor-pointer"
+                      />
+                      <span>Show Covers</span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={billForm.showCustomerDetail}
+                        onChange={(e) => setBillForm({ ...billForm, showCustomerDetail: e.target.checked })}
+                        className="w-4 h-4 accent-primary rounded cursor-pointer"
+                      />
+                      <span>Customer Name/Phone</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* 3. Tax Rates & Calculations */}
+                <div className="p-4 rounded-xl border border-border/40 bg-muted/10 space-y-4">
+                  <h4 className="font-outfit text-xs font-black uppercase tracking-wider text-primary border-b border-border/40 pb-2">
+                    3. Taxes & Calculation Rules
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">CGST (%)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={billForm.cgstPercent}
+                        onChange={(e) => setBillForm({ ...billForm, cgstPercent: parseFloat(e.target.value) || 0 })}
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">SGST (%)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={billForm.sgstPercent}
+                        onChange={(e) => setBillForm({ ...billForm, sgstPercent: parseFloat(e.target.value) || 0 })}
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <label className="flex items-center space-x-2 cursor-pointer text-xs font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={billForm.enableAutoRoundOff}
+                      onChange={(e) => setBillForm({ ...billForm, enableAutoRoundOff: e.target.checked })}
+                      className="w-4 h-4 accent-primary rounded cursor-pointer"
+                    />
+                    <span>Auto Round Off Paise (e.g. ₹817.05 + taxes → ₹858)</span>
+                  </label>
+                </div>
+
+                {/* 4. Custom Footer & QR Code Upload */}
+                <div className="p-4 rounded-xl border border-border/40 bg-muted/10 space-y-4">
+                  <h4 className="font-outfit text-xs font-black uppercase tracking-wider text-primary border-b border-border/40 pb-2">
+                    4. Custom Footer & QR Code Upload
+                  </h4>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-muted-foreground font-bold uppercase">Greeting Line</label>
+                    <input
+                      type="text"
+                      value={billForm.thankYouMessage}
+                      onChange={(e) => setBillForm({ ...billForm, thankYouMessage: e.target.value })}
+                      placeholder="Thank You & Visit Again !"
+                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">CRM Contact Name</label>
+                      <input
+                        type="text"
+                        value={billForm.crmContactName}
+                        onChange={(e) => setBillForm({ ...billForm, crmContactName: e.target.value })}
+                        placeholder="Mr. VAISHAG"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">CRM Phone</label>
+                      <input
+                        type="text"
+                        value={billForm.crmContactPhone}
+                        onChange={(e) => setBillForm({ ...billForm, crmContactPhone: e.target.value })}
+                        placeholder="9036888877"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-muted-foreground font-bold uppercase">Delivery Phone</label>
+                      <input
+                        type="text"
+                        value={billForm.deliveryPhone}
+                        onChange={(e) => setBillForm({ ...billForm, deliveryPhone: e.target.value })}
+                        placeholder="080 6965 6565"
+                        className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-border/40">
+                    <label className="text-[10px] text-muted-foreground font-bold uppercase">Custom QR Code Image (UPI / Feedback)</label>
+                    <div className="flex items-center space-x-3">
+                      {billForm.qrImageUrl ? (
+                        <img src={resolveMediaUrl(billForm.qrImageUrl)} alt="QR" className="w-16 h-16 object-contain rounded-lg border bg-white p-1" />
+                      ) : (
+                        <div className="w-16 h-16 rounded-lg border border-dashed flex items-center justify-center text-muted-foreground bg-muted/20 text-[9px] font-bold text-center">
+                          No QR Image
+                        </div>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleUploadBillImageFile(e.target.files[0], 'qrImageUrl');
+                          }
+                        }}
+                        className="text-xs font-semibold text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-muted-foreground font-bold uppercase">QR Caption Text</label>
+                    <input
+                      type="text"
+                      value={billForm.qrCaption}
+                      onChange={(e) => setBillForm({ ...billForm, qrCaption: e.target.value })}
+                      placeholder="Scan this QR to pay / provide feedback"
+                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
+                    />
+                  </div>
+
+                  <label className="flex items-center space-x-2 cursor-pointer text-xs font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={billForm.showPoweredBy}
+                      onChange={(e) => setBillForm({ ...billForm, showPoweredBy: e.target.checked })}
+                      className="w-4 h-4 accent-primary rounded cursor-pointer"
+                    />
+                    <span>Show "Powered by - DigiAds" Branding</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Right Column: Live 80mm Thermal Receipt Preview */}
+              <div className="lg:col-span-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black uppercase text-foreground flex items-center space-x-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span>Live 80mm Thermal Preview</span>
+                  </span>
+                  <span className="text-[10px] text-muted-foreground font-mono font-bold">Standard 80mm POS</span>
+                </div>
+
+                {globalThis.__renderUnifiedThermalReceipt ? globalThis.__renderUnifiedThermalReceipt(billForm, null, false) : null}
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-4 border-t border-border/40">
+              <button
+                type="button"
+                onClick={() => setShowConfigureBillModal(false)}
+                className="px-5 py-2.5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveBillConfig}
+                disabled={billConfigSaving || billUploadingImage}
+                className="bg-primary hover:bg-primary/95 text-primary-foreground font-bold px-6 py-2.5 rounded-xl transition-all text-xs cursor-pointer shadow-lg flex items-center space-x-2"
+              >
+                <span>{billConfigSaving ? 'Saving Configuration...' : 'Save Bill Configuration'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Printable Thermal Bill Modal & Document Body Portal */}
+      {showPrintBillModal && printingOrder && (
+        <>
+          {/* Modal Preview UI */}
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[200] p-4 animate-fade-in exclude-uppercase">
+            <div className="bg-card border border-border/40 rounded-2xl w-full max-w-lg p-6 relative flex flex-col space-y-4 shadow-2xl max-h-[95vh] overflow-y-auto">
+              <button
+                onClick={() => setShowPrintBillModal(false)}
+                className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer transition-colors p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex justify-between items-center pr-8 border-b border-border/40 pb-3">
+                <div>
+                  <h3 className="font-outfit text-base font-black text-foreground flex items-center space-x-2">
+                    <Printer className="w-4 h-4 text-primary" />
+                    <span>Print Customer Bill</span>
+                  </h3>
+                  <p className="text-[10px] text-muted-foreground font-mono font-bold mt-0.5">Order ID: {printingOrder.orderId}</p>
+                </div>
+
+                <button
+                  onClick={() => window.print()}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-4 py-2 rounded-xl text-xs flex items-center space-x-1.5 cursor-pointer shadow-md tracking-wider uppercase"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Print Receipt</span>
+                </button>
+              </div>
+
+              {/* On-screen Preview */}
+              <div className="py-2 flex justify-center">
+                {globalThis.__renderUnifiedThermalReceipt
+                  ? globalThis.__renderUnifiedThermalReceipt(activeBillConfig || billForm, printingOrder, false)
+                  : null
+                }
+              </div>
+            </div>
+          </div>
+
+          {/* Dedicated Body Portal for Window.print() -> Eliminates 6 blank pages from parent SPA */}
+          {typeof document !== 'undefined' && createPortal(
+            <div id="thermal-print-portal">
+              <style>{`
+                @media print {
+                  @page {
+                    size: 72mm auto;
+                    margin: 0mm !important;
+                  }
+                  html, body {
+                    width: 72mm !important;
+                    max-width: 72mm !important;
+                    height: auto !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    background: #ffffff !important;
+                    color: #000000 !important;
+                    overflow: visible !important;
+                  }
+                  /* Completely collapse main Next.js app layout and all dashboard DOM nodes to 0 height */
+                  body > *:not(#thermal-print-portal) {
+                    display: none !important;
+                  }
+                  #thermal-print-portal {
+                    display: block !important;
+                    position: absolute !important;
+                    left: 0 !important;
+                    top: 0 !important;
+                    width: 72mm !important;
+                    max-width: 72mm !important;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    background: #ffffff !important;
+                    color: #000000 !important;
+                  }
+                  #thermal-print-area {
+                    width: 72mm !important;
+                    max-width: 72mm !important;
+                    margin: 0 !important;
+                    padding: 2mm 1mm !important;
+                    box-sizing: border-box !important;
+                    font-family: 'Courier New', Courier, monospace !important;
+                    font-size: 10px !important;
+                    line-height: 1.15 !important;
+                    color: #000000 !important;
+                    background: #ffffff !important;
+                    box-shadow: none !important;
+                    border: none !important;
+                    border-radius: 0 !important;
+                    page-break-after: avoid !important;
+                    page-break-inside: avoid !important;
+                    break-inside: avoid !important;
+                  }
+                }
+              `}</style>
+              {globalThis.__renderUnifiedThermalReceipt
+                ? globalThis.__renderUnifiedThermalReceipt(activeBillConfig || billForm, printingOrder, true)
+                : null
+              }
+            </div>,
+            document.body
+          )}
+        </>
+      )}
+      {/* Takeout / Pickup Order Creation Modal */}
+      {showTakeoutModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[180] p-4 animate-fade-in exclude-uppercase">
+          <div className="bg-card border border-border/40 rounded-2xl w-full max-w-4xl p-6 relative flex flex-col space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setShowTakeoutModal(false)}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="border-b border-border/40 pb-3">
+              <h3 className="font-outfit text-xl font-black text-foreground flex items-center space-x-2">
+                <ShoppingBag className="w-5 h-5 text-primary" />
+                <span>Create Pickup / Takeout Order</span>
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5 font-semibold">
+                Browse category-wise venue items, add quantities, and place direct counter pickup orders.
+              </p>
+            </div>
+
+            <div className="grid lg:grid-cols-12 gap-6">
+              {/* Left Column: Menu Categories & Items */}
+              <div className="lg:col-span-7 space-y-4">
+                {/* Category Pills */}
+                <div className="flex items-center space-x-2 overflow-x-auto pb-1 scrollbar-none">
+                  {menuCategories.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setTakeoutActiveCategory(cat)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${takeoutActiveCategory.toLowerCase() === cat.toLowerCase()
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted'
+                        }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Items List - Simplified Compact Rows */}
+                <div className="space-y-1.5 max-h-[50vh] overflow-y-auto pr-1">
+                  {menuItems
+                    .filter(i => (i.category || '').toLowerCase() === takeoutActiveCategory.toLowerCase())
+                    .map((item) => {
+                      const cartEntry = takeoutCart.find(c => (c.item.itemId || c.item._id) === (item.itemId || item._id));
+                      const qty = cartEntry ? cartEntry.quantity : 0;
+
+                      return (
+                        <div
+                          key={item.itemId || item._id}
+                          className="flex items-center justify-between p-2.5 rounded-xl border border-border/30 bg-muted/10 hover:bg-muted/30 transition-colors"
+                        >
+                          <div className="flex items-center space-x-3 pr-2">
+                            <span className="font-extrabold text-xs text-foreground uppercase tracking-tight">{item.name}</span>
+                            <span className="font-mono text-xs font-bold text-primary">₹{((item.price || 0) / 100).toFixed(2)}</span>
+                          </div>
+
+                          <div className="shrink-0">
+                            {qty === 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => setTakeoutCart([...takeoutCart, { item, quantity: 1 }])}
+                                className="bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 text-[10px] font-bold px-3 py-1 rounded-lg transition-colors cursor-pointer flex items-center space-x-1 uppercase"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>Add</span>
+                              </button>
+                            ) : (
+                              <div className="flex items-center space-x-2 bg-muted px-2 py-1 rounded-lg border border-border/40">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (qty <= 1) {
+                                      setTakeoutCart(takeoutCart.filter(c => (c.item.itemId || c.item._id) !== (item.itemId || item._id)));
+                                    } else {
+                                      setTakeoutCart(takeoutCart.map(c => (c.item.itemId || c.item._id) === (item.itemId || item._id) ? { ...c, quantity: c.quantity - 1 } : c));
+                                    }
+                                  }}
+                                  className="w-5 h-5 flex items-center justify-center text-foreground font-bold hover:bg-background rounded transition-colors cursor-pointer text-xs"
+                                >
+                                  -
+                                </button>
+                                <span className="font-mono text-xs font-bold text-foreground px-1">{qty}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setTakeoutCart(takeoutCart.map(c => (c.item.itemId || c.item._id) === (item.itemId || item._id) ? { ...c, quantity: c.quantity + 1 } : c));
+                                  }}
+                                  className="w-5 h-5 flex items-center justify-center text-foreground font-bold hover:bg-background rounded transition-colors cursor-pointer text-xs"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {/* Right Column: Live Pickup Cart */}
+              <div className="lg:col-span-5 border-l border-border/40 pl-6 flex flex-col justify-between space-y-4">
+                <div className="space-y-3">
+                  <h4 className="font-outfit text-xs font-black uppercase tracking-wider text-primary border-b border-border/40 pb-2">
+                    Pickup Order Summary
+                  </h4>
+
+                  {takeoutCart.length === 0 ? (
+                    <div className="text-center py-10 text-muted-foreground space-y-2">
+                      <ShoppingBag className="w-8 h-8 mx-auto opacity-40" />
+                      <p className="text-xs font-bold">No items added to pickup cart</p>
+                      <p className="text-[10px]">Select items from menu categories on the left.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-1">
+                      {takeoutCart.map((cEntry, idx) => (
+                        <div key={idx} className="flex justify-between items-center text-xs p-2 bg-muted/20 rounded-lg border border-border/30">
+                          <div>
+                            <p className="font-bold text-foreground">{cEntry.item.name}</p>
+                            <p className="text-[10px] text-muted-foreground font-mono">₹{((cEntry.item.price || 0) / 100).toFixed(2)} x {cEntry.quantity}</p>
+                          </div>
+                          <span className="font-mono font-bold text-foreground">
+                            ₹{(((cEntry.item.price || 0) * cEntry.quantity) / 100).toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {takeoutCart.length > 0 && (
+                  <div className="space-y-3 pt-3 border-t border-border/40">
+                    {(() => {
+                      const totalPaise = takeoutCart.reduce((sum, c) => sum + (c.item.price * c.quantity), 0);
+                      const totalRs = (totalPaise / 100).toFixed(2);
+                      return (
+                        <div className="space-y-1 text-xs">
+                          <div className="flex justify-between font-semibold text-muted-foreground">
+                            <span>Total Items:</span>
+                            <span>{takeoutCart.reduce((s, c) => s + c.quantity, 0)}</span>
+                          </div>
+                          <div className="flex justify-between font-black text-sm text-foreground pt-1 border-t border-border/40">
+                            <span>Total Order Value:</span>
+                            <span className="font-mono text-primary">₹{totalRs}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    <button
+                      type="button"
+                      onClick={handleCreateTakeoutOrder}
+                      disabled={isSubmittingTakeout}
+                      className="w-full bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-2.5 rounded-xl transition-all text-xs cursor-pointer shadow-lg flex items-center justify-center space-x-2 uppercase tracking-wider"
+                    >
+                      <ShoppingBag className="w-4 h-4" />
+                      <span>{isSubmittingTakeout ? 'Placing Order...' : 'Place Pickup Order'}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {toast && (
         <div className={`fixed top-6 right-6 z-[9999] flex items-center space-x-3 border px-4 py-3 rounded-2xl shadow-xl animate-in slide-in-from-top-2 duration-300 ${toast.type === 'success'
           ? 'bg-emerald-600 dark:bg-emerald-700 border-emerald-700 text-white'

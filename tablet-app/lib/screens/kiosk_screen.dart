@@ -623,7 +623,7 @@ class _KioskScreenState extends State<KioskScreen> {
       if (queue.isEmpty) return;
 
       debugPrint('Flushing ${queue.length} offline ad impressions to server...');
-      final batchReq = BatchAdImpressionRequest();
+      final List<String> remainingQueue = [];
       for (final raw in queue) {
         try {
           final parts = raw.replaceAll('{', '').replaceAll('}', '').split(',');
@@ -639,23 +639,23 @@ class _KioskScreenState extends State<KioskScreen> {
             }
           }
           if (b.isNotEmpty && b != 'unknown') {
-            batchReq.impressions.add(AdImpressionRequest()
+            final req = AdImpressionRequest()
               ..deviceId = widget.deviceId
               ..bookingId = b
               ..durationSeconds = d
-              ..interactiveClicks = 0);
+              ..interactiveClicks = 0;
+            await _deviceClient!.trackAdImpression(req, options: _callOptions);
           }
-        } catch (_) {}
+        } catch (_) {
+          remainingQueue.add(raw);
+        }
       }
 
-      if (batchReq.impressions.isNotEmpty) {
-        final res = await _deviceClient!.batchTrackAdImpressions(batchReq, options: _callOptions);
-        if (res.success) {
-          await prefs.remove('offline_ad_impressions');
-          debugPrint('Successfully flushed offline ad impressions batch');
-        }
-      } else {
+      if (remainingQueue.isEmpty) {
         await prefs.remove('offline_ad_impressions');
+        debugPrint('Successfully flushed offline ad impressions');
+      } else {
+        await prefs.setStringList('offline_ad_impressions', remainingQueue);
       }
     } catch (e) {
       debugPrint('Flush offline impressions attempt deferred: $e');
@@ -1031,9 +1031,6 @@ class _KioskScreenState extends State<KioskScreen> {
     return Listener(
       onPointerDown: (_) {
         if (_backOnlineVisible) _dismissBackOnlineBanner();
-        if (_showOrderDetailsModal) {
-          setState(() => _showOrderDetailsModal = false);
-        }
         _resetIdleTimer();
       },
       child: Scaffold(
@@ -1900,165 +1897,155 @@ class _KioskScreenState extends State<KioskScreen> {
     final orderStatus = _tableSession!['orderStatus'] as String? ?? 'placed';
 
     return Positioned.fill(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () {
-          setState(() => _showOrderDetailsModal = false);
-        },
-        child: Container(
-          color: Colors.black.withValues(alpha: 0.65),
-          alignment: Alignment.center,
-          padding: const EdgeInsets.all(24),
-          child: GestureDetector(
-            onTap: () {
-              setState(() => _showOrderDetailsModal = false);
-            },
-            child: Material(
-              color: kCardBg,
-              borderRadius: kCardBorderRadius,
-              elevation: 12,
-              clipBehavior: Clip.hardEdge,
-              child: Container(
-                width: 480,
-                constraints: const BoxConstraints(maxHeight: 500),
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Container(
+        color: Colors.black.withValues(alpha: 0.65),
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(24),
+        child: Material(
+          color: kCardBg,
+          borderRadius: kCardBorderRadius,
+          elevation: 12,
+          clipBehavior: Clip.hardEdge,
+          child: Container(
+            width: 480,
+            constraints: const BoxConstraints(maxHeight: 520),
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Header
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // Header
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Row(
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: kAccentBlue.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(Icons.restaurant_menu_rounded, color: kAccentBlue, size: 22),
+                        ),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: kAccentBlue.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Icon(Icons.restaurant_menu_rounded, color: kAccentBlue, size: 22),
+                            const Text(
+                              "Ordered Food Items",
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: kTextDark),
                             ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  "Ordered Food Items",
-                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: kTextDark),
-                                ),
-                                Text(
-                                  "Status: ${orderStatus.toUpperCase()} • ID: $orderId",
-                                  style: const TextStyle(fontSize: 11, color: kTextGrey, fontWeight: FontWeight.w600),
-                                ),
-                              ],
+                            Text(
+                              "Status: ${orderStatus.toUpperCase()} • ID: $orderId",
+                              style: const TextStyle(fontSize: 11, color: kTextGrey, fontWeight: FontWeight.w600),
                             ),
                           ],
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.close_rounded, color: kTextGrey),
-                          onPressed: () => setState(() => _showOrderDetailsModal = false),
-                        ),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    const Divider(height: 1, color: Colors.black12),
-                    const SizedBox(height: 16),
-
-                    // Food Items List (NO PRICES / NO AMOUNTS SHOWN)
-                    Flexible(
-                      child: rawItems.isEmpty
-                          ? const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 24),
-                              child: Center(
-                                child: Text("No items found in active order.", style: TextStyle(color: kTextGrey)),
-                              ),
-                            )
-                          : ListView.separated(
-                              shrinkWrap: true,
-                              itemCount: rawItems.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
-                              itemBuilder: (context, index) {
-                                final item = rawItems[index];
-                                final name = item['name'] as String? ?? 'Item';
-                                final qty = item['quantity'] as int? ?? 1;
-
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                  decoration: BoxDecoration(
-                                    color: kScaffoldBg,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          name,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 14,
-                                            color: kTextDark,
-                                          ),
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-                                        decoration: BoxDecoration(
-                                          color: kAccentBlue.withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          "x $qty",
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w900,
-                                            fontSize: 13,
-                                            color: kAccentBlue,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    // OK Button at Bottom
-                    SizedBox(
-                      height: 46,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: kAccentBlue,
-                          foregroundColor: Colors.white,
-                          elevation: 2,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        onPressed: () {
-                          HapticFeedback.selectionClick();
-                          setState(() => _showOrderDetailsModal = false);
-                        },
-                        child: const Text(
-                          "OK",
-                          style: TextStyle(
-                            fontWeight: FontWeight.w900,
-                            fontSize: 15,
-                            letterSpacing: 1.0,
-                          ),
-                        ),
-                      ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: kTextGrey),
+                      onPressed: () => setState(() => _showOrderDetailsModal = false),
                     ),
                   ],
                 ),
-              ),
+                const SizedBox(height: 16),
+                const Divider(height: 1, color: Colors.black12),
+                const SizedBox(height: 16),
+
+                // Food Items List (Scrollable, touch-safe)
+                Flexible(
+                  child: rawItems.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 24),
+                          child: Center(
+                            child: Text("No items found in active order.", style: TextStyle(color: kTextGrey)),
+                          ),
+                        )
+                      : ListView.separated(
+                          physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+                          shrinkWrap: true,
+                          itemCount: rawItems.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final item = rawItems[index];
+                            final name = item['name'] as String? ?? 'Item';
+                            final qty = item['quantity'] as int? ?? 1;
+
+                            return Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: kScaffoldBg,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.black.withValues(alpha: 0.06)),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      name,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                        color: kTextDark,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                                    decoration: BoxDecoration(
+                                      color: kAccentBlue.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text(
+                                      "x $qty",
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 13,
+                                        color: kAccentBlue,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+                const SizedBox(height: 20),
+
+                // Primary OK Button (ONLY this button or top X dismisses modal)
+                SizedBox(
+                  height: 48,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: kAccentBlue,
+                      foregroundColor: Colors.white,
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _showOrderDetailsModal = false);
+                    },
+                    child: const Text(
+                      "OK",
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 16,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

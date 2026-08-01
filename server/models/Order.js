@@ -59,6 +59,18 @@ const OrderSchema = new mongoose.Schema({
     default: 'pending',
     index: true
   },
+  orderType: {
+    type: String,
+    enum: ['DINE_IN', 'TAKEOUT'],
+    default: 'DINE_IN',
+    index: true
+  },
+  paymentType: {
+    type: String,
+    enum: ['CASH', 'UPI', 'PENDING'],
+    default: 'PENDING',
+    index: true
+  },
   orderStatus: {
     type: String,
     enum: ['placed', 'confirmed', 'cooking', 'served', 'cancelled'],

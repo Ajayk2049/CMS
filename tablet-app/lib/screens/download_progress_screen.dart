@@ -4,10 +4,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:grpc/grpc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:fixnum/fixnum.dart';
 
 import '../constants.dart';
-import '../generated/device.pbgrpc.dart';
 import '../generated/menu.pbgrpc.dart';
 import '../ad_sync_service.dart';
 import '../menu_image_cache.dart';

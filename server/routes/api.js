@@ -73,6 +73,7 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.post('/host/orders/confirm', hostController.confirmOrder);
     merchantRoutes.post('/host/orders/close-table', hostController.closeTable);
     merchantRoutes.post('/host/orders/payment-received', hostController.markPaymentReceived);
+    merchantRoutes.post('/host/orders/takeout', hostController.createTakeoutOrder);
     merchantRoutes.post('/host/orders/service-waiter', hostController.serviceWaiter);
     merchantRoutes.post('/host/request-more-devices', hostController.requestMoreDevices);
     merchantRoutes.post('/host/verify-password', hostController.verifyPassword);
@@ -81,6 +82,9 @@ function registerRoutes(fastify, options, done) {
     merchantRoutes.post('/host/promos/stream', hostController.streamHostPromos.bind(hostController));
     merchantRoutes.post('/host/promos/delete-slot', hostController.deleteHostPromoSlot.bind(hostController));
     merchantRoutes.get('/host/analytics', hostController.getVenueAnalytics.bind(hostController));
+    merchantRoutes.get('/host/bill-config/:applicationId', hostController.getBillConfig.bind(hostController));
+    merchantRoutes.put('/host/bill-config/:applicationId', hostController.updateBillConfig.bind(hostController));
+    merchantRoutes.post('/host/bill-config/upload-image', { bodyLimit: 10485760 }, hostController.uploadBillImage.bind(hostController));
     next();
   });
 

@@ -93,6 +93,23 @@ async function notifyDeviceSessionUpdate(order) {
     socket.send(JSON.stringify(payload));
     console.log(`[WS] Push session update to Device ${order.deviceId}: status=${order.tableStatus}, orderStatus=${order.orderStatus}, waiterCallStatus=${order.waiterCallStatus}`);
 
+    // Push real-time update to Merchant Dashboard WebSocket stream
+    if (order.merchantId) {
+      const mId = order.merchantId.toString();
+      const merchantSocket = global.merchantSockets ? global.merchantSockets.get(mId) : null;
+      if (merchantSocket) {
+        try {
+          merchantSocket.send(JSON.stringify({
+            event: 'order_update',
+            data: order
+          }));
+          console.log(`[WS] Push order update to Merchant ${mId}: orderId=${order.orderId}, orderStatus=${order.orderStatus}`);
+        } catch (err) {
+          console.error('[WS] Failed to send update to merchant:', err.message);
+        }
+      }
+    }
+
     if (order.tableStatus === 'completed') {
       setTimeout(async () => {
         try {
@@ -818,7 +835,7 @@ class HostController {
    * Admin marks payment as received — resets tablet to ad mode
    */
   async markPaymentReceived(req, res) {
-    const { orderId } = req.body || {};
+    const { orderId, paymentType } = req.body || {};
     if (!orderId) {
       return res.status(400).send({ success: false, message: 'orderId is required' });
     }
@@ -832,6 +849,9 @@ class HostController {
 
       order.tableStatus = 'completed';
       order.paymentStatus = 'completed';
+      if (paymentType && ['CASH', 'UPI'].includes(String(paymentType).toUpperCase())) {
+        order.paymentType = String(paymentType).toUpperCase();
+      }
       order.paidAt = new Date();
       await order.save();
       notifyDeviceSessionUpdate(order);
@@ -840,6 +860,58 @@ class HostController {
     } catch (error) {
       console.error('markPaymentReceived Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to mark payment received' });
+    }
+  }
+
+  /**
+   * Admin creates a Takeout / Pickup Order
+   */
+  async createTakeoutOrder(req, res) {
+    const { hostApplicationId, items } = req.body || {};
+    if (!hostApplicationId || !items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId and items array are required' });
+    }
+
+    try {
+      const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
+
+      const { v4: uuidv4 } = require('uuid');
+      const orderId = `ORD_${uuidv4().replace(/-/g, '').slice(0, 5).toUpperCase()}`;
+
+      const totalPaise = items.reduce((sum, item) => sum + (Number(item.price || 0) * Number(item.quantity || 1)), 0);
+
+      const order = new Order({
+        orderId,
+        merchantId: req.user.uid,
+        hostApplicationId,
+        deviceId: 'COUNTER_POS',
+        tableNumber: 'TAKEOUT',
+        items: items.map(item => ({
+          itemId: String(item.itemId || item._id || uuidv4().slice(0, 8)),
+          name: item.name,
+          quantity: Number(item.quantity || 1),
+          price: Number(item.price || 0)
+        })),
+        totalAmount: totalPaise,
+        orderType: 'TAKEOUT',
+        paymentType: 'PENDING',
+        paymentStatus: 'pending',
+        orderStatus: 'placed',
+        tableStatus: 'active'
+      });
+
+      await order.save();
+      notifyDeviceSessionUpdate(order);
+
+      return res.status(201).send({
+        success: true,
+        message: 'Pickup order created successfully',
+        data: order
+      });
+    } catch (error) {
+      console.error('createTakeoutOrder Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to create pickup order: ' + error.message });
     }
   }
 
@@ -1625,6 +1697,112 @@ class HostController {
     } catch (error) {
       console.error('getVenueAnalytics Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to generate venue analytics' });
+    }
+  }
+
+  /**
+   * Get modular bill config for venue
+   */
+  async getBillConfig(req, res) {
+    const { applicationId } = req.params;
+    try {
+      const hostApp = await HostApplication.findOne({ _id: applicationId, userId: req.user.uid });
+      if (!hostApp) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+      return res.status(200).send({
+        success: true,
+        data: hostApp.billConfig || {}
+      });
+    } catch (error) {
+      console.error('getBillConfig Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch bill config' });
+    }
+  }
+
+  /**
+   * Update modular bill config for venue
+   */
+  async updateBillConfig(req, res) {
+    const { applicationId } = req.params;
+    const billConfigData = req.body || {};
+
+    try {
+      const hostApp = await HostApplication.findOne({ _id: applicationId, userId: req.user.uid });
+      if (!hostApp) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+
+      hostApp.billConfig = {
+        ...(hostApp.billConfig ? hostApp.billConfig.toObject() : {}),
+        ...billConfigData
+      };
+
+      await hostApp.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'Bill configuration saved successfully',
+        data: hostApp.billConfig
+      });
+    } catch (error) {
+      console.error('updateBillConfig Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to update bill config' });
+    }
+  }
+
+  /**
+   * Upload bill image (logo or QR code image)
+   */
+  async uploadBillImage(req, res) {
+    const fs = require('fs');
+    const path = require('path');
+    const { v4: uuidv4 } = require('uuid');
+    const { pipeline } = require('stream/promises');
+
+    const filenameHeader = req.headers['x-filename'] || 'bill_image.png';
+    const ext = path.extname(filenameHeader).toLowerCase() || '.png';
+
+    if (!['.jpg', '.jpeg', '.png', '.webp', '.svg'].includes(ext)) {
+      return res.status(400).send({ success: false, message: 'Unsupported file type. Only JPG, JPEG, PNG, WEBP, and SVG are allowed.' });
+    }
+
+    const uploadDir = path.join(__dirname, '..', 'uploads', 'bills');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    const uniqueFilename = `bill_${uuidv4().replace(/-/g, '').slice(0, 16)}${ext}`;
+    const filePath = path.join(uploadDir, uniqueFilename);
+
+    try {
+      if (Buffer.isBuffer(req.body)) {
+        fs.writeFileSync(filePath, req.body);
+      } else if (req.body && typeof req.body.pipe === 'function') {
+        await pipeline(req.body, fs.createWriteStream(filePath));
+      } else if (req.body && typeof req.body[Symbol.asyncIterator] === 'function') {
+        const chunks = [];
+        for await (const chunk of req.body) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+        fs.writeFileSync(filePath, buffer);
+      } else {
+        return res.status(400).send({ success: false, message: 'Invalid or empty image payload' });
+      }
+
+      const fileUrl = `/uploads/bills/${uniqueFilename}`;
+      return res.status(200).send({
+        success: true,
+        message: 'Image uploaded successfully',
+        url: fileUrl
+      });
+    } catch (error) {
+      console.error('uploadBillImage Error:', error.message);
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) {}
+      }
+      return res.status(500).send({ success: false, message: 'Failed to upload bill image: ' + error.message });
     }
   }
 }
