@@ -37,6 +37,16 @@ const VenuePromoSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  transcodeStatus: {
+    type: String,
+    enum: ['pending', 'processing', 'completed', 'failed'],
+    default: 'completed',
+    index: true
+  },
+  transcodedMediaUrl: {
+    type: String,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

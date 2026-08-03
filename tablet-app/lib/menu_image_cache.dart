@@ -25,6 +25,9 @@ class MenuImageCache {
   final http.Client _client;
   Directory? _imagesDir;
 
+  /// Synchronous in-memory lookup map for cached image files (itemId -> File)
+  final Map<String, File> _fileCache = {};
+
   /// Per-item download progress (itemId -> 0..1) for the optional overlay.
   final Map<String, double> progress = {};
 
@@ -41,12 +44,37 @@ class MenuImageCache {
   MenuImageCache({required this.serverHost, this.httpPort = 4200})
       : _client = http.Client();
 
+  /// Synchronously retrieve a cached file without disk I/O async delay.
+  File? localFileForSync(String itemId) {
+    if (itemId.isEmpty) return null;
+    return _fileCache[itemId];
+  }
+
   Future<Directory> _ensureDir() async {
     if (_imagesDir != null) return _imagesDir!;
     final docs = await getApplicationDocumentsDirectory();
     final dir = Directory('${docs.path}/menu_images');
     if (!await dir.exists()) await dir.create(recursive: true);
     _imagesDir = dir;
+
+    // Scan existing disk cache and populate _fileCache map
+    try {
+      if (await dir.exists()) {
+        final entities = await dir.list().toList();
+        for (final entity in entities) {
+          if (entity is File && entity.path.endsWith('.img')) {
+            final fileName = entity.path.split(Platform.pathSeparator).last;
+            final itemId = fileName.replaceAll('.img', '');
+            if (await entity.length() > 0) {
+              _fileCache[itemId] = entity;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[MENU_IMG] Error priming in-memory map: $e');
+    }
+
     return dir;
   }
 
@@ -66,9 +94,15 @@ class MenuImageCache {
   /// Async variant used during initial priming.
   Future<File?> localFileFor(String itemId) async {
     if (itemId.isEmpty) return null;
+    if (_fileCache.containsKey(itemId)) {
+      return _fileCache[itemId];
+    }
     final dir = await _ensureDir();
     final f = File('${dir.path}/$itemId.img');
-    if (await f.exists() && await f.length() > 0) return f;
+    if (await f.exists() && await f.length() > 0) {
+      _fileCache[itemId] = f;
+      return f;
+    }
     return null;
   }
 
@@ -129,6 +163,7 @@ class MenuImageCache {
       final finalFile = File('${dir.path}/$itemId.img');
       if (await finalFile.exists()) await finalFile.delete();
       await target.rename(finalFile.path);
+      _fileCache[itemId] = finalFile;
       return true;
     } catch (e) {
       debugPrint('[MENU_IMG] failed $itemId: $e');
@@ -138,6 +173,7 @@ class MenuImageCache {
 
   /// Drop every cached image. Called by "Reset device" to free disk.
   Future<void> clear() async {
+    _fileCache.clear();
     final dir = await _ensureDir();
     if (await dir.exists()) {
       await for (final entity in dir.list()) {

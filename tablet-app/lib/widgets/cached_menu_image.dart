@@ -49,17 +49,30 @@ class _CachedMenuImageState extends State<CachedMenuImage> {
   @override
   void initState() {
     super.initState();
-    _loadLocal();
+    _checkCache();
   }
 
   @override
   void didUpdateWidget(covariant CachedMenuImage old) {
     super.didUpdateWidget(old);
-    if (old.itemId != widget.itemId) {
-      _local = null;
-      _checked = false;
-      _loadLocal();
+    if (old.itemId != widget.itemId || old.imageUrl != widget.imageUrl) {
+      _checkCache();
     }
+  }
+
+  void _checkCache() {
+    // 1. Try synchronous in-memory resolution first (Frame 1, zero flash!)
+    final syncFile = widget.cache.localFileForSync(widget.itemId);
+    if (syncFile != null) {
+      _local = syncFile;
+      _checked = true;
+      return;
+    }
+
+    // 2. Otherwise fall back to async disk check
+    _local = null;
+    _checked = false;
+    _loadLocal();
   }
 
   Future<void> _loadLocal() async {
@@ -90,7 +103,12 @@ class _CachedMenuImageState extends State<CachedMenuImage> {
       return widget.fallback ?? const SizedBox.shrink();
     }
     if (_local != null) {
-      return Image.file(_local!, fit: widget.fit, errorBuilder: (_, __, ___) => _network);
+      return Image.file(
+        _local!,
+        fit: widget.fit,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) => _network,
+      );
     }
     return _network;
   }
@@ -101,6 +119,7 @@ class _CachedMenuImageState extends State<CachedMenuImage> {
     return Image.network(
       url,
       fit: widget.fit,
+      gaplessPlayback: true,
       errorBuilder: (_, __, ___) => widget.fallback ?? const SizedBox.shrink(),
     );
   }

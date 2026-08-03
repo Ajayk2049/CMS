@@ -6,15 +6,42 @@ const Order = require('../models/Order');
 // Utility to push session update to device via WebSocket
 async function notifyDeviceSessionUpdate(order) {
   if (!order || !order.deviceId) return;
-  const socket = global.deviceSockets ? global.deviceSockets.get(order.deviceId) : null;
-  if (!socket) return;
 
   try {
     const HostApplication = require('../models/HostApplication');
     const app = await HostApplication.findById(order.hostApplicationId);
+    const billConfig = app?.billConfig || {};
+    const cgstPct = typeof billConfig.cgstPercent === 'number' ? billConfig.cgstPercent : 2.5;
+    const sgstPct = typeof billConfig.sgstPercent === 'number' ? billConfig.sgstPercent : 2.5;
+    const enableAutoRoundOff = billConfig.enableAutoRoundOff !== false;
+
+    let subtotalPaise = 0;
+    const itemsBreakdown = [];
+    if (order.items && order.items.length > 0) {
+      for (const item of order.items) {
+        const lineTotal = (item.price || 0) * (item.quantity || 1);
+        subtotalPaise += lineTotal;
+        itemsBreakdown.push({
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price
+        });
+      }
+    }
+
+    const cgstPaise = Math.round(subtotalPaise * (cgstPct / 100));
+    const sgstPaise = Math.round(subtotalPaise * (sgstPct / 100));
+    const gstPaise = cgstPaise + sgstPaise;
+    const rawTotalPaise = subtotalPaise + gstPaise;
+
+    let finalAmountPaise = order.totalAmount || rawTotalPaise;
+    if (order.tableStatus === 'close_table') {
+      finalAmountPaise = enableAutoRoundOff ? Math.round(rawTotalPaise / 100) * 100 : rawTotalPaise;
+    }
+
     const upiId = app?.upiId || '';
     const payeeName = app?.payeeName || '';
-    const amountRs = (order.totalAmount / 100).toFixed(2);
+    const amountRs = (finalAmountPaise / 100).toFixed(2);
     let upiUrl = '';
     if (upiId) {
       upiUrl = `upi://pay?pa=${upiId}`;
@@ -28,70 +55,26 @@ async function notifyDeviceSessionUpdate(order) {
       event: 'table_session',
       status: order.tableStatus,
       orderId: order.orderId,
-      amount: order.totalAmount,
+      amount: finalAmountPaise,
+      subtotal: subtotalPaise,
+      cgst: cgstPaise,
+      sgst: sgstPaise,
+      gst: gstPaise,
+      otherCharges: 0,
       upiUrl,
       orderStatus: order.orderStatus,
       tableNumber: order.tableNumber,
       waiterCallStatus: order.waiterCallStatus || 'none',
       waiterCallCount: order.waiterCallCount || 0,
-      waiterCallOption: order.waiterCallOption || ''
+      waiterCallOption: order.waiterCallOption || '',
+      items: itemsBreakdown
     };
 
-    if (order.tableStatus === 'close_table' && order.items && order.items.length > 0) {
-      const Menu = require('../models/Menu');
-      const menu = await Menu.findOne({ hostApplicationId: order.hostApplicationId });
-      if (menu) {
-        const itemsBreakdown = [];
-        let subtotalPaise = 0;
-        let gstPaise = 0;
-        let otherChargesPaise = 0;
-
-        const defaultGst = menu.defaultGst || 0;
-        const defaultOtherCharges = menu.defaultOtherCharges || 0;
-        const defaultOtherChargesType = menu.defaultOtherChargesType || 'percentage';
-
-        for (const item of order.items) {
-          const menuItem = menu.items.find(i => i.itemId === item.itemId);
-          const gstPercent = (menuItem && menuItem.gst !== undefined && menuItem.gst !== null) 
-            ? menuItem.gst 
-            : defaultGst;
-          const otherChargesVal = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
-            ? menuItem.otherCharges 
-            : defaultOtherCharges;
-          const otherChargesType = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
-            ? (menuItem.otherChargesType || 'percentage')
-            : defaultOtherChargesType;
-
-          const itemSubtotal = item.price * item.quantity;
-          const itemGst = Math.round(itemSubtotal * (gstPercent / 100));
-          
-          let itemOther = 0;
-          if (otherChargesType === 'rupees') {
-            itemOther = Math.round(item.quantity * (otherChargesVal * 100));
-          } else {
-            itemOther = Math.round(itemSubtotal * (otherChargesVal / 100));
-          }
-
-          subtotalPaise += itemSubtotal;
-          gstPaise += itemGst;
-          otherChargesPaise += itemOther;
-
-          itemsBreakdown.push({
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price
-          });
-        }
-
-        payload.items = itemsBreakdown;
-        payload.subtotal = subtotalPaise;
-        payload.gst = gstPaise;
-        payload.otherCharges = otherChargesPaise;
-      }
+    const socket = global.deviceSockets ? global.deviceSockets.get(order.deviceId) : null;
+    if (socket) {
+      socket.send(JSON.stringify(payload));
+      console.log(`[WS] Push session update to Device ${order.deviceId}: status=${order.tableStatus}, orderStatus=${order.orderStatus}, amount=${finalAmountPaise}`);
     }
-
-    socket.send(JSON.stringify(payload));
-    console.log(`[WS] Push session update to Device ${order.deviceId}: status=${order.tableStatus}, orderStatus=${order.orderStatus}, waiterCallStatus=${order.waiterCallStatus}`);
 
     // Push real-time update to Merchant Dashboard WebSocket stream
     if (order.merchantId) {
@@ -122,7 +105,7 @@ async function notifyDeviceSessionUpdate(order) {
       }, 1000);
     }
   } catch (err) {
-    console.error('[WS] Failed to send update to device:', err.message);
+    console.error('[WS] notifyDeviceSessionUpdate Error:', err.message);
   }
 }
 
@@ -453,6 +436,49 @@ class HostController {
   }
 
   /**
+   * Helper to derive human-searchable venue subfolder name: [sanitized_venue_name]_[hostApplicationId]
+   */
+  async getVenueFolderInfo(hostApplicationId) {
+    const HostApplication = require('../models/HostApplication');
+    let venueSlug = 'venue';
+    let folderName = 'general';
+
+    if (hostApplicationId) {
+      try {
+        const hostApp = await HostApplication.findById(hostApplicationId);
+        if (hostApp) {
+          const rawName = hostApp.outletName || hostApp.restaurantName || 'venue';
+          venueSlug = rawName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'venue';
+          folderName = `${venueSlug}_${hostApp._id.toString()}`;
+        } else {
+          folderName = `venue_${hostApplicationId}`;
+        }
+      } catch (e) {
+        folderName = `venue_${hostApplicationId}`;
+      }
+    }
+    return { venueSlug, folderName };
+  }
+
+  /**
+   * Universal helper to safely delete physical media file from server/uploads/
+   */
+  unlinkMediaFile(mediaUrl) {
+    if (!mediaUrl || !mediaUrl.startsWith('/uploads/')) return;
+    const fs = require('fs');
+    const path = require('path');
+    const relPath = mediaUrl.replace('/uploads/', '');
+    const fullPath = path.join(__dirname, '..', 'uploads', relPath);
+    if (fs.existsSync(fullPath)) {
+      try {
+        fs.unlinkSync(fullPath);
+      } catch (e) {
+        console.error('unlinkMediaFile Error:', e.message);
+      }
+    }
+  }
+
+  /**
    * Upload menu item image, optimize via sharp and save to disk
    */
   async uploadImage(req, res) {
@@ -460,8 +486,10 @@ class HostController {
     const path = require('path');
     const sharp = require('sharp');
     const { v4: uuidv4 } = require('uuid');
-    const config = require('../config/config');
     const { pipeline } = require('stream/promises');
+
+    const hostApplicationId = req.headers['x-host-application-id'] || req.headers['X-Host-Application-Id'] || req.query.hostApplicationId;
+    const { folderName } = await this.getVenueFolderInfo(hostApplicationId);
 
     const filenameHeader = req.headers['x-filename'] || 'image.png';
     const ext = path.extname(filenameHeader).toLowerCase() || '.png';
@@ -472,7 +500,7 @@ class HostController {
     }
 
     const uniqueFilename = `menu_${uuidv4().replace(/-/g, '').slice(0, 16)}.webp`;
-    const uploadsDir = path.join(__dirname, '..', 'uploads', 'menu');
+    const uploadsDir = path.join(__dirname, '..', 'uploads', 'outlets', folderName, 'menu');
 
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
@@ -495,7 +523,7 @@ class HostController {
         fs.createWriteStream(filePath)
       );
 
-      const fileUrl = `/uploads/menu/${uniqueFilename}`;
+      const fileUrl = `/uploads/outlets/${folderName}/menu/${uniqueFilename}`;
 
       return res.status(200).send({
         success: true,
@@ -704,12 +732,21 @@ class HostController {
       const app = await HostApplication.findOne({ _id: order.hostApplicationId, userId: req.user.uid });
       if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
 
+      // Enforce forward-only order status progression
+      if (order.orderStatus === 'served' && orderStatus !== 'served') {
+        return res.status(400).send({ success: false, message: 'Delivered orders cannot revert to a previous status' });
+      }
+      if (order.orderStatus === 'cooking' && (orderStatus === 'placed' || orderStatus === 'cancelled')) {
+        return res.status(400).send({ success: false, message: 'Preparing orders cannot revert to placed or be cancelled' });
+      }
+
       order.orderStatus = orderStatus;
       if (orderStatus === 'confirmed') {
         order.confirmedAt = new Date();
       }
-      // If updating orderStatus, ensure table status stays active
-      if (order.tableStatus === 'close_table' || order.tableStatus === 'completed') {
+      if (orderStatus === 'cancelled') {
+        order.tableStatus = 'completed';
+      } else if (order.tableStatus === 'close_table' || order.tableStatus === 'completed') {
         order.tableStatus = 'active';
       }
       await order.save();
@@ -776,48 +813,28 @@ class HostController {
           return res.status(400).send({ success: false, message: 'No UPI ID configured. Set up payment config first.' });
         }
 
-        // Recalculate final totalAmount containing taxes before table closure
-        const Menu = require('../models/Menu');
-        const menu = await Menu.findOne({ hostApplicationId: order.hostApplicationId });
-        if (menu) {
-          let totalSubtotal = 0;
-          let totalGst = 0;
-          let totalOtherCharges = 0;
+        // Recalculate final totalAmount containing taxes from billConfig before table closure
+        const billConfig = app.billConfig || {};
+        const cgstPct = typeof billConfig.cgstPercent === 'number' ? billConfig.cgstPercent : 2.5;
+        const sgstPct = typeof billConfig.sgstPercent === 'number' ? billConfig.sgstPercent : 2.5;
+        const enableAutoRoundOff = billConfig.enableAutoRoundOff !== false;
 
-          const defaultGst = menu.defaultGst || 0;
-          const defaultOtherCharges = menu.defaultOtherCharges || 0;
-          const defaultOtherChargesType = menu.defaultOtherChargesType || 'percentage';
-
-          for (const item of order.items) {
-            const menuItem = menu.items.find(i => i.itemId === item.itemId);
-            const gstPercent = (menuItem && menuItem.gst !== undefined && menuItem.gst !== null) 
-              ? menuItem.gst 
-              : defaultGst;
-            const otherChargesVal = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
-              ? menuItem.otherCharges 
-              : defaultOtherCharges;
-            const otherChargesType = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
-              ? (menuItem.otherChargesType || 'percentage') 
-              : defaultOtherChargesType;
-
-            const itemSubtotal = item.price * item.quantity;
-            const itemGst = Math.round(itemSubtotal * (gstPercent / 100));
-            
-            let itemOther = 0;
-            if (otherChargesType === 'rupees') {
-              itemOther = Math.round(item.quantity * (otherChargesVal * 100));
-            } else {
-              itemOther = Math.round(itemSubtotal * (otherChargesVal / 100));
-            }
-
-            totalSubtotal += itemSubtotal;
-            totalGst += itemGst;
-            totalOtherCharges += itemOther;
-          }
-
-          order.totalAmount = totalSubtotal + totalGst + totalOtherCharges;
+        let subtotalPaise = 0;
+        for (const item of order.items || []) {
+          subtotalPaise += (item.price || 0) * (item.quantity || 1);
         }
 
+        const cgstPaise = Math.round(subtotalPaise * (cgstPct / 100));
+        const sgstPaise = Math.round(subtotalPaise * (sgstPct / 100));
+        const gstPaise = cgstPaise + sgstPaise;
+        const rawTotalPaise = subtotalPaise + gstPaise;
+
+        let finalAmountPaise = rawTotalPaise;
+        if (enableAutoRoundOff) {
+          finalAmountPaise = Math.round(rawTotalPaise / 100) * 100;
+        }
+
+        order.totalAmount = finalAmountPaise;
         order.tableStatus = 'close_table';
       }
       await order.save();
@@ -1145,39 +1162,46 @@ class HostController {
       const hasScreenImages = promos.some(p => (p.slotType === 'screen_image' || p.slotType === 'screen') && p.mediaType === 'image' && p.mediaUrl);
 
       let dailyVideoChangesRemaining = hostApp.dailyVideoChangesRemaining;
-      if (!hasTabletVideos || dailyVideoChangesRemaining === undefined || dailyVideoChangesRemaining === null) {
+      if (dailyVideoChangesRemaining === undefined || dailyVideoChangesRemaining === null || dailyVideoChangesRemaining === (isClosed ? 4 : 6)) {
         dailyVideoChangesRemaining = dailyVideoQuota;
+        hostApp.dailyVideoChangesRemaining = dailyVideoQuota;
       } else {
         dailyVideoChangesRemaining = Math.min(dailyVideoQuota, dailyVideoChangesRemaining);
       }
 
       let dailyImageChangesRemaining = hostApp.dailyImageChangesRemaining;
-      if (!hasTabletImages || dailyImageChangesRemaining === undefined || dailyImageChangesRemaining === null) {
+      if (dailyImageChangesRemaining === undefined || dailyImageChangesRemaining === null || dailyImageChangesRemaining === (isClosed ? 10 : 15)) {
         dailyImageChangesRemaining = dailyImageQuota;
+        hostApp.dailyImageChangesRemaining = dailyImageQuota;
       } else {
         dailyImageChangesRemaining = Math.min(dailyImageQuota, dailyImageChangesRemaining);
       }
 
       let dailyScreenVideoChangesRemaining = hostApp.dailyScreenVideoChangesRemaining;
-      if (!hasScreenVideos || dailyScreenVideoChangesRemaining === undefined || dailyScreenVideoChangesRemaining === null) {
+      if (dailyScreenVideoChangesRemaining === undefined || dailyScreenVideoChangesRemaining === null || dailyScreenVideoChangesRemaining === (isClosed ? 4 : 6)) {
         dailyScreenVideoChangesRemaining = dailyScreenVideoQuota;
+        hostApp.dailyScreenVideoChangesRemaining = dailyScreenVideoQuota;
       } else {
         dailyScreenVideoChangesRemaining = Math.min(dailyScreenVideoQuota, dailyScreenVideoChangesRemaining);
       }
 
       let dailyScreenImageChangesRemaining = hostApp.dailyScreenImageChangesRemaining;
-      if (!hasScreenImages || dailyScreenImageChangesRemaining === undefined || dailyScreenImageChangesRemaining === null) {
+      if (dailyScreenImageChangesRemaining === undefined || dailyScreenImageChangesRemaining === null || dailyScreenImageChangesRemaining === (isClosed ? 10 : 15)) {
         dailyScreenImageChangesRemaining = dailyScreenImageQuota;
+        hostApp.dailyScreenImageChangesRemaining = dailyScreenImageQuota;
       } else {
         dailyScreenImageChangesRemaining = Math.min(dailyScreenImageQuota, dailyScreenImageChangesRemaining);
       }
 
       let dailyScreenChangesRemaining = hostApp.dailyScreenChangesRemaining;
-      if (dailyScreenChangesRemaining === undefined || dailyScreenChangesRemaining === null) {
+      if (dailyScreenChangesRemaining === undefined || dailyScreenChangesRemaining === null || dailyScreenChangesRemaining === (isClosed ? 4 : 6)) {
         dailyScreenChangesRemaining = dailyScreenQuota;
+        hostApp.dailyScreenChangesRemaining = dailyScreenQuota;
       } else {
         dailyScreenChangesRemaining = Math.min(dailyScreenQuota, dailyScreenChangesRemaining);
       }
+
+      await hostApp.save();
 
       return res.status(200).send({
         success: true,
@@ -1246,8 +1270,8 @@ class HostController {
       if (!isVideo && !isImage) {
         return res.status(400).send({ success: false, message: 'Unsupported file format' });
       }
-
-      const uploadsDir = path.join(__dirname, '..', 'uploads', 'host_promos', hostApplicationId.toString());
+      const { folderName } = await this.getVenueFolderInfo(hostApplicationId);
+      const uploadsDir = path.join(__dirname, '..', 'uploads', 'outlets', folderName, 'promos');
       if (!fs.existsSync(uploadsDir)) {
         fs.mkdirSync(uploadsDir, { recursive: true });
       }
@@ -1262,46 +1286,41 @@ class HostController {
         return res.status(200).send({
           success: true,
           data: {
-            mediaUrl: `/uploads/host_promos/${hostApplicationId}/${uniqueFilename}`,
+            mediaUrl: `/uploads/outlets/${folderName}/promos/${uniqueFilename}`,
             mediaType: 'image',
             durationSeconds: 15
           }
         });
       } else {
-        // Video upload with ffmpeg transcoding & temp file cleanup
+        // Video upload with instant 1-2s response + asynchronous background video queue
+        const videoQueue = require('../utils/videoQueue');
         const uniqueFilename = `promo_vid_${uuidv4().replace(/-/g, '').slice(0, 16)}.mp4`;
-        const filePath = path.join(uploadsDir, uniqueFilename);
         const tempPath = path.join(os.tmpdir(), `tmp-host-promo-${Date.now()}${ext}`);
+        const rawFilePath = path.join(uploadsDir, uniqueFilename);
 
-        try {
-          await pipeline(req.body, fs.createWriteStream(tempPath));
+        // 1. Stream raw upload directly to temp storage
+        await pipeline(req.body, fs.createWriteStream(tempPath));
 
-          // Transcode video using ffmpeg
-          await new Promise((resolve, reject) => {
-            ffmpeg(tempPath)
-              .videoCodec('libx264')
-              .outputOptions(['-profile:v baseline', '-level 3.1', '-pix_fmt yuv420p', '-movflags +faststart'])
-              .audioCodec('aac')
-              .audioChannels(2)
-              .on('end', resolve)
-              .on('error', reject)
-              .save(filePath);
-          });
+        // 2. Make an initial raw copy so file exists immediately
+        fs.copyFileSync(tempPath, rawFilePath);
 
-          return res.status(200).send({
-            success: true,
-            data: {
-              mediaUrl: `/uploads/host_promos/${hostApplicationId}/${uniqueFilename}`,
-              mediaType: 'video',
-              durationSeconds: 30
-            }
-          });
-        } finally {
-          // Strictly clean up temp file after transcoding
-          if (fs.existsSync(tempPath)) {
-            try { fs.unlinkSync(tempPath); } catch (e) {}
+        const initialMediaUrl = `/uploads/outlets/${folderName}/promos/${uniqueFilename}`;
+
+        // 3. Return HTTP 200 immediately (in 1-2 seconds!)
+        return res.status(200).send({
+          success: true,
+          message: 'Video uploaded! Background processing queued.',
+          data: {
+            mediaUrl: initialMediaUrl,
+            mediaType: 'video',
+            durationSeconds: 30,
+            transcodeStatus: 'pending',
+            tempPath,
+            targetDir: uploadsDir,
+            relativeSubdir: `outlets/${folderName}/promos`,
+            finalFilename: uniqueFilename
           }
-        }
+        });
       }
     } catch (error) {
       console.error('uploadHostPromoMedia Error:', error.message);
@@ -1427,21 +1446,39 @@ class HostController {
             }
           }
 
+          const videoQueue = require('../utils/videoQueue');
+          let savedPromo;
           if (existingPromo) {
             existingPromo.mediaUrl = mediaUrl;
             existingPromo.mediaType = mediaType;
             existingPromo.title = title || '';
             existingPromo.isStreaming = true;
-            await existingPromo.save();
+            existingPromo.transcodeStatus = slot.tempPath ? 'pending' : 'completed';
+            savedPromo = await existingPromo.save();
           } else {
-            await VenuePromo.create({
+            savedPromo = await VenuePromo.create({
               hostApplicationId: hostApp._id,
               slotType,
               slotIndex,
               title: title || '',
               mediaUrl,
               mediaType,
-              isStreaming: true
+              isStreaming: true,
+              transcodeStatus: slot.tempPath ? 'pending' : 'completed'
+            });
+          }
+
+          if (slot.tempPath && mediaType === 'video') {
+            const filename = path.basename(mediaUrl);
+            const uploadsDir = path.join(__dirname, '..', 'uploads', 'host_promos', hostApp._id.toString());
+            videoQueue.enqueue({
+              modelType: 'VenuePromo',
+              recordId: savedPromo._id,
+              tempPath: slot.tempPath,
+              targetDir: uploadsDir,
+              relativeSubdir: `host_promos/${hostApp._id}`,
+              finalFilename: filename,
+              hostApplicationId: hostApp._id
             });
           }
         } else if (existingPromo) {
@@ -1760,6 +1797,9 @@ class HostController {
     const { v4: uuidv4 } = require('uuid');
     const { pipeline } = require('stream/promises');
 
+    const hostApplicationId = req.headers['x-host-application-id'] || req.headers['X-Host-Application-Id'] || req.query.hostApplicationId;
+    const { folderName } = await this.getVenueFolderInfo(hostApplicationId);
+
     const filenameHeader = req.headers['x-filename'] || 'bill_image.png';
     const ext = path.extname(filenameHeader).toLowerCase() || '.png';
 
@@ -1767,12 +1807,12 @@ class HostController {
       return res.status(400).send({ success: false, message: 'Unsupported file type. Only JPG, JPEG, PNG, WEBP, and SVG are allowed.' });
     }
 
-    const uploadDir = path.join(__dirname, '..', 'uploads', 'bills');
+    const uploadDir = path.join(__dirname, '..', 'uploads', 'outlets', folderName, 'bills');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
 
-    const uniqueFilename = `bill_${uuidv4().replace(/-/g, '').slice(0, 16)}${ext}`;
+    const uniqueFilename = `bill_logo_${uuidv4().replace(/-/g, '').slice(0, 16)}${ext}`;
     const filePath = path.join(uploadDir, uniqueFilename);
 
     try {
@@ -1791,7 +1831,7 @@ class HostController {
         return res.status(400).send({ success: false, message: 'Invalid or empty image payload' });
       }
 
-      const fileUrl = `/uploads/bills/${uniqueFilename}`;
+      const fileUrl = `/uploads/outlets/${folderName}/bills/${uniqueFilename}`;
       return res.status(200).send({
         success: true,
         message: 'Image uploaded successfully',

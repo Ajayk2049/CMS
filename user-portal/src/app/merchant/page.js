@@ -250,6 +250,7 @@ export default function MerchantDashboard() {
     crmContactPhone: '',
     deliveryPhone: '',
     showPoweredBy: true,
+    billWidthFormat: '80mm',
     qrImageUrl: '',
     qrCaption: ''
   });
@@ -257,6 +258,7 @@ export default function MerchantDashboard() {
   const [showPrintBillModal, setShowPrintBillModal] = useState(false);
   const [printingOrder, setPrintingOrder] = useState(null);
   const [activeBillConfig, setActiveBillConfig] = useState(null);
+  const [selectedPrintWidth, setSelectedPrintWidth] = useState('80mm');
 
   // Takeout / Pickup Order Modal states
   const [showTakeoutModal, setShowTakeoutModal] = useState(false);
@@ -524,6 +526,8 @@ export default function MerchantDashboard() {
           crmContactPhone: configData.crmContactPhone || '',
           deliveryPhone: configData.deliveryPhone || '',
           showPoweredBy: configData.showPoweredBy !== undefined ? configData.showPoweredBy : true,
+          customWatermark: configData.customWatermark !== undefined ? configData.customWatermark : 'POWERED BY - DIGIADS',
+          billWidthFormat: configData.billWidthFormat || '80mm',
           qrImageUrl: configData.qrImageUrl || '',
           qrCaption: configData.qrCaption !== undefined ? configData.qrCaption : ''
         };
@@ -541,9 +545,20 @@ export default function MerchantDashboard() {
     const currentToken = token || localStorage.getItem('token');
     if (!selectedOutletId || !currentToken) return;
     setBillConfigSaving(true);
-    setBillConfigError('');
+    const parseTaxRate = (val) => {
+      if (val === '' || val === null || val === undefined) return 0;
+      const parsed = parseFloat(val);
+      return isNaN(parsed) || parsed < 0 ? 0 : parsed;
+    };
+
+    const payload = {
+      ...billForm,
+      cgstPercent: parseTaxRate(billForm.cgstPercent),
+      sgstPercent: parseTaxRate(billForm.sgstPercent)
+    };
+
     try {
-      const res = await axios.put(`${API_BASE}/host/bill-config/${selectedOutletId}`, billForm, {
+      const res = await axios.put(`${API_BASE}/host/bill-config/${selectedOutletId}`, payload, {
         headers: { Authorization: `Bearer ${currentToken}` }
       });
       if (res.data && res.data.success) {
@@ -570,7 +585,8 @@ export default function MerchantDashboard() {
         headers: {
           Authorization: `Bearer ${currentToken}`,
           'Content-Type': file.type || 'image/png',
-          'X-Filename': file.name || 'image.png'
+          'X-Filename': file.name || 'image.png',
+          'X-Host-Application-Id': selectedOutletId
         }
       });
       if (res.data && res.data.url) {
@@ -594,6 +610,8 @@ export default function MerchantDashboard() {
     if (targetAppId) {
       await fetchBillConfig(targetAppId);
     }
+    const defaultFormat = activeBillConfig?.billWidthFormat || billForm?.billWidthFormat || '80mm';
+    setSelectedPrintWidth(defaultFormat);
     setShowPrintBillModal(true);
   };
 
@@ -838,7 +856,7 @@ export default function MerchantDashboard() {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       const live = (res.data.data || []).filter(
-        ord => ord.tableStatus !== 'completed' && ord.tableStatus !== 'completed_acked'
+        ord => ord.tableStatus !== 'completed' && ord.tableStatus !== 'completed_acked' && ord.orderStatus !== 'cancelled'
       );
       setOrders(live);
     } catch (err) {
@@ -1489,18 +1507,24 @@ export default function MerchantDashboard() {
 
   const handleClearPromoSlot = (slotType, slotIndex) => {
     const key = `${slotType}_${slotIndex}`;
-    setPromoDraftSlots(prev => ({
-      ...prev,
-      [key]: {
-        title: '',
-        mediaUrl: '',
-        mediaType: slotType,
-        previewUrl: '',
-        fileObj: null,
-        isModified: true,
-        isDeleted: true
-      }
-    }));
+    const currentSlot = promoDraftSlots[key];
+    const mediaName = currentSlot?.title || `${slotType.replace('_', ' ').toUpperCase()} Slot ${slotIndex + 1}`;
+
+    if (window.confirm(`Are you sure you want to delete this venue promo ("${mediaName}")? This is a destructive action and will remove the promo from all kiosk displays.`)) {
+      setPromoDraftSlots(prev => ({
+        ...prev,
+        [key]: {
+          title: '',
+          mediaUrl: '',
+          mediaType: slotType,
+          previewUrl: '',
+          fileObj: null,
+          isModified: true,
+          isDeleted: true
+        }
+      }));
+      showToast('Promo slot marked for deletion. Click "Save & Stream Promos" to finalize.', 'info');
+    }
   };
 
   const handleStreamAds = async () => {
@@ -1550,6 +1574,7 @@ export default function MerchantDashboard() {
         }
 
         let finalMediaUrl = item.mediaUrl;
+        let tempPath = null;
         if (item.fileObj) {
           filesUploadedSoFar++;
           showToast(`Uploading file ${filesUploadedSoFar} of ${totalFilesToUpload} (${item.mediaType.toUpperCase()})...`, 'info');
@@ -1565,6 +1590,7 @@ export default function MerchantDashboard() {
 
           if (uploadRes.data.success && uploadRes.data.data.mediaUrl) {
             finalMediaUrl = uploadRes.data.data.mediaUrl;
+            tempPath = uploadRes.data.data.tempPath || null;
           } else {
             throw new Error(uploadRes.data.message || 'File upload failed');
           }
@@ -1576,6 +1602,7 @@ export default function MerchantDashboard() {
           title: item.title,
           mediaUrl: finalMediaUrl,
           mediaType: item.mediaType,
+          tempPath,
           isDeleted: false
         });
       }
@@ -1619,6 +1646,7 @@ export default function MerchantDashboard() {
           headers: {
             'Content-Type': file.type || 'application/octet-stream',
             'X-Filename': file.name,
+            'X-Host-Application-Id': selectedOutletId,
             'Authorization': `Bearer ${token}`
           }
         });
@@ -2115,7 +2143,7 @@ export default function MerchantDashboard() {
                       }`}
                   >
                     <CreditCard className={`w-4 h-4 ${activeTab === 'payment' ? 'text-primary-foreground' : 'text-primary'}`} />
-                    <span className="hidden sm:inline">Payment</span>
+                    <span className="hidden sm:inline">Payment History</span>
                   </button>
                 </>
               )}
@@ -3013,19 +3041,6 @@ export default function MerchantDashboard() {
               {approvedOutlets.length > 0 && (
                 <div className="flex space-x-4">
                   <button
-                    onClick={() => {
-                      setGlobalGstInput(menuDefaultGst !== null ? menuDefaultGst.toString() : '0');
-                      setGlobalOtherChargesInput(menuDefaultOtherCharges !== null ? menuDefaultOtherCharges.toString() : '0');
-                      setGlobalOtherChargesType(menuDefaultOtherChargesType || 'percentage');
-                      setShowGlobalTaxesModal(true);
-                    }}
-                    className="bg-card hover:bg-muted border border-border/40 text-foreground font-semibold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center space-x-1.5 cursor-pointer shadow-sm"
-                  >
-                    <Percent className="w-4 h-4 text-indigo-500" />
-                    <span>Configure Taxes</span>
-                  </button>
-
-                  <button
                     onClick={() => setIsCategoryModalOpen(true)}
                     className="bg-card hover:bg-muted border border-border/40 text-foreground font-semibold text-xs px-4 py-2.5 rounded-xl transition-all flex items-center space-x-1.5 cursor-pointer shadow-sm"
                   >
@@ -3270,8 +3285,8 @@ export default function MerchantDashboard() {
                                       </span>
                                     )}
                                     <span className={`font-black px-3.5 py-1.5 rounded-xl text-sm whitespace-nowrap shadow-sm ${ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT'
-                                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
-                                        : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20'
+                                      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                                      : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20'
                                       }`}>
                                       {ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' ? '🛍️ TAKEOUT' : `Table ${ord.tableNumber}`}
                                     </span>
@@ -3297,22 +3312,32 @@ export default function MerchantDashboard() {
                               <td className="py-4 pr-2">
                                 <select
                                   value={ord.orderStatus}
+                                  disabled={ord.orderStatus === 'served'}
                                   onChange={(e) => {
                                     e.stopPropagation();
                                     updateOrderStatus(ord.orderId, e.target.value);
                                   }}
-                                  className={`text-xs font-black uppercase px-3.5 py-2.5 rounded-xl border focus:outline-none cursor-pointer w-fit shadow-sm tracking-wide ${ord.orderStatus === 'placed'
-                                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                                  className={`text-xs font-black uppercase px-3.5 py-2.5 rounded-xl border focus:outline-none w-fit shadow-sm tracking-wide ${ord.orderStatus === 'placed'
+                                    ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30 cursor-pointer'
                                     : ord.orderStatus === 'cooking'
-                                      ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30'
+                                      ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30 cursor-pointer'
                                       : ord.orderStatus === 'served'
-                                        ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30'
-                                        : 'bg-muted-foreground/15 text-muted-foreground border-border/30'
+                                        ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/30 cursor-not-allowed opacity-90'
+                                        : ord.orderStatus === 'cancelled'
+                                          ? 'bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/30'
+                                          : 'bg-muted-foreground/15 text-muted-foreground border-border/30'
                                     }`}
                                 >
-                                  <option value="placed" className="bg-card text-foreground">Placed</option>
-                                  <option value="cooking" className="bg-card text-foreground">Accepted & Preparing</option>
+                                  {ord.orderStatus === 'placed' && (
+                                    <option value="placed" className="bg-card text-foreground">Placed</option>
+                                  )}
+                                  {(ord.orderStatus === 'placed' || ord.orderStatus === 'cooking') && (
+                                    <option value="cooking" className="bg-card text-foreground">Accepted & Preparing</option>
+                                  )}
                                   <option value="served" className="bg-card text-foreground">Delivered / Served</option>
+                                  {ord.orderStatus === 'placed' && (
+                                    <option value="cancelled" className="bg-card text-foreground text-red-500 font-bold">Cancelled / Rejected</option>
+                                  )}
                                 </select>
                               </td>
                               <td className="py-4 pr-2">
@@ -3376,10 +3401,10 @@ export default function MerchantDashboard() {
                                         e.stopPropagation();
                                         setConfirmingPaymentOrderId(ord.orderId);
                                       }}
-                                      className="bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-xs font-black uppercase px-4 py-2.5 rounded-xl flex items-center justify-center cursor-pointer transition-all shadow-sm w-fit shrink-0 tracking-wide"
+                                      className="bg-red-500/15 hover:bg-red-500/25 text-red-600 dark:text-red-400 border border-red-500/30 text-xs font-black uppercase px-4 py-2.5 rounded-xl flex items-center justify-center cursor-pointer transition-all shadow-sm w-fit shrink-0 tracking-wide"
                                     >
-                                      <span className="w-2 h-2 rounded-full bg-emerald-500 mr-2 shrink-0 animate-pulse" />
-                                      Payment Received
+                                      <span className="w-2 h-2 rounded-full bg-red-500 mr-2 shrink-0 animate-ping" />
+                                      Mark As Received
                                     </button>
                                   ) : (
                                     <button
@@ -3387,7 +3412,6 @@ export default function MerchantDashboard() {
                                         e.stopPropagation();
                                         closeTable(ord.orderId);
                                       }}
-
                                       className={`text-xs font-black uppercase px-4 py-2.5 rounded-xl border transition-all shadow-sm shrink-0 w-fit cursor-pointer tracking-wide ${ord.orderStatus === 'served'
                                         ? 'bg-destructive/10 hover:bg-destructive/20 text-destructive border-destructive/20'
                                         : 'bg-muted text-muted-foreground border-border/40 opacity-50 cursor-not-allowed'
@@ -3903,7 +3927,7 @@ export default function MerchantDashboard() {
             {/* Header row */}
             <div className="flex justify-between items-center mb-6 border-b border-border/40 pb-3 flex-wrap gap-4">
               <h1 className="font-outfit text-2xl font-black text-foreground uppercase tracking-wider">
-                PAYMENT
+                PAYMENT HISTORY
               </h1>
 
               <div className="flex items-center space-x-3">
@@ -3959,8 +3983,8 @@ export default function MerchantDashboard() {
                       <tr key={ord.orderId} className="hover:bg-muted/10">
                         <td className="py-4 pr-2">
                           <span className={`font-black px-3.5 py-1.5 rounded-xl text-sm whitespace-nowrap shadow-sm ${ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT'
-                              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
-                              : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20'
+                            ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                            : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20'
                             }`}>
                             {ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' ? '🛍️ TAKEOUT' : `Table ${ord.tableNumber}`}
                           </span>
@@ -4671,135 +4695,7 @@ export default function MerchantDashboard() {
         </div>
       )}
 
-      {/* Configure Taxes Modal */}
-      {showGlobalTaxesModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in exclude-uppercase">
-          <div className="bg-card border border-border/40 rounded-2xl w-full max-w-md p-6 relative flex flex-col space-y-4 shadow-2xl">
-            <button
-              onClick={() => setShowGlobalTaxesModal(false)}
-              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer transition-colors p-1"
-            >
-              <X className="w-5 h-5" />
-            </button>
 
-            <div>
-              <h3 className="font-outfit text-md font-bold text-foreground">Configure Taxes</h3>
-              <p className="text-[11px] text-muted-foreground mt-1 font-semibold">Set default taxes & charges applied to all menu items unless overridden.</p>
-            </div>
-
-            {globalTaxesError && (
-              <div className="p-2.5 bg-destructive/10 border border-destructive/20 rounded-xl text-[10px] text-destructive font-bold text-left animate-fade-in">
-                {globalTaxesError}
-              </div>
-            )}
-
-            <div className="space-y-4 text-xs font-semibold text-foreground">
-              <div className="space-y-2">
-                <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">GST</label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="e.g. 5"
-                    value={globalGstInput}
-                    onChange={(e) => {
-                      const cleaned = e.target.value.replace(/[^\d.]/g, '');
-                      setGlobalGstInput(cleaned);
-                    }}
-                    className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">%</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">Other Charges</label>
-                <div className="flex border border-input rounded-xl bg-background dark:bg-black/20 focus-within:ring-1 focus-within:ring-primary overflow-hidden">
-                  <input
-                    type="text"
-                    placeholder="e.g. 10"
-                    value={globalOtherChargesInput}
-                    onChange={(e) => {
-                      const cleaned = e.target.value.replace(/[^\d.]/g, '');
-                      setGlobalOtherChargesInput(cleaned);
-                    }}
-                    className="flex-1 bg-transparent px-4 py-3 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
-                  />
-                  <select
-                    value={globalOtherChargesType}
-                    onChange={(e) => setGlobalOtherChargesType(e.target.value)}
-                    className="bg-muted border-l border-input px-3 py-3 text-xs font-bold text-foreground focus:outline-none cursor-pointer outline-none"
-                  >
-                    <option value="percentage">%</option>
-                    <option value="rupees">₹</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex space-x-3 pt-2">
-                <button
-                  onClick={async () => {
-                    const gstVal = globalGstInput !== '' ? parseFloat(globalGstInput) : 0;
-                    const otherVal = globalOtherChargesInput !== '' ? parseFloat(globalOtherChargesInput) : 0;
-                    if (isNaN(gstVal) || gstVal < 0) {
-                      setGlobalTaxesError('Please enter a valid GST percentage');
-                      return;
-                    }
-                    if (isNaN(otherVal) || otherVal < 0) {
-                      setGlobalTaxesError('Please enter a valid other charges value');
-                      return;
-                    }
-
-                    setGlobalTaxesError('');
-                    setGlobalTaxesLoading(true);
-                    try {
-                      await axios.post(`${API_BASE}/host/menu`, {
-                        hostApplicationId: selectedOutletId,
-                        items: menuItems,
-                        categories: menuCategories,
-                        defaultGst: gstVal,
-                        defaultOtherCharges: otherVal,
-                        defaultOtherChargesType: globalOtherChargesType
-                      }, {
-                        headers: { Authorization: `Bearer ${token}` }
-                      });
-                      setMenuDefaultGst(gstVal);
-                      setMenuDefaultOtherCharges(otherVal);
-                      setMenuDefaultOtherChargesType(globalOtherChargesType);
-
-                      originalMenuRef.current = JSON.stringify({
-                        items: menuItems,
-                        categories: menuCategories,
-                        defaultGst: gstVal,
-                        defaultOtherCharges: otherVal,
-                        defaultOtherChargesType: globalOtherChargesType
-                      });
-                      setMenuItems([...menuItems]);
-
-                      showToast('Global taxes applied successfully!', 'success');
-                      setShowGlobalTaxesModal(false);
-                    } catch (err) {
-                      setGlobalTaxesError(err.response?.data?.message || 'Failed to apply global taxes.');
-                    } finally {
-                      setGlobalTaxesLoading(false);
-                    }
-                  }}
-                  disabled={globalTaxesLoading}
-                  className="flex-1 bg-primary hover:bg-primary/95 text-primary-foreground font-bold py-3.5 rounded-xl transition-all text-xs cursor-pointer shadow-lg flex items-center justify-center"
-                >
-                  {globalTaxesLoading ? 'Applying...' : 'Apply to All'}
-                </button>
-                <button
-                  onClick={() => setShowGlobalTaxesModal(false)}
-                  disabled={globalTaxesLoading}
-                  className="px-5 border border-border/40 hover:bg-muted text-foreground font-bold rounded-xl transition-all text-xs cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
 
 
@@ -5139,57 +5035,63 @@ export default function MerchantDashboard() {
       {/* Unified Thermal Receipt Rendering Helper */}
       {(() => {
         // Shared thermal receipt template for 100% parity across Configure Bill & Print Bill modals
-        globalThis.__renderUnifiedThermalReceipt = (config, order, isPrintMode = false) => {
+        globalThis.__renderUnifiedThermalReceipt = (config, order, isPrintMode = false, overrideWidthFormat = null) => {
           const items = order?.items || [
             { name: 'Empire Special Porota', quantity: 2, price: 4900 },
             { name: 'Green Salad', quantity: 1, price: 7500 },
             { name: 'Chilly Chicken (Half)', quantity: 1, price: 26000 }
           ];
 
+          const widthFormat = overrideWidthFormat || config?.billWidthFormat || '80mm';
+          const is58mm = widthFormat === '58mm';
+
           const subtotalPaise = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
           const subtotal = subtotalPaise > 0 ? (subtotalPaise / 100) : ((order?.totalAmount || 0) / 100);
-          const cgstRate = config.cgstPercent !== undefined ? config.cgstPercent : 2.5;
-          const sgstRate = config.sgstPercent !== undefined ? config.sgstPercent : 2.5;
-          const cgstAmt = subtotal * (cgstRate / 100);
-          const sgstAmt = subtotal * (sgstRate / 100);
-          const totalGstAmt = cgstAmt + sgstAmt;
+          const cgstRate = Math.max(0, typeof config?.cgstPercent === 'number' ? config.cgstPercent : (parseFloat(config?.cgstPercent) || 0));
+          const sgstRate = Math.max(0, typeof config?.sgstPercent === 'number' ? config.sgstPercent : (parseFloat(config?.sgstPercent) || 0));
+          const cgstAmt = Math.max(0, subtotal * (cgstRate / 100));
+          const sgstAmt = Math.max(0, subtotal * (sgstRate / 100));
+          const totalGstAmt = Math.max(0, cgstAmt + sgstAmt);
           const rawTotal = subtotal + totalGstAmt;
-          const roundedTotal = config.enableAutoRoundOff !== false ? Math.round(rawTotal) : rawTotal;
-          const roundOff = (roundedTotal - rawTotal).toFixed(2);
+          const roundedTotal = config?.enableAutoRoundOff !== false ? Math.round(rawTotal) : rawTotal;
+          const roundOffDiff = roundedTotal - rawTotal;
+          const absRoundOff = Math.abs(roundOffDiff);
+          const roundOffStr = absRoundOff < 0.001 ? "0.00" : (roundOffDiff > 0 ? `+${roundOffDiff.toFixed(2)}` : roundOffDiff.toFixed(2));
           const paymentTypeStr = order?.paymentType || order?.paymentMethod || (order?.paymentStatus === 'completed' ? 'ONLINE / UPI' : 'CASH / PENDING');
           const orderTypeStr = (order?.orderType === 'TAKEOUT' || order?.tableNumber === 'TAKEOUT') ? 'TAKEOUT' : 'DINE';
-          const orderIdStr = order?.orderId ? order.orderId : `${config.billPrefix || 'INV'}-873`;
+          const orderIdStr = order?.orderId ? order.orderId : `${config?.billPrefix || 'INV'}-873`;
           const tableNumStr = order?.tableNumber !== undefined ? order.tableNumber : '17';
           const dateStr = order?.createdAt ? new Date(order.createdAt).toISOString().slice(0, 10) : '2026-08-01';
 
           return (
             <div
               id={isPrintMode ? "thermal-print-area" : undefined}
-              className="bg-white text-black font-mono text-[9.5px] p-2 rounded-xl shadow-xl border border-gray-300 w-full max-w-[270px] mx-auto leading-tight select-none"
+              className={`bg-white text-black font-mono shadow-xl border border-gray-300 mx-auto leading-tight select-none ${is58mm ? 'text-[8px] p-1.5 w-full max-w-[195px] rounded-lg' : 'text-[9.5px] p-2 w-full max-w-[270px] rounded-xl'
+                }`}
             >
-              {/* Logo Section - Bigger logo, zero bottom margin */}
-              {config.logoUrl && (
+              {/* Logo Section */}
+              {config?.logoUrl && (
                 <div className="flex justify-center mb-0">
                   <img
                     src={resolveMediaUrl(config.logoUrl)}
                     alt="Logo"
-                    className="max-h-16 w-auto max-w-[220px] object-contain mx-auto"
+                    className={is58mm ? "max-h-12 w-auto max-w-[150px] object-contain mx-auto" : "max-h-16 w-auto max-w-[220px] object-contain mx-auto"}
                   />
                 </div>
               )}
 
               {/* Ultra-Compact Venue Header */}
               <div className="text-center leading-tight space-y-0 pt-0.5">
-                <h3 className="font-semibold text-xl uppercase tracking-tight">{config.restaurantName}</h3>
-                {config.addressLine1 && <p className="text-[9px] text-gray-800">{config.addressLine1}</p>}
-                {(config.addressLine2 || config.cityZip) && (
-                  <p className="text-[9px] text-gray-800">
+                <h3 className={`font-semibold uppercase tracking-tight ${is58mm ? 'text-base' : 'text-xl'}`}>{config?.restaurantName}</h3>
+                {config?.addressLine1 && <p className={is58mm ? "text-[7.5px] text-gray-800" : "text-[9px] text-gray-800"}>{config.addressLine1}</p>}
+                {(config?.addressLine2 || config?.cityZip) && (
+                  <p className={is58mm ? "text-[7.5px] text-gray-800" : "text-[9px] text-gray-800"}>
                     {[config.addressLine2, config.cityZip].filter(Boolean).join(', ')}
                   </p>
                 )}
-                {config.gstin && <p className="text-[9px] font-bold text-gray-900">GSTIN: {config.gstin}</p>}
-                {(config.fssaiNo || config.phone) && (
-                  <p className="text-[8.5px] text-gray-800">
+                {config?.gstin && <p className={is58mm ? "text-[7.5px] font-bold text-gray-900" : "text-[9px] font-bold text-gray-900"}>GSTIN: {config.gstin}</p>}
+                {(config?.fssaiNo || config?.phone) && (
+                  <p className={is58mm ? "text-[7px] text-gray-800" : "text-[8.5px] text-gray-800"}>
                     {[config.fssaiNo ? `FSSAI: ${config.fssaiNo}` : null, config.phone ? `Ph: ${config.phone}` : null].filter(Boolean).join(' | ')}
                   </p>
                 )}
@@ -5198,7 +5100,7 @@ export default function MerchantDashboard() {
               <div className="border-b border-dashed border-gray-400 my-1" />
 
               {/* Order Metadata */}
-              <div className="space-y-0.5 text-[9px]">
+              <div className={`space-y-0.5 ${is58mm ? 'text-[7.5px]' : 'text-[9px]'}`}>
                 <div className="flex justify-between font-bold text-gray-900">
                   <span>ORDER #: {orderIdStr}</span>
                   <span>TYPE: {orderTypeStr}</span>
@@ -5206,19 +5108,19 @@ export default function MerchantDashboard() {
                 {orderTypeStr !== 'TAKEOUT' && (
                   <div>TABLE NUMBER: {tableNumStr}</div>
                 )}
-                <div className="flex justify-between text-[8.5px] text-gray-700">
-                  <span>BILL NO: {config.billPrefix || 'INV'}-{order?.orderId ? order.orderId.slice(-5) : '13658'}</span>
+                <div className={`flex justify-between text-gray-700 ${is58mm ? 'text-[7px]' : 'text-[8.5px]'}`}>
+                  <span>BILL NO: {config?.billPrefix || 'INV'}-{order?.orderId ? order.orderId.slice(-5) : '13658'}</span>
                   <span>DATE: {dateStr}</span>
                 </div>
-                {config.showKOTNumbers && <div>KOTS: 101, 102</div>}
-                {config.showCovers && <div>COVERS: 1</div>}
+                {config?.showKOTNumbers && <div>KOTS: 101, 102</div>}
+                {config?.showCovers && <div>COVERS: 1</div>}
                 <div className="font-bold text-gray-900">PAYMENT TYPE: {paymentTypeStr}</div>
               </div>
 
-              {config.showCustomerDetail && (
+              {config?.showCustomerDetail && (
                 <>
                   <div className="border-b border-dashed border-gray-400 my-1" />
-                  <div className="text-[9px] space-y-0.5">
+                  <div className={`space-y-0.5 ${is58mm ? 'text-[7.5px]' : 'text-[9px]'}`}>
                     <div className="font-bold text-gray-800">CUSTOMER DETAIL</div>
                     <div>NAME: {order?.customer?.name || 'Bhaira'}</div>
                     <div>MOBILE: {order?.customer?.mobile || '6369087866'}</div>
@@ -5228,22 +5130,22 @@ export default function MerchantDashboard() {
 
               <div className="border-b border-dashed border-gray-400 my-1" />
 
-              {/* Item Table Header - Fluid Automatic Widths */}
-              <div className="flex justify-between font-bold text-[9px] border-b border-gray-300 pb-0.5">
-                <span className="w-5 shrink-0">NO.</span>
+              {/* Item Table Header */}
+              <div className={`flex justify-between font-bold border-b border-gray-300 pb-0.5 ${is58mm ? 'text-[8px]' : 'text-[9px]'}`}>
+                <span className={is58mm ? "w-4 shrink-0" : "w-5 shrink-0"}>NO.</span>
                 <span className="flex-1 px-1">ITEM</span>
-                <span className="w-7 text-center shrink-0">QTY</span>
-                <span className="w-12 text-right shrink-0">AMT</span>
+                <span className={is58mm ? "w-5 text-center shrink-0" : "w-7 text-center shrink-0"}>QTY</span>
+                <span className={is58mm ? "w-10 text-right shrink-0" : "w-12 text-right shrink-0"}>AMT</span>
               </div>
 
-              {/* Items - Fluid Automatic Widths (Takes full available width automatically) */}
-              <div className="space-y-0.5 my-1 text-[9px]">
+              {/* Items */}
+              <div className={`space-y-0.5 my-1 ${is58mm ? 'text-[8px]' : 'text-[9px]'}`}>
                 {items.map((item, idx) => (
                   <div key={idx} className="flex justify-between items-start leading-tight">
-                    <span className="w-5 shrink-0 font-semibold">{idx + 1}.</span>
-                    <span className="flex-1 px-1 font-bold text-gray-900 break-words pr-1">{item.name}</span>
-                    <span className="w-7 text-center shrink-0">{item.quantity}</span>
-                    <span className="w-12 text-right shrink-0">{((item.price * item.quantity) / 100).toFixed(2)}</span>
+                    <span className={is58mm ? "w-4 shrink-0 font-semibold" : "w-5 shrink-0 font-semibold"}>{idx + 1}.</span>
+                    <span className="flex-1 px-1 font-bold text-gray-900 break-words pr-0.5">{item.name}</span>
+                    <span className={is58mm ? "w-5 text-center shrink-0" : "w-7 text-center shrink-0"}>{item.quantity}</span>
+                    <span className={is58mm ? "w-10 text-right shrink-0" : "w-12 text-right shrink-0"}>{((item.price * item.quantity) / 100).toFixed(2)}</span>
                   </div>
                 ))}
               </div>
@@ -5251,7 +5153,7 @@ export default function MerchantDashboard() {
               <div className="border-b border-dashed border-gray-400 my-1" />
 
               {/* Item Summary & Totals */}
-              <div className="space-y-0.5 text-[9px]">
+              <div className={`space-y-0.5 ${is58mm ? 'text-[8px]' : 'text-[9px]'}`}>
                 <div className="flex justify-between font-bold text-gray-900">
                   <span>SUB TOTAL:</span>
                   <span>{subtotal.toFixed(2)}</span>
@@ -5260,53 +5162,55 @@ export default function MerchantDashboard() {
                   <span>GST ({(cgstRate + sgstRate).toFixed(1)}%):</span>
                   <span>{totalGstAmt.toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between text-gray-700 pl-2 text-[8.5px]">
-                  <span>CGST @ {cgstRate}%:</span>
-                  <span>{cgstAmt.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-gray-700 pl-2 text-[8.5px]">
-                  <span>SGST @ {sgstRate}%:</span>
-                  <span>{sgstAmt.toFixed(2)}</span>
-                </div>
-                {config.enableAutoRoundOff !== false && (
-                  <div className="flex justify-between text-gray-800">
-                    <span>ROUND OFF:</span>
-                    <span>{roundOff}</span>
+                {cgstRate > 0 && (
+                  <div className={`flex justify-between text-gray-700 pl-2 ${is58mm ? 'text-[7px]' : 'text-[8.5px]'}`}>
+                    <span>CGST @ {cgstRate}%:</span>
+                    <span>{cgstAmt.toFixed(2)}</span>
                   </div>
                 )}
-                <div className="flex justify-between font-extrabold text-[11px] pt-1 border-t-2 border-black text-gray-900 mt-1">
+                {sgstRate > 0 && (
+                  <div className={`flex justify-between text-gray-700 pl-2 ${is58mm ? 'text-[7px]' : 'text-[8.5px]'}`}>
+                    <span>SGST @ {sgstRate}%:</span>
+                    <span>{sgstAmt.toFixed(2)}</span>
+                  </div>
+                )}
+                {config?.enableAutoRoundOff !== false && absRoundOff >= 0.001 && (
+                  <div className="flex justify-between text-gray-800">
+                    <span>ROUND OFF:</span>
+                    <span>{roundOffStr}</span>
+                  </div>
+                )}
+                <div className={`flex justify-between font-extrabold pt-1 border-t-2 border-black text-gray-900 mt-1 ${is58mm ? 'text-[9.5px]' : 'text-[11px]'}`}>
                   <span>TOTAL INVOICE VALUE:</span>
                   <span>{roundedTotal}</span>
                 </div>
               </div>
 
-              <div className="flex justify-between">
+              <div className={`flex justify-between ${is58mm ? 'text-[7.5px]' : 'text-[9px]'}`}>
                 <span>UNIQUE ITEMS: {items.length}</span>
                 <span>TOTAL QTY: {items.reduce((sum, i) => sum + i.quantity, 0)}</span>
               </div>
 
-              {/* Ultra-Compact Footer (Left: Thank you & contact info, Right: QR Code) */}
+              {/* Ultra-Compact Footer */}
               <div className="pt-2 mt-1 border-t border-dashed border-gray-400 flex items-center justify-between">
-                {/* Left Side: Greetings & Contact info */}
-                <div className="flex-1 text-left pr-2 space-y-0.5">
-                  <p className="font-extrabold text-[10.5px] text-gray-900 leading-tight uppercase">{config.thankYouMessage || 'THANK YOU & VISIT AGAIN !'}</p>
+                <div className="flex-1 text-left pr-1.5 space-y-0.5">
+                  <p className={`font-extrabold text-gray-900 leading-tight uppercase ${is58mm ? 'text-[9px]' : 'text-[10.5px]'}`}>{config?.thankYouMessage || 'THANK YOU & VISIT AGAIN !'}</p>
 
-                  {config.showPoweredBy !== false && (
-                    <p className="text-[6.5px] text-gray-500 font-light uppercase">POWERED BY - DIGIADS</p>
+                  {config?.showPoweredBy !== false && (config?.customWatermark !== undefined ? config.customWatermark : 'POWERED BY - DIGIADS') !== '' && (
+                    <p className={`text-gray-500 font-light uppercase ${is58mm ? 'text-[5.5px]' : 'text-[6.5px]'}`}>{config.customWatermark || 'POWERED BY - DIGIADS'}</p>
                   )}
 
-                  {config.crmContactPhone && (
-                    <p className="text-[9px] text-gray-800 font-semibold uppercase">CRM {config.crmContactName || ''}: {config.crmContactPhone}</p>
+                  {config?.crmContactPhone && (
+                    <p className={`text-gray-800 font-semibold uppercase ${is58mm ? 'text-[7.5px]' : 'text-[9px]'}`}>CRM {config.crmContactName || ''}: {config.crmContactPhone}</p>
                   )}
-                  {config.deliveryPhone && <p className="text-[9px] text-gray-800 font-semibold uppercase">HOME DELIVERY: {config.deliveryPhone}</p>}
+                  {config?.deliveryPhone && <p className={`text-gray-800 font-semibold uppercase ${is58mm ? 'text-[7.5px]' : 'text-[9px]'}`}>HOME DELIVERY: {config.deliveryPhone}</p>}
                 </div>
 
-                {/* Right Side: QR Code Image */}
-                {config.qrImageUrl && (
-                  <div className="shrink-0 flex flex-col items-center text-center pl-2">
-                    <img src={resolveMediaUrl(config.qrImageUrl)} alt="QR Code" className="w-16 h-16 object-contain p-0.5 border bg-white rounded shadow-sm" />
+                {config?.qrImageUrl && (
+                  <div className="shrink-0 flex flex-col items-center text-center pl-1">
+                    <img src={resolveMediaUrl(config.qrImageUrl)} alt="QR Code" className={is58mm ? "w-12 h-12 object-contain p-0.5 border bg-white rounded shadow-sm" : "w-16 h-16 object-contain p-0.5 border bg-white rounded shadow-sm"} />
                     {config.qrCaption ? (
-                      <p className="text-[8px] mt-0.5 font-bold text-gray-700 max-w-[85px] leading-tight uppercase">{config.qrCaption}</p>
+                      <p className={`mt-0.5 font-bold text-gray-700 leading-tight uppercase ${is58mm ? 'text-[7px] max-w-[65px]' : 'text-[8px] max-w-[85px]'}`}>{config.qrCaption}</p>
                     ) : null}
                   </div>
                 )}
@@ -5513,20 +5417,52 @@ export default function MerchantDashboard() {
                     <div className="space-y-1">
                       <label className="text-[10px] text-muted-foreground font-bold uppercase">CGST (%)</label>
                       <input
-                        type="number"
-                        step="0.1"
-                        value={billForm.cgstPercent}
-                        onChange={(e) => setBillForm({ ...billForm, cgstPercent: parseFloat(e.target.value) || 0 })}
+                        type="text"
+                        inputMode="decimal"
+                        value={billForm.cgstPercent !== undefined && billForm.cgstPercent !== null ? billForm.cgstPercent : ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '') {
+                            setBillForm(prev => ({ ...prev, cgstPercent: '' }));
+                            return;
+                          }
+                          const cleaned = val.replace(/[^0-9.]/g, '');
+                          const parts = cleaned.split('.');
+                          const validVal = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
+                          setBillForm(prev => ({ ...prev, cgstPercent: validVal }));
+                        }}
+                        onBlur={() => {
+                          if (billForm.cgstPercent === '' || isNaN(parseFloat(billForm.cgstPercent)) || parseFloat(billForm.cgstPercent) < 0) {
+                            setBillForm(prev => ({ ...prev, cgstPercent: 0 }));
+                          }
+                        }}
+                        placeholder="0"
                         className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
                       />
                     </div>
                     <div className="space-y-1">
                       <label className="text-[10px] text-muted-foreground font-bold uppercase">SGST (%)</label>
                       <input
-                        type="number"
-                        step="0.1"
-                        value={billForm.sgstPercent}
-                        onChange={(e) => setBillForm({ ...billForm, sgstPercent: parseFloat(e.target.value) || 0 })}
+                        type="text"
+                        inputMode="decimal"
+                        value={billForm.sgstPercent !== undefined && billForm.sgstPercent !== null ? billForm.sgstPercent : ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '') {
+                            setBillForm(prev => ({ ...prev, sgstPercent: '' }));
+                            return;
+                          }
+                          const cleaned = val.replace(/[^0-9.]/g, '');
+                          const parts = cleaned.split('.');
+                          const validVal = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned;
+                          setBillForm(prev => ({ ...prev, sgstPercent: validVal }));
+                        }}
+                        onBlur={() => {
+                          if (billForm.sgstPercent === '' || isNaN(parseFloat(billForm.sgstPercent)) || parseFloat(billForm.sgstPercent) < 0) {
+                            setBillForm(prev => ({ ...prev, sgstPercent: 0 }));
+                          }
+                        }}
+                        placeholder="0"
                         className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
                       />
                     </div>
@@ -5540,6 +5476,32 @@ export default function MerchantDashboard() {
                     />
                     <span>Auto Round Off Paise (e.g. ₹817.05 + taxes → ₹858)</span>
                   </label>
+
+                  <div className="space-y-1.5 pt-2 border-t border-border/40">
+                    <label className="text-[10px] text-muted-foreground font-bold uppercase block">Default Thermal Paper Format</label>
+                    <div className="flex items-center space-x-2 bg-background p-1 rounded-xl border border-input">
+                      <button
+                        type="button"
+                        onClick={() => setBillForm({ ...billForm, billWidthFormat: '80mm' })}
+                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${billForm.billWidthFormat !== '58mm'
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                      >
+                        3-Inch (80mm POS)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBillForm({ ...billForm, billWidthFormat: '58mm' })}
+                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${billForm.billWidthFormat === '58mm'
+                          ? 'bg-primary text-primary-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                          }`}
+                      >
+                        2-Inch (58mm Portable Roll)
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* 4. Custom Footer & QR Code Upload */}
@@ -5625,16 +5587,6 @@ export default function MerchantDashboard() {
                       className="w-full bg-background border border-input rounded-xl px-3 py-2 text-xs font-semibold text-foreground focus:outline-none"
                     />
                   </div>
-
-                  <label className="flex items-center space-x-2 cursor-pointer text-xs font-semibold">
-                    <input
-                      type="checkbox"
-                      checked={billForm.showPoweredBy}
-                      onChange={(e) => setBillForm({ ...billForm, showPoweredBy: e.target.checked })}
-                      className="w-4 h-4 accent-primary rounded cursor-pointer"
-                    />
-                    <span>Show "Powered by - DigiAds" Branding</span>
-                  </label>
                 </div>
               </div>
 
@@ -5704,10 +5656,34 @@ export default function MerchantDashboard() {
                 </button>
               </div>
 
+              {/* Paper Format Segmented Tab Bar */}
+              <div className="flex items-center justify-center space-x-2 bg-muted/40 p-1 rounded-xl border border-border/40 my-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedPrintWidth('80mm')}
+                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-1.5 ${selectedPrintWidth === '80mm'
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                >
+                  <span>📄 3-Inch (80mm POS)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPrintWidth('58mm')}
+                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-1.5 ${selectedPrintWidth === '58mm'
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                >
+                  <span>📄 2-Inch (58mm Portable)</span>
+                </button>
+              </div>
+
               {/* On-screen Preview */}
               <div className="py-2 flex justify-center">
                 {globalThis.__renderUnifiedThermalReceipt
-                  ? globalThis.__renderUnifiedThermalReceipt(activeBillConfig || billForm, printingOrder, false)
+                  ? globalThis.__renderUnifiedThermalReceipt(activeBillConfig || billForm, printingOrder, false, selectedPrintWidth)
                   : null
                 }
               </div>
@@ -5720,12 +5696,12 @@ export default function MerchantDashboard() {
               <style>{`
                 @media print {
                   @page {
-                    size: 72mm auto;
+                    size: ${selectedPrintWidth === '58mm' ? '58mm' : '80mm'} auto;
                     margin: 0mm !important;
                   }
                   html, body {
-                    width: 72mm !important;
-                    max-width: 72mm !important;
+                    width: ${selectedPrintWidth === '58mm' ? '58mm' : '80mm'} !important;
+                    max-width: ${selectedPrintWidth === '58mm' ? '58mm' : '80mm'} !important;
                     height: auto !important;
                     margin: 0 !important;
                     padding: 0 !important;
@@ -5742,21 +5718,21 @@ export default function MerchantDashboard() {
                     position: absolute !important;
                     left: 0 !important;
                     top: 0 !important;
-                    width: 72mm !important;
-                    max-width: 72mm !important;
+                    width: ${selectedPrintWidth === '58mm' ? '58mm' : '80mm'} !important;
+                    max-width: ${selectedPrintWidth === '58mm' ? '58mm' : '80mm'} !important;
                     margin: 0 !important;
                     padding: 0 !important;
                     background: #ffffff !important;
                     color: #000000 !important;
                   }
                   #thermal-print-area {
-                    width: 72mm !important;
-                    max-width: 72mm !important;
+                    width: ${selectedPrintWidth === '58mm' ? '58mm' : '80mm'} !important;
+                    max-width: ${selectedPrintWidth === '58mm' ? '58mm' : '80mm'} !important;
                     margin: 0 !important;
-                    padding: 2mm 1mm !important;
+                    padding: ${selectedPrintWidth === '58mm' ? '1.5mm 1mm' : '2mm 1mm'} !important;
                     box-sizing: border-box !important;
                     font-family: 'Courier New', Courier, monospace !important;
-                    font-size: 10px !important;
+                    font-size: ${selectedPrintWidth === '58mm' ? '8px' : '10px'} !important;
                     line-height: 1.15 !important;
                     color: #000000 !important;
                     background: #ffffff !important;
@@ -5770,7 +5746,7 @@ export default function MerchantDashboard() {
                 }
               `}</style>
               {globalThis.__renderUnifiedThermalReceipt
-                ? globalThis.__renderUnifiedThermalReceipt(activeBillConfig || billForm, printingOrder, true)
+                ? globalThis.__renderUnifiedThermalReceipt(activeBillConfig || billForm, printingOrder, true, selectedPrintWidth)
                 : null
               }
             </div>,
@@ -5810,8 +5786,8 @@ export default function MerchantDashboard() {
                       type="button"
                       onClick={() => setTakeoutActiveCategory(cat)}
                       className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${takeoutActiveCategory.toLowerCase() === cat.toLowerCase()
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted'
                         }`}
                     >
                       {cat}

@@ -47,7 +47,7 @@ async function startFastify() {
   await fastify.register(cors, {
     origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Filename', 'x-filename', 'Accept', 'Origin'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Filename', 'x-filename', 'x-host-application-id', 'X-Host-Application-Id', 'x-device-id', 'X-Device-Id', 'x-requested-with', 'Accept', 'Origin'],
     credentials: true
   });
 
@@ -556,9 +556,38 @@ const deviceServiceHandlers = {
       }).sort({ createdAt: -1 });
       if (activeOrder) {
         const app = await HostApplication.findById(activeOrder.hostApplicationId);
+        const billConfig = app?.billConfig || {};
+        const cgstPct = typeof billConfig.cgstPercent === 'number' ? billConfig.cgstPercent : 2.5;
+        const sgstPct = typeof billConfig.sgstPercent === 'number' ? billConfig.sgstPercent : 2.5;
+        const enableAutoRoundOff = billConfig.enableAutoRoundOff !== false;
+
+        let subtotalPaise = 0;
+        const itemsBreakdown = [];
+        if (activeOrder.items && activeOrder.items.length > 0) {
+          for (const item of activeOrder.items) {
+            const lineTotal = (item.price || 0) * (item.quantity || 1);
+            subtotalPaise += lineTotal;
+            itemsBreakdown.push({
+              name: item.name,
+              quantity: item.quantity,
+              price: item.price
+            });
+          }
+        }
+
+        const cgstPaise = Math.round(subtotalPaise * (cgstPct / 100));
+        const sgstPaise = Math.round(subtotalPaise * (sgstPct / 100));
+        const gstPaise = cgstPaise + sgstPaise;
+        const rawTotalPaise = subtotalPaise + gstPaise;
+
+        let finalAmountPaise = activeOrder.totalAmount || rawTotalPaise;
+        if (activeOrder.tableStatus === 'close_table') {
+          finalAmountPaise = enableAutoRoundOff ? Math.round(rawTotalPaise / 100) * 100 : rawTotalPaise;
+        }
+
         const upiId = app?.upiId || '';
         const payeeName = app?.payeeName || '';
-        const amountRs = (activeOrder.totalAmount / 100).toFixed(2);
+        const amountRs = (finalAmountPaise / 100).toFixed(2);
         let upiUrl = '';
         if (upiId) {
           upiUrl = `upi://pay?pa=${upiId}`;
@@ -567,75 +596,24 @@ const deviceServiceHandlers = {
           }
           upiUrl += `&am=${amountRs}&cu=INR`;
         }
+
         const sessionPayload = {
           status: activeOrder.tableStatus,
           orderId: activeOrder.orderId,
-          amount: activeOrder.totalAmount,
+          amount: finalAmountPaise,
+          subtotal: subtotalPaise,
+          cgst: cgstPaise,
+          sgst: sgstPaise,
+          gst: gstPaise,
+          otherCharges: 0,
           upiUrl,
           orderStatus: activeOrder.orderStatus,
           tableNumber: activeOrder.tableNumber,
           waiterCallStatus: activeOrder.waiterCallStatus || 'none',
           waiterCallCount: activeOrder.waiterCallCount || 0,
           waiterCallOption: activeOrder.waiterCallOption || '',
-          items: (activeOrder.items || []).map(i => ({
-            name: i.name,
-            quantity: i.quantity,
-            price: i.price
-          }))
+          items: itemsBreakdown
         };
-
-        if (activeOrder.tableStatus === 'close_table' && activeOrder.items && activeOrder.items.length > 0) {
-          const Menu = require('./models/Menu');
-          const menu = await Menu.findOne({ hostApplicationId: activeOrder.hostApplicationId });
-          if (menu) {
-            const itemsBreakdown = [];
-            let subtotalPaise = 0;
-            let gstPaise = 0;
-            let otherChargesPaise = 0;
-
-            const defaultGst = menu.defaultGst || 0;
-            const defaultOtherCharges = menu.defaultOtherCharges || 0;
-            const defaultOtherChargesType = menu.defaultOtherChargesType || 'percentage';
-
-            for (const item of activeOrder.items) {
-              const menuItem = menu.items.find(i => i.itemId === item.itemId);
-              const gstPercent = (menuItem && menuItem.gst !== undefined && menuItem.gst !== null) 
-                ? menuItem.gst 
-                : defaultGst;
-              const otherChargesVal = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
-                ? menuItem.otherCharges 
-                : defaultOtherCharges;
-              const otherChargesType = (menuItem && menuItem.otherCharges !== undefined && menuItem.otherCharges !== null) 
-                ? (menuItem.otherChargesType || 'percentage')
-                : defaultOtherChargesType;
-
-              const itemSubtotal = item.price * item.quantity;
-              const itemGst = Math.round(itemSubtotal * (gstPercent / 100));
-              
-              let itemOther = 0;
-              if (otherChargesType === 'rupees') {
-                itemOther = Math.round(item.quantity * (otherChargesVal * 100));
-              } else {
-                itemOther = Math.round(itemSubtotal * (otherChargesVal / 100));
-              }
-
-              subtotalPaise += itemSubtotal;
-              gstPaise += itemGst;
-              otherChargesPaise += itemOther;
-
-              itemsBreakdown.push({
-                name: item.name,
-                quantity: item.quantity,
-                price: item.price
-              });
-            }
-
-            sessionPayload.items = itemsBreakdown;
-            sessionPayload.subtotal = subtotalPaise;
-            sessionPayload.gst = gstPaise;
-            sessionPayload.otherCharges = otherChargesPaise;
-          }
-        }
 
         tableSessionJson = JSON.stringify(sessionPayload);
       } else {

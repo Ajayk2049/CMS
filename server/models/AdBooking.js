@@ -101,6 +101,16 @@ const AdBookingSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  transcodeStatus: {
+    type: String,
+    enum: ['pending', 'processing', 'completed', 'failed'],
+    default: 'completed',
+    index: true
+  },
+  transcodedMediaUrl: {
+    type: String,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

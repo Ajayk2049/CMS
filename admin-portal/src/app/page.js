@@ -215,6 +215,47 @@ export default function AdminPortal() {
     }
   };
 
+  // Watermark management state
+  const [showWatermarkModal, setShowWatermarkModal] = useState(false);
+  const [watermarkForm, setWatermarkForm] = useState({
+    showPoweredBy: true,
+    customWatermark: 'POWERED BY - DIGIADS'
+  });
+  const [watermarkSaving, setWatermarkSaving] = useState(false);
+
+  const openWatermarkModal = (hostApp) => {
+    setSelectedHostApp(hostApp);
+    const billConfig = hostApp?.billConfig || {};
+    setWatermarkForm({
+      showPoweredBy: billConfig.showPoweredBy !== false,
+      customWatermark: billConfig.customWatermark !== undefined ? billConfig.customWatermark : 'POWERED BY - DIGIADS'
+    });
+    setShowWatermarkModal(true);
+  };
+
+  const handleSaveWatermark = async () => {
+    if (!selectedHostApp || !token) return;
+    setWatermarkSaving(true);
+    try {
+      const res = await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/watermark`, watermarkForm, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data && res.data.success) {
+        showNotification('Venue watermark updated successfully!', 'success');
+        setShowWatermarkModal(false);
+        if (res.data.data) {
+          setSelectedHostApp(res.data.data);
+        }
+        fetchHosts(token);
+      }
+    } catch (err) {
+      console.error('handleSaveWatermark error:', err.message);
+      showNotification(err.response?.data?.message || 'Failed to update watermark', 'error');
+    } finally {
+      setWatermarkSaving(false);
+    }
+  };
+
   // Sub-tabs & Filter states
   const [deviceSubTab, setDeviceSubTab] = useState('tablet');
   const [selectedVenueFilter, setSelectedVenueFilter] = useState('all');
@@ -254,6 +295,156 @@ export default function AdminPortal() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [readNotifications, setReadNotifications] = useState([]);
   const notificationsRef = useRef(null);
+
+  // Global Search Dropdown State & Ref
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const searchRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (searchRef.current && !searchRef.current.contains(event.target)) {
+        setShowSearchDropdown(false);
+      }
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target)) {
+        setShowNotifications(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Comprehensive Multi-Entity Global Search Computation
+  const searchResults = React.useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return { venues: [], campaigns: [], users: [], devices: [], requests: [], total: 0 };
+
+    const match = (field) => {
+      if (field === null || field === undefined) return false;
+      return String(field).toLowerCase().includes(query);
+    };
+
+    // 1. Search Venues / Host Applications
+    const matchedVenues = hosts.filter(h =>
+      match(h._id) ||
+      match(h.outletName) ||
+      match(h.applicantName) ||
+      match(h.addressLine1) ||
+      match(h.addressLine2) ||
+      match(h.city) ||
+      match(h.state) ||
+      match(h.zipCode) ||
+      match(h.phone) ||
+      match(h.email) ||
+      match(h.status) ||
+      match(h.billConfig?.billPrefix) ||
+      match(h.billConfig?.gstin) ||
+      match(h.billConfig?.fssaiNo) ||
+      match(h.userId?.name) ||
+      match(h.userId?.phone) ||
+      match(h.userId?.email)
+    );
+
+    // 2. Search Ad Bookings & Campaigns
+    const matchedCampaigns = campaigns.filter(c =>
+      match(c._id) ||
+      match(c.campaignName) ||
+      match(c.approvalStatus) ||
+      match(c.paymentStatus) ||
+      match(c.mediaType) ||
+      match(c.targetScreenType) ||
+      match(c.paymentDetails?.txnId) ||
+      match(c.paymentDetails?.merchantTransactionId) ||
+      match(c.userId?.name) ||
+      match(c.userId?.phone) ||
+      match(c.userId?.email) ||
+      (Array.isArray(c.targetOutlets) && c.targetOutlets.some(o => match(o) || match(o?.outletName)))
+    );
+
+    // 3. Search Users (Hosts, Advertisers, Admins)
+    const matchedUsers = users.filter(u =>
+      match(u._id) ||
+      match(u.name) ||
+      match(u.phone) ||
+      match(u.email) ||
+      match(u.role) ||
+      (Array.isArray(u.roles) && u.roles.some(r => match(r)))
+    );
+
+    // 4. Search Devices
+    const matchedDevices = devices.filter(d =>
+      match(d._id) ||
+      match(d.deviceId) ||
+      match(d.deviceType) ||
+      match(d.status) ||
+      match(d.hostApplicationId?.outletName) ||
+      match(d.hostApplicationId?._id)
+    );
+
+    // 5. Search Device Hardware Requests
+    const matchedRequests = deviceRequests.filter(r =>
+      match(r._id) ||
+      match(r.deviceType) ||
+      match(r.status) ||
+      match(r.reason) ||
+      match(r.hostApplicationId?.outletName) ||
+      match(r.userId?.name) ||
+      match(r.userId?.phone)
+    );
+
+    const total = matchedVenues.length + matchedCampaigns.length + matchedUsers.length + matchedDevices.length + matchedRequests.length;
+
+    return {
+      venues: matchedVenues,
+      campaigns: matchedCampaigns,
+      users: matchedUsers,
+      devices: matchedDevices,
+      requests: matchedRequests,
+      total
+    };
+  }, [searchQuery, hosts, campaigns, users, devices, deviceRequests]);
+
+  const handleSelectSearchResult = (type, item) => {
+    setSearchQuery('');
+    setShowSearchDropdown(false);
+
+    if (type === 'venue') {
+      setSelectedHostApp(item);
+      setShowVenueModal(true);
+      setActiveTab('venues');
+    } else if (type === 'campaign') {
+      setSelectedCampaign(item);
+      setShowDetailsModal(true);
+      if (item.approvalStatus === 'pending') {
+        setActiveTab('requests');
+        setRequestsSubTab('campaigns');
+      } else {
+        setActiveTab('campaigns');
+      }
+    } else if (type === 'user') {
+      if (item.role === 'advertiser' || (Array.isArray(item.roles) && item.roles.includes('advertiser'))) {
+        setSelectedAdvertiserUser(item);
+        setShowAdvertiserAdsModal(true);
+        setActiveTab('advertisers');
+      } else {
+        setEditingUser(item);
+        setUserForm({
+          name: item.name || '',
+          phone: item.phone || '',
+          email: item.email || '',
+          roles: Array.isArray(item.roles) ? item.roles : (item.role ? [item.role] : ['host'])
+        });
+        setActiveTab('users');
+      }
+    } else if (type === 'device') {
+      setActiveTab('devices');
+      setDeviceSubTab(item.deviceType || 'tablet');
+    } else if (type === 'request') {
+      setSelectedDeviceReq(item);
+      setShowDeviceReqModal(true);
+      setActiveTab('requests');
+      setRequestsSubTab('devices');
+    }
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -1187,20 +1378,202 @@ export default function AdminPortal() {
           </div>
 
           <div className="flex items-center space-x-4">
-            {/* Global Search Bar */}
-            <div className="relative hidden sm:block w-64 lg:w-80">
+            {/* Global Search Bar with Live Categorized Results Dropdown */}
+            <div className="relative hidden sm:block w-72 lg:w-96" ref={searchRef}>
               <Search className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search venues, advertisers, phone, IDs..."
+                placeholder="Search venues, campaigns, users, devices, phone, IDs..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-background border border-border rounded-xl pl-9 pr-4 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                onFocus={() => setShowSearchDropdown(true)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setShowSearchDropdown(true);
+                }}
+                className="w-full bg-background border border-border rounded-xl pl-9 pr-8 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
               />
               {searchQuery && (
-                <button onClick={() => setSearchQuery('')} className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground cursor-pointer" aria-label="Clear search">
+                <button
+                  onClick={() => {
+                    setSearchQuery('');
+                    setShowSearchDropdown(false);
+                  }}
+                  className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground cursor-pointer"
+                  aria-label="Clear search"
+                >
                   <X className="w-3.5 h-3.5" />
                 </button>
+              )}
+
+              {/* Floating Categorized Search Results Dropdown */}
+              {showSearchDropdown && searchQuery.trim() !== '' && (
+                <div className="absolute left-0 right-0 mt-2 bg-card border border-border rounded-2xl shadow-2xl overflow-hidden z-[100] max-h-[75vh] overflow-y-auto animate-fade-in divide-y divide-border/40">
+                  <div className="p-3 bg-muted/20 flex justify-between items-center text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                    <span>Search Results ({searchResults.total})</span>
+                    <span>Click any item to inspect</span>
+                  </div>
+
+                  {searchResults.total === 0 ? (
+                    <div className="p-6 text-center text-xs text-muted-foreground font-semibold">
+                      No matching venues, campaigns, users, or devices found for "{searchQuery}".
+                    </div>
+                  ) : (
+                    <>
+                      {/* 1. Venues */}
+                      {searchResults.venues.length > 0 && (
+                        <div className="p-2 space-y-1">
+                          <div className="text-[10px] font-black uppercase text-purple-500 px-2 py-1 flex items-center space-x-1.5">
+                            <Building className="w-3 h-3" />
+                            <span>Venues ({searchResults.venues.length})</span>
+                          </div>
+                          {searchResults.venues.slice(0, 5).map(v => (
+                            <div
+                              key={v._id}
+                              onClick={() => handleSelectSearchResult('venue', v)}
+                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
+                            >
+                              <div className="flex justify-between items-center">
+                                <span className="font-bold text-xs text-foreground">{v.outletName || 'Unnamed Venue'}</span>
+                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                  v.status === 'approved' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'
+                                }`}>
+                                  {v.status}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
+                                <span>Contact: {v.phone || v.applicantName || 'N/A'}</span>
+                                <span>•</span>
+                                <span>{v.city || v.state || 'India'}</span>
+                                <span>•</span>
+                                <span className="font-mono">{v._id.slice(-6)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 2. Ad Campaigns */}
+                      {searchResults.campaigns.length > 0 && (
+                        <div className="p-2 space-y-1">
+                          <div className="text-[10px] font-black uppercase text-blue-500 px-2 py-1 flex items-center space-x-1.5">
+                            <Tv className="w-3 h-3" />
+                            <span>Ad Campaigns ({searchResults.campaigns.length})</span>
+                          </div>
+                          {searchResults.campaigns.slice(0, 5).map(c => (
+                            <div
+                              key={c._id}
+                              onClick={() => handleSelectSearchResult('campaign', c)}
+                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
+                            >
+                              <div className="flex justify-between items-center">
+                                <span className="font-bold text-xs text-foreground">{c.campaignName || 'Campaign'}</span>
+                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                  c.approvalStatus === 'approved' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'
+                                }`}>
+                                  {c.approvalStatus}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
+                                <span>Advertiser: {c.userId?.name || c.userId?.phone || 'N/A'}</span>
+                                <span>•</span>
+                                <span>Txn: {c.paymentDetails?.txnId ? c.paymentDetails.txnId.slice(-8) : 'N/A'}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 3. Platform Users */}
+                      {searchResults.users.length > 0 && (
+                        <div className="p-2 space-y-1">
+                          <div className="text-[10px] font-black uppercase text-emerald-500 px-2 py-1 flex items-center space-x-1.5">
+                            <UserCheck className="w-3 h-3" />
+                            <span>Users ({searchResults.users.length})</span>
+                          </div>
+                          {searchResults.users.slice(0, 5).map(u => (
+                            <div
+                              key={u._id}
+                              onClick={() => handleSelectSearchResult('user', u)}
+                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
+                            >
+                              <div className="flex justify-between items-center">
+                                <span className="font-bold text-xs text-foreground">{u.name || 'Platform User'}</span>
+                                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                  {u.role || (Array.isArray(u.roles) ? u.roles.join(', ') : 'user')}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
+                                <span>Phone: {u.phone}</span>
+                                <span>•</span>
+                                <span>{u.email || 'No Email'}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 4. Kiosk Devices */}
+                      {searchResults.devices.length > 0 && (
+                        <div className="p-2 space-y-1">
+                          <div className="text-[10px] font-black uppercase text-indigo-500 px-2 py-1 flex items-center space-x-1.5">
+                            <Smartphone className="w-3 h-3" />
+                            <span>Kiosk Devices ({searchResults.devices.length})</span>
+                          </div>
+                          {searchResults.devices.slice(0, 5).map(d => (
+                            <div
+                              key={d._id}
+                              onClick={() => handleSelectSearchResult('device', d)}
+                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
+                            >
+                              <div className="flex justify-between items-center">
+                                <span className="font-mono font-bold text-xs text-foreground">{d.deviceId}</span>
+                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                  d.status === 'online' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'
+                                }`}>
+                                  {d.status}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
+                                <span>Type: {d.deviceType}</span>
+                                <span>•</span>
+                                <span>Outlet: {d.hostApplicationId?.outletName || 'Unassigned'}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 5. Hardware Requests */}
+                      {searchResults.requests.length > 0 && (
+                        <div className="p-2 space-y-1">
+                          <div className="text-[10px] font-black uppercase text-amber-500 px-2 py-1 flex items-center space-x-1.5">
+                            <FileCheck className="w-3 h-3" />
+                            <span>Device Requests ({searchResults.requests.length})</span>
+                          </div>
+                          {searchResults.requests.slice(0, 5).map(r => (
+                            <div
+                              key={r._id}
+                              onClick={() => handleSelectSearchResult('request', r)}
+                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
+                            >
+                              <div className="flex justify-between items-center">
+                                <span className="font-bold text-xs text-foreground">{r.hostApplicationId?.outletName || 'Venue Request'}</span>
+                                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500">
+                                  {r.status}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
+                                <span>Requested: {r.deviceType}</span>
+                                <span>•</span>
+                                <span>{r.userId?.name || r.userId?.phone || 'N/A'}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               )}
             </div>
 
@@ -3067,13 +3440,22 @@ export default function AdminPortal() {
                   </button>
                 </div>
               ) : (
-                <button
-                  onClick={() => openQuotaModal(selectedHostApp)}
-                  className="px-4 py-2.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 font-bold rounded-xl transition-colors duration-200 flex items-center space-x-1.5 cursor-pointer text-xs"
-                >
-                  <Settings className="w-4 h-4" />
-                  <span>Customize Quotas</span>
-                </button>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => openQuotaModal(selectedHostApp)}
+                    className="px-4 py-2.5 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 font-bold rounded-xl transition-colors duration-200 flex items-center space-x-1.5 cursor-pointer text-xs"
+                  >
+                    <Settings className="w-4 h-4" />
+                    <span>Customize Quotas</span>
+                  </button>
+                  <button
+                    onClick={() => openWatermarkModal(selectedHostApp)}
+                    className="px-4 py-2.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-600 dark:text-purple-400 border border-purple-500/20 font-bold rounded-xl transition-colors duration-200 flex items-center space-x-1.5 cursor-pointer text-xs"
+                  >
+                    <Sliders className="w-4 h-4" />
+                    <span>Manage Watermark</span>
+                  </button>
+                </div>
               )}
 
               <button
@@ -3084,6 +3466,89 @@ export default function AdminPortal() {
                 className="px-4 py-2.5 bg-muted hover:bg-muted/80 text-foreground font-bold rounded-xl transition-colors cursor-pointer border border-border text-xs ml-auto"
               >
                 Close Modal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Platform Admin Manage Watermark Modal */}
+      {showWatermarkModal && selectedHostApp && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-card border border-border w-full max-w-lg rounded-[32px] shadow-2xl p-6 relative space-y-6">
+            <div className="flex justify-between items-center border-b border-border/50 pb-4">
+              <div>
+                <span className="text-[9px] font-black uppercase bg-purple-500/10 text-purple-600 dark:text-purple-400 px-2.5 py-1 rounded-full border border-purple-500/20">
+                  Platform Admin Control
+                </span>
+                <h3 className="font-outfit text-lg font-bold text-foreground mt-1">Manage Watermark for {selectedHostApp.outletName}</h3>
+                <p className="text-xs text-muted-foreground font-semibold mt-0.5">Control "Powered by DigiAds" footer text per venue (support white-label premium hosts)</p>
+              </div>
+              <button
+                onClick={() => setShowWatermarkModal(false)}
+                className="p-1.5 hover:bg-muted border border-border rounded-lg text-muted-foreground transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs font-semibold">
+              <label className="flex items-center space-x-3 cursor-pointer p-3 bg-muted/20 border border-border/40 rounded-xl">
+                <input
+                  type="checkbox"
+                  checked={watermarkForm.showPoweredBy}
+                  onChange={(e) => setWatermarkForm({ ...watermarkForm, showPoweredBy: e.target.checked })}
+                  className="w-4 h-4 accent-purple-600 rounded cursor-pointer"
+                />
+                <div>
+                  <span className="font-bold text-foreground block text-xs">Enable Receipt Watermark</span>
+                  <span className="text-[10px] text-muted-foreground">Uncheck only for verified premium white-label venues</span>
+                </div>
+              </label>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] text-muted-foreground font-bold uppercase block">Watermark Text Line</label>
+                <input
+                  type="text"
+                  value={watermarkForm.customWatermark}
+                  onChange={(e) => setWatermarkForm({ ...watermarkForm, customWatermark: e.target.value })}
+                  placeholder="POWERED BY - DIGIADS"
+                  disabled={!watermarkForm.showPoweredBy}
+                  className="w-full bg-background border border-input rounded-xl px-3 py-2.5 text-xs font-semibold text-foreground focus:outline-none disabled:opacity-50"
+                />
+              </div>
+
+              <div className="flex space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setWatermarkForm({ showPoweredBy: true, customWatermark: 'POWERED BY - DIGIADS' })}
+                  className="px-3 py-1.5 bg-muted hover:bg-muted/80 text-foreground font-bold rounded-lg text-[10px] uppercase border border-border/40 cursor-pointer"
+                >
+                  Preset: Default DigiAds
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWatermarkForm({ showPoweredBy: false, customWatermark: '' })}
+                  className="px-3 py-1.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-600 dark:text-purple-400 font-bold rounded-lg text-[10px] uppercase border border-purple-500/20 cursor-pointer"
+                >
+                  Preset: White-Label (Blank)
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-4 border-t border-border/50">
+              <button
+                onClick={() => setShowWatermarkModal(false)}
+                className="px-4 py-2 bg-muted hover:bg-muted/80 text-foreground font-bold rounded-xl text-xs cursor-pointer border border-border"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveWatermark}
+                disabled={watermarkSaving}
+                className="px-5 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs cursor-pointer shadow-md transition-all flex items-center space-x-1.5"
+              >
+                {watermarkSaving ? 'Saving...' : 'Save Watermark Settings'}
               </button>
             </div>
           </div>

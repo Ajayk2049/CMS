@@ -200,6 +200,7 @@ class _MenuCard extends StatelessWidget {
               children: [
                 Positioned.fill(
                   child: CachedMenuImage(
+                    key: ValueKey(item.itemId),
                     cache: imageCache,
                     itemId: item.itemId,
                     imageUrl: item.imageUrl,

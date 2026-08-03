@@ -18,7 +18,10 @@ class VideoQueueService {
    * Add a transcoding job to the sequential processing queue.
    */
   enqueueJob(jobData) {
-    this.queue.push(jobData);
+    this.queue.push({
+      ...jobData,
+      enqueuedAt: Date.now()
+    });
     console.log(`[VideoQueueService] Enqueued video transcoding job for booking ${jobData.bookingId}. Queue length: ${this.queue.length}`);
     this.processNext();
   }
@@ -37,28 +40,48 @@ class VideoQueueService {
 
     console.log(`[VideoQueueService] Starting sequential processing for booking: ${bookingId}...`);
 
-    try {
+      // 1. Enforce 5-10 second ingestion hold delay for file handles to settle
+      const elapsed = Date.now() - (currentJob.enqueuedAt || Date.now());
+      const waitTime = Math.max(0, 7500 - elapsed);
+      if (waitTime > 0) {
+        console.log(`[VideoQueueService] Holding temp file for settling (${Math.round(waitTime / 1000)}s delay)...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+
+      let transcodeSuccess = false;
+
       // Execute FFmpeg transcoding with CPU throttling options (-threads 1)
-      await new Promise((resolve, reject) => {
-        ffmpeg(tempPath)
-          .videoCodec('libx264')
-          .size(resolution)
-          .fps(30)
-          .outputOptions([
-            '-threads 1',            // Throttles execution to 1 thread to keep CPU usage <40%
-            '-profile:v baseline',   // Android Baseline 3.1 compatibility
-            '-level 3.1',
-            '-pix_fmt yuv420p',
-            '-crf 26',               // Optimal compression quality and minimal file size
-            '-preset faster',
-            '-movflags +faststart'   // Crucial for fast streaming
-          ])
-          .audioCodec('aac')
-          .audioChannels(2)
-          .on('end', resolve)
-          .on('error', reject)
-          .save(filePath);
-      });
+      try {
+        await new Promise((resolve, reject) => {
+          ffmpeg(tempPath)
+            .videoCodec('libx264')
+            .size(resolution)
+            .fps(30)
+            .outputOptions([
+              '-threads 1',            // Throttles execution to 1 thread to keep CPU usage <40%
+              '-profile:v baseline',   // Android Baseline 3.1 compatibility
+              '-level 3.1',
+              '-pix_fmt yuv420p',
+              '-crf 26',               // Optimal compression quality and minimal file size
+              '-preset faster',
+              '-movflags +faststart'   // Crucial for fast streaming
+            ])
+            .audioCodec('aac')
+            .audioChannels(2)
+            .on('end', () => resolve(true))
+            .on('error', (err) => reject(err))
+            .save(filePath);
+        });
+        transcodeSuccess = fs.existsSync(filePath) && fs.statSync(filePath).size > 0;
+      } catch (ffErr) {
+        console.warn(`[VideoQueueService] FFmpeg warning (${ffErr.message}). Using raw file fallback.`);
+      }
+
+      // Fallback to direct raw file copy if FFmpeg fails or is missing
+      if (!transcodeSuccess && fs.existsSync(tempPath)) {
+        fs.copyFileSync(tempPath, filePath);
+        transcodeSuccess = true;
+      }
 
       // Safely delete temporary staging file upon completion
       if (fs.existsSync(tempPath)) {

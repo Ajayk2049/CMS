@@ -966,6 +966,44 @@ class AdminController {
     }
   }
 
+  /**
+   * Platform Admin updates watermark settings for a venue application
+   */
+  async updateVenueWatermark(req, res) {
+    const { hostApplicationId } = req.params;
+    const { showPoweredBy, customWatermark } = req.body || {};
+
+    try {
+      const app = await HostApplication.findById(hostApplicationId);
+      if (!app) {
+        return res.status(404).send({ success: false, message: 'Venue application not found' });
+      }
+
+      if (!app.billConfig) {
+        app.billConfig = {};
+      }
+
+      if (showPoweredBy !== undefined) {
+        app.billConfig.showPoweredBy = Boolean(showPoweredBy);
+      }
+
+      if (customWatermark !== undefined) {
+        app.billConfig.customWatermark = String(customWatermark);
+      }
+
+      app.markModified('billConfig');
+      await app.save();
+
+      return res.status(200).send({
+        success: true,
+        message: 'Venue watermark updated successfully',
+        data: app
+      });
+    } catch (error) {
+      console.error('updateVenueWatermark Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to update venue watermark: ' + error.message });
+    }
+  }
 }
 
 module.exports = new AdminController();

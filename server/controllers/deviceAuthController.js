@@ -126,6 +126,8 @@ class DeviceAuthController {
         promoQuery.slotType = { $in: ['video', 'image'] };
       }
 
+      promoQuery.transcodeStatus = { $ne: 'processing' };
+
       const venuePromos = await VenuePromo.find(promoQuery).sort({ slotType: 1, slotIndex: 1 });
       const promoAds = venuePromos.map(p => {
         const resolvedUrl = resolveMediaUrl(p.mediaUrl, req.headers.host);

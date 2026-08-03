@@ -190,6 +190,8 @@ const HostApplicationSchema = new mongoose.Schema({
     crmContactPhone: { type: String, default: '' },
     deliveryPhone: { type: String, default: '' },
     showPoweredBy: { type: Boolean, default: true },
+    customWatermark: { type: String, default: 'POWERED BY - DIGIADS' },
+    billWidthFormat: { type: String, enum: ['80mm', '58mm'], default: '80mm' },
     qrImageUrl: { type: String, default: '' },
     qrCaption: { type: String, default: 'Scan QR to pay / provide feedback' }
   },

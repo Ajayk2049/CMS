@@ -13,6 +13,8 @@ class PaymentQrWidget extends StatelessWidget {
   final VoidCallback? onUnlock;
   final List<dynamic>? items;
   final int? subtotalPaise;
+  final int? cgstPaise;
+  final int? sgstPaise;
   final int? gstPaise;
   final int? otherChargesPaise;
 
@@ -25,20 +27,37 @@ class PaymentQrWidget extends StatelessWidget {
     this.onUnlock,
     this.items,
     this.subtotalPaise,
+    this.cgstPaise,
+    this.sgstPaise,
     this.gstPaise,
     this.otherChargesPaise,
   });
 
   String get _amountFormatted => (amountPaise / 100).toStringAsFixed(2);
 
-  Widget _buildBreakdownRow(String label, int amountPaise) {
+  Widget _buildBreakdownRow(String label, int amountPaise, {bool isBold = false}) {
+    final amountFormatted = (amountPaise / 100).toStringAsFixed(2);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: Colors.white54, fontSize: 13)),
-          Text('₹${(amountPaise / 100).toStringAsFixed(2)}', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+          Text(
+            label,
+            style: TextStyle(
+              color: isBold ? Colors.white : Colors.white54,
+              fontSize: isBold ? 14 : 13,
+              fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+          Text(
+            '₹$amountFormatted',
+            style: TextStyle(
+              color: isBold ? Colors.white : Colors.white70,
+              fontSize: isBold ? 15 : 13,
+              fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
         ],
       ),
     );
@@ -201,11 +220,18 @@ class PaymentQrWidget extends StatelessWidget {
                               child: Divider(color: Colors.white10, height: 1),
                             ),
                             if (subtotalPaise != null && subtotalPaise! > 0)
-                              _buildBreakdownRow('Subtotal', subtotalPaise!),
-                            if (gstPaise != null && gstPaise! > 0)
+                              _buildBreakdownRow('Food Subtotal', subtotalPaise!),
+                            if (cgstPaise != null && cgstPaise! > 0)
+                              _buildBreakdownRow('CGST @ 2.5%', cgstPaise!),
+                            if (sgstPaise != null && sgstPaise! > 0)
+                              _buildBreakdownRow('SGST @ 2.5%', sgstPaise!),
+                            if ((cgstPaise == null || cgstPaise == 0) && (sgstPaise == null || sgstPaise == 0) && gstPaise != null && gstPaise! > 0)
                               _buildBreakdownRow('GST', gstPaise!),
-                            if (otherChargesPaise != null && otherChargesPaise! > 0)
-                              _buildBreakdownRow('Other Charges', otherChargesPaise!),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 4),
+                              child: Divider(color: Colors.white10, height: 1),
+                            ),
+                            _buildBreakdownRow('Total Amount', amountPaise, isBold: true),
                           ],
                         ),
                       ),

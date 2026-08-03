@@ -121,6 +121,7 @@ function registerRoutes(fastify, options, done) {
     adminRoutes.get('/admin/hosts', adminController.getHostApplications);
     adminRoutes.post('/admin/hosts/review', adminController.reviewHostApplication);
     adminRoutes.put('/admin/hosts/:hostApplicationId/status', adminController.updateHostStatusAndQuotas.bind(adminController));
+    adminRoutes.put('/admin/hosts/:hostApplicationId/watermark', adminController.updateVenueWatermark.bind(adminController));
     adminRoutes.get('/admin/bookings', adminController.getAdBookings);
     adminRoutes.post('/admin/bookings/review', adminController.reviewAdBooking);
     adminRoutes.put('/admin/bookings/revoke/:bookingId', adminController.revokeBooking);

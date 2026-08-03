@@ -96,6 +96,7 @@ class _KioskScreenState extends State<KioskScreen> {
 
   // ── Timers ──
   Timer? _inactivityTimer;
+  Timer? _cancelledVanishTimer;
 
   // ── Ad scheduling & frequency ──
   List<String> _masterAdPlaylist = [];
@@ -748,6 +749,25 @@ class _KioskScreenState extends State<KioskScreen> {
         }
       }
 
+      final orderStatus = (data['orderStatus'] as String? ?? '').toLowerCase();
+
+      if (orderStatus == 'cancelled') {
+        // Show status bar as "Order Cancelled" for 3 seconds, then vanish. NO Thank You popup.
+        setState(() {
+          _tableSession = data;
+        });
+        _cancelledVanishTimer?.cancel();
+        _cancelledVanishTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted) {
+            setState(() {
+              _tableSession = null;
+              _showOrderDetailsModal = false;
+            });
+          }
+        });
+        return;
+      }
+
       if (status == 'close_table') {
         _adPlayer.pause();
         _cancelIdleTimer();
@@ -760,7 +780,15 @@ class _KioskScreenState extends State<KioskScreen> {
           _tableSession = data;
         });
       } else if (status == 'completed') {
+        final prevOrderStatus = (_tableSession?['orderStatus'] as String? ?? '').toLowerCase();
         final prevAmount = _tableSession?['amount'] as int? ?? 0;
+
+        if (prevOrderStatus == 'cancelled') {
+          // If previous state was cancelled, just clear without Thank You popup
+          setState(() => _tableSession = null);
+          return;
+        }
+
         setState(() => _tableSession = null);
         
         if (prevAmount > 0) {
@@ -919,6 +947,7 @@ class _KioskScreenState extends State<KioskScreen> {
     _inactivityTimer?.cancel();
     _backOnlineTimer?.cancel();
     _waiterVanishTimer?.cancel();
+    _cancelledVanishTimer?.cancel();
     _passwordController.dispose();
     _adPlayer.dispose();
     _adSync.dispose();
@@ -988,6 +1017,8 @@ class _KioskScreenState extends State<KioskScreen> {
           onUnlock: _promptUnlock,
           items: _tableSession!['items'] as List<dynamic>?,
           subtotalPaise: _tableSession!['subtotal'] as int?,
+          cgstPaise: _tableSession!['cgst'] as int?,
+          sgstPaise: _tableSession!['sgst'] as int?,
           gstPaise: _tableSession!['gst'] as int?,
           otherChargesPaise: _tableSession!['otherCharges'] as int?,
         );
