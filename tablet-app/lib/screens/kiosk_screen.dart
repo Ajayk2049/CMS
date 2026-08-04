@@ -60,7 +60,7 @@ class _KioskScreenState extends State<KioskScreen> {
   bool _kioskReady = false;
   bool _isOnline = true;
   String _outletName = '';
-  String _selectedCategory = '';
+  String _selectedCategory = 'Popular';
   late String _tableNumber;
   bool _showWaiterStatus = false;
   String _waiterStatusText = '';
@@ -186,6 +186,7 @@ class _KioskScreenState extends State<KioskScreen> {
       _socket = await WebSocket.connect(wsUrl).timeout(const Duration(seconds: 10));
       _isWsConnected = true;
       debugPrint('[WS] Connected successfully');
+      _markOnline();
 
       _socket!.listen(
         (data) {
@@ -198,6 +199,8 @@ class _KioskScreenState extends State<KioskScreen> {
             } else if (event == 'reload_menu') {
               debugPrint('[WS] Menu update reload request received');
               _fetchMenu();
+            } else if (event == 'pong') {
+              // Heartbeat ack from server
             }
           } catch (e) {
             debugPrint('[WS] Error processing msg: $e');
@@ -205,16 +208,19 @@ class _KioskScreenState extends State<KioskScreen> {
         },
         onError: (err) {
           debugPrint('[WS] Socket error: $err');
+          _markOffline();
           _reconnectWebSocket();
         },
         onDone: () {
           debugPrint('[WS] Socket closed by host');
+          _markOffline();
           _reconnectWebSocket();
         },
         cancelOnError: true,
       );
     } catch (e) {
       debugPrint('[WS] Socket connection failed: $e');
+      _markOffline();
       _reconnectWebSocket();
     }
   }
@@ -239,30 +245,7 @@ class _KioskScreenState extends State<KioskScreen> {
       _markOnline();
     } catch (e) {
       debugPrint('gRPC Device registration failed: $e');
-      _markOffline();
     }
-
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(kHeartbeatInterval, (timer) async {
-      try {
-        final resp = await _deviceClient!.sendHeartbeat(
-            HeartbeatRequest()..deviceId = widget.deviceId,
-            options: _callOptions);
-        if (_heartbeatFailCount > 0) _heartbeatFailCount = 0;
-        _heartbeatSuccessCount++;
-        if (!_isOnline && _heartbeatSuccessCount >= _minHeartbeatSuccessesBeforeOnline) {
-          _markOnline();
-        }
-        _processTableSession(resp.tableSessionJson);
-      } catch (e) {
-        _heartbeatFailCount++;
-        _heartbeatSuccessCount = 0;
-        debugPrint('gRPC Heartbeat failed ($_heartbeatFailCount): $e');
-        if (_heartbeatFailCount >= _maxHeartbeatFailsBeforeOffline) {
-          _markOffline();
-        }
-      }
-    });
   }
 
   void _markOnline() {
@@ -317,7 +300,7 @@ class _KioskScreenState extends State<KioskScreen> {
         setState(() {
           _outletName = response.message; // server's outlet name; may be empty
           if (_selectedCategory.isEmpty && response.items.isNotEmpty) {
-            _selectedCategory = response.items.first.category;
+            _selectedCategory = 'Popular';
           }
         });
         _menu.setItems(response.items);
@@ -352,6 +335,7 @@ class _KioskScreenState extends State<KioskScreen> {
           'category': item.category,
           'imageUrl': item.imageUrl,
           'isAvailable': item.isAvailable,
+          'isPopular': item.isPopular,
         }).toList(),
       };
       await prefs.setString('cachedMenu', jsonEncode(menuJson));
@@ -389,7 +373,8 @@ class _KioskScreenState extends State<KioskScreen> {
           ..price = Int64(data['price'] as int)
           ..category = data['category'] as String
           ..imageUrl = data['imageUrl'] as String? ?? ''
-          ..isAvailable = data['isAvailable'] as bool? ?? true;
+          ..isAvailable = data['isAvailable'] as bool? ?? true
+          ..isPopular = data['isPopular'] as bool? ?? false;
       }).toList();
 
       if (items.isEmpty) return;
@@ -402,7 +387,7 @@ class _KioskScreenState extends State<KioskScreen> {
             _outletName = cachedOutletName;
           }
           if (_selectedCategory.isEmpty) {
-            _selectedCategory = items.first.category;
+            _selectedCategory = 'Popular';
           }
         });
       }
@@ -690,6 +675,7 @@ class _KioskScreenState extends State<KioskScreen> {
     setState(() {
       _isIdle = false;
       _showCart = false;
+      _selectedCategory = 'Popular';
     });
     _adPlayer.pause();
     _resetIdleTimer();
@@ -1457,14 +1443,13 @@ class _KioskScreenState extends State<KioskScreen> {
         _waiterStatusOption = option;
       });
 
-      final req = HeartbeatRequest()
-        ..deviceId = widget.deviceId
-        ..callWaiter = true
-        ..waiterOption = option
-        ..tableNumber = _tableNumber;
-
-      final resp = await _deviceClient!.sendHeartbeat(req, options: _callOptions);
-      _processTableSession(resp.tableSessionJson);
+      if (_socket != null && _isWsConnected) {
+        _socket!.add(jsonEncode({
+          'event': 'call_waiter',
+          'waiterOption': option,
+          'tableNumber': _tableNumber
+        }));
+      }
     } catch (e) {
       debugPrint('Call waiter failed: $e');
       if (mounted) {
@@ -1480,12 +1465,7 @@ class _KioskScreenState extends State<KioskScreen> {
 
   Widget _buildSidebar() {
     const defaultCategoriesOrder = ['Popular', 'Starters', 'Main Course', 'Dessert', 'Beverages'];
-    final categories = <String>[];
-
-    // Always include 'Popular' if any item is popular, or as first default
-    if (_menu.value.items.any((item) => item.isPopular)) {
-      categories.add('Popular');
-    }
+    final categories = <String>['Popular']; // Always include 'Popular' as category #1
 
     for (final cat in ['Starters', 'Main Course', 'Dessert', 'Beverages']) {
       if (_menu.value.items.any((item) => item.category.toLowerCase() == cat.toLowerCase())) {
@@ -1764,17 +1744,22 @@ class _KioskScreenState extends State<KioskScreen> {
           );
         }
 
-        if (_tableSession == null || _tableSession!['status'] != 'active') {
+        if (_tableSession == null) {
           return const SizedBox.shrink();
         }
 
-        final orderStatus = _tableSession!['orderStatus'] as String? ?? 'placed';
-        final amountPaise = _tableSession!['amount'] as int? ?? 0;
-        if (amountPaise == 0) {
+        final orderStatus = (_tableSession!['orderStatus'] as String? ?? 'placed').toLowerCase();
+        final tableStatus = (_tableSession!['status'] as String? ?? '').toLowerCase();
+
+        // Only hide if completed session and NOT a cancelled order being displayed for 3s
+        if (tableStatus == 'completed' && orderStatus != 'cancelled') {
           return const SizedBox.shrink();
         }
+
+        final amountPaise = _tableSession!['amount'] as int? ?? 0;
         final orderId = _tableSession!['orderId'] as String? ?? '';
         final amountFormatted = (amountPaise / 100).toStringAsFixed(2);
+        final bool isCancelled = orderStatus == 'cancelled';
 
         IconData iconData;
         String statusTitle;
@@ -1787,6 +1772,7 @@ class _KioskScreenState extends State<KioskScreen> {
             statusSubtitle = 'Waiting for kitchen confirmation…';
             break;
           case 'confirmed':
+          case 'preparing':
             iconData = Icons.check_circle_outline_rounded;
             statusTitle = 'Order Confirmed';
             statusSubtitle = 'Preparing your food shortly…';
@@ -1827,9 +1813,12 @@ class _KioskScreenState extends State<KioskScreen> {
               child: Container(
                 height: 76,
                 decoration: BoxDecoration(
-                  color: kAccentBlue,
+                  color: isCancelled ? Colors.red.shade700 : kAccentBlue,
                   borderRadius: kFloatingCartBorderRadius,
-                  border: Border.all(color: const Color(0xFF1E1B4B), width: 3.0),
+                  border: Border.all(
+                    color: isCancelled ? Colors.red.shade900 : const Color(0xFF1E1B4B),
+                    width: 3.0,
+                  ),
                   boxShadow: const [
                     BoxShadow(color: Colors.black38, blurRadius: 12, offset: Offset(0, 4)),
                   ],
@@ -1887,21 +1876,22 @@ class _KioskScreenState extends State<KioskScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               Text(
-                                'Total: ₹$amountFormatted',
+                                amountPaise > 0 ? 'Total: ₹$amountFormatted' : 'Order Placed',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w900,
                                   fontSize: 15,
                                   color: Colors.white,
                                 ),
                               ),
-                              Text(
-                                'ID: ${orderId.length > 4 ? "${orderId.substring(0, 4)}..." : orderId}',
-                                style: TextStyle(
-                                  fontSize: 9,
-                                  color: Colors.white.withValues(alpha: 0.75),
-                                  fontFamily: 'monospace',
+                              if (orderId.isNotEmpty)
+                                Text(
+                                  'ID: ${orderId.length > 8 ? "${orderId.substring(0, 8)}..." : orderId}',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: Colors.white.withValues(alpha: 0.75),
+                                    fontFamily: 'monospace',
+                                  ),
                                 ),
-                              ),
                             ],
                           ),
                         ),

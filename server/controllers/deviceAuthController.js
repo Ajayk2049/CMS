@@ -132,7 +132,7 @@ class DeviceAuthController {
       const promoAds = venuePromos.map(p => {
         const resolvedUrl = resolveMediaUrl(p.mediaUrl, req.headers.host);
         return {
-          bookingId: `promo_${p._id}`,
+          bookingId: p.promoId || `VENUE_AD_${p._id.toString().slice(-5).toUpperCase()}`,
           mediaUrl: resolvedUrl,
           mediaUrls: [resolvedUrl],
           frequencyMinutes: 0,

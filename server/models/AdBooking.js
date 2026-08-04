@@ -34,6 +34,11 @@ const AdBookingSchema = new mongoose.Schema({
     enum: ['video', 'image'],
     default: 'video'
   },
+  maxVideoLengthSeconds: {
+    type: Number,
+    enum: [30, 60],
+    default: 30
+  },
   quantity: {
     type: Number,
     required: true,

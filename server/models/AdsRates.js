@@ -16,6 +16,11 @@ const AdsRatesSchema = new mongoose.Schema({
     enum: ['video', 'image'],
     default: 'video'
   },
+  maxVideoLengthSeconds: {
+    type: Number,
+    enum: [30, 60],
+    default: 30
+  },
   durationDays: {
     type: Number,
     required: true,

@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const VenuePromoSchema = new mongoose.Schema({
+  promoId: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
   hostApplicationId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'HostApplication',

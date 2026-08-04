@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const HostApplicationSchema = new mongoose.Schema({
+  venueId: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

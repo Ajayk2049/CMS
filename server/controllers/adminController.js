@@ -35,16 +35,11 @@ function verifyPassword(password, storedPassword) {
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
 }
 
+const { generateUniqueCustomId } = require('../utils/idGenerator');
+
 async function generateDeviceId(prefix) {
-  let deviceId;
-  let exists = true;
-  while (exists) {
-    const randomPart = Math.random().toString(36).substring(2, 7).toUpperCase();
-    deviceId = `DEV-${prefix}-${randomPart}`;
-    const count = await Device.countDocuments({ deviceId });
-    if (count === 0) exists = false;
-  }
-  return deviceId;
+  const pfx = (prefix || '').toUpperCase().includes('SCREEN') ? 'SCR_' : 'TAB_';
+  return await generateUniqueCustomId(Device, 'deviceId', pfx);
 }
 
 class AdminController {
@@ -191,12 +186,19 @@ class AdminController {
   }
 
   /**
-   * Get all ad bookings
+   * Get all ad bookings for platform admin review & management
+   * Strictly filters for paid campaigns where media creative has been uploaded and transcoded/optimized
    */
   async getAdBookings(req, res) {
     const { paymentStatus, approvalStatus } = req.query || {};
-    const query = {};
-    if (paymentStatus) query.paymentStatus = paymentStatus;
+    const query = {
+      // 1. Strict Payment Check: Only completed paid campaigns
+      paymentStatus: paymentStatus || 'completed',
+      // 2. Strict Media Check: Media must be uploaded
+      mediaUrl: { $exists: true, $ne: '' },
+      // 3. Strict Transcode Check: Background media optimization queue must be finished
+      transcodeStatus: { $in: ['completed', null] }
+    };
     if (approvalStatus) query.approvalStatus = approvalStatus;
 
     try {
@@ -236,6 +238,17 @@ class AdminController {
       const booking = await AdBooking.findOne({ bookingId });
       if (!booking) {
         return res.status(404).send({ success: false, message: 'Booking not found' });
+      }
+
+      // Security Check: Block approval/rejection if payment is incomplete or media is not uploaded/transcoded
+      if (booking.paymentStatus !== 'completed') {
+        return res.status(400).send({ success: false, message: 'Cannot review campaign: Payment has not been completed' });
+      }
+      if (!booking.mediaUrl || !booking.mediaUrl.trim()) {
+        return res.status(400).send({ success: false, message: 'Cannot review campaign: Media creative has not been uploaded yet' });
+      }
+      if (booking.transcodeStatus && booking.transcodeStatus !== 'completed') {
+        return res.status(400).send({ success: false, message: 'Cannot review campaign: Media optimization/transcoding is still processing in background' });
       }
 
       if (booking.paymentStatus !== 'completed') {
@@ -311,7 +324,7 @@ class AdminController {
    * Create or Update pricing plans
    */
   async manageAdsRates(req, res) {
-    const { rateId, deviceType, durationDays, frequency, amount } = req.body || {};
+    const { rateId, deviceType, mediaType, maxVideoLengthSeconds, durationDays, frequency, amount } = req.body || {};
 
     if (!rateId || !deviceType || !durationDays || !frequency || amount === undefined) {
       return res.status(400).send({ success: false, message: 'rateId, deviceType, durationDays, frequency, and amount are required' });
@@ -321,10 +334,21 @@ class AdminController {
       return res.status(400).send({ success: false, message: 'Device type must be tablet or screen' });
     }
 
+    const resolvedMediaType = (mediaType || 'video').toLowerCase();
+    const resolvedMaxVideoLength = parseInt(maxVideoLengthSeconds, 10) === 60 ? 60 : 30;
+
     try {
       const rate = await AdsRates.findOneAndUpdate(
         { rateId },
-        { deviceType, durationDays: parseInt(durationDays, 10), frequency, amount: parseInt(amount, 10), updatedAt: Date.now() },
+        { 
+          deviceType, 
+          mediaType: resolvedMediaType,
+          maxVideoLengthSeconds: resolvedMaxVideoLength,
+          durationDays: parseInt(durationDays, 10), 
+          frequency, 
+          amount: parseInt(amount, 10), 
+          updatedAt: Date.now() 
+        },
         { upsert: true, new: true }
       );
 
@@ -807,18 +831,23 @@ class AdminController {
         return res.status(400).send({ success: false, message: 'Only approved bookings can be revoked' });
       }
 
-      // Delete the video file locally
+      // Delete all media files (videos, images, multi-images) locally from disk upon revocation
       let localFilePath = null;
       if (booking.mediaUrl) {
-        const urlParts = booking.mediaUrl.split('/uploads/');
-        if (urlParts.length > 1) {
-          const relativePath = urlParts[1];
-          localFilePath = path.join(__dirname, '..', 'uploads', relativePath);
-          if (fs.existsSync(localFilePath)) {
-            try {
-              fs.unlinkSync(localFilePath);
-            } catch (err) {
-              console.error('Failed to delete media file locally:', err.message);
+        const mediaUrls = booking.mediaUrl.split(',').map(s => s.trim()).filter(Boolean);
+        for (const rawUrl of mediaUrls) {
+          const urlParts = rawUrl.split('/uploads/');
+          if (urlParts.length > 1) {
+            const relativePath = urlParts[1];
+            const targetPath = path.join(__dirname, '..', 'uploads', relativePath);
+            if (fs.existsSync(targetPath)) {
+              try {
+                fs.unlinkSync(targetPath);
+                console.log(`[REVOCATION CLEANUP] Unlinked revoked media file: ${targetPath}`);
+                localFilePath = targetPath;
+              } catch (err) {
+                console.error('Failed to delete revoked media file locally:', err.message);
+              }
             }
           }
         }

@@ -2,6 +2,7 @@ const HostApplication = require('../models/HostApplication');
 const Menu = require('../models/Menu');
 const Device = require('../models/Device');
 const Order = require('../models/Order');
+const { generateUniqueCustomId } = require('../utils/idGenerator');
 
 // Utility to push session update to device via WebSocket
 async function notifyDeviceSessionUpdate(order) {
@@ -176,7 +177,10 @@ class HostController {
         return res.status(400).send({ success: false, message: 'You have already submitted a host application. Only one venue is allowed per account.' });
       }
 
+      const venueId = await generateUniqueCustomId(HostApplication, 'venueId', 'VEN_');
+
       const application = new HostApplication({
+        venueId,
         userId: req.user.uid,
         outletName,
         outletDescription,
@@ -1008,7 +1012,9 @@ class HostController {
       if (!app) return res.status(403).send({ success: false, message: 'Access denied' });
 
       const DeviceRequest = require('../models/DeviceRequest');
+      const requestId = await generateUniqueCustomId(DeviceRequest, 'requestId', 'NEW_HW_');
       const deviceReq = new DeviceRequest({
+        requestId,
         hostApplicationId,
         userId: req.user.uid,
         requestTablet: isRequestingTablet,
@@ -1848,3 +1854,4 @@ class HostController {
 }
 
 module.exports = new HostController();
+module.exports.notifyDeviceSessionUpdate = notifyDeviceSessionUpdate;

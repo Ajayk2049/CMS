@@ -32,5 +32,5 @@ export const config = {
   apiUrl: getApiUrl(),
   wsUrl: getWsUrl(),
   userPortalUrl: getUserPortalUrl(),
-  maxVideoDurationSeconds: parseInt(process.env.NEXT_PUBLIC_MAX_VIDEO_DURATION_SECONDS, 10) || 30,
+  maxVideoDurationSeconds: parseInt(process.env.NEXT_PUBLIC_MAX_VIDEO_DURATION_SECONDS, 10) || 60,
 };

@@ -40,15 +40,18 @@ A highly integrated content management system (CMS) and tabletop ordering platfo
 ## 🚀 Key Features & Components
 
 ### 1. Marketing Landing Page (`/landing-page`)
+
 - Modern, high-performance Next.js landing site configured with Outfit and Inter fonts.
 - Features carousel device mockups, a responsive features grid, and a custom **About Us** page detailing the vision of Aibot Ink.
 
 ### 2. User & Merchant Portal (`/user-portal`)
+
 - **Hosts (Merchants)**: Apply to host Ordering Tablets or screens at their venue, manage digital food menu items (CRUD), and accept/reject orders in real-time.
 - **Advertisers**: Multi-step booking pipeline to target ads at specific States → Cities → Outlets.
 - **OTP Verification**: Indian mobile numbers (+91) receive SMS OTPs via the StartMessaging gateway.
 
 ### 3. Administrator Console (`/admin-portal`)
+
 - **Dashboard**: Features custom SVG trend graphs for daily revenue projections, donut charts for device split distributions, and quick status metrics.
 - **Compact Sidebar**: Lockable, fixed-height sidebar with expandable toggle icons.
 - **Moderation Queue**: Plays paid campaigns inside a client-side `video.js` player with details of targeted screens, allowing quick Approve/Reject decisions.
@@ -58,6 +61,7 @@ A highly integrated content management system (CMS) and tabletop ordering platfo
 - **Support Reports**: Review and resolve case tickets submitted by merchants or advertisers.
 
 ### 4. Hybrid API Server (`/server`)
+
 - **Fastify HTTP REST endpoints** for web portal users, session tokens, and PhonePe callbacks.
 - **Fastify WebSocket endpoints** to stream incoming tabletop orders to restaurant hosts.
 - **gRPC Services** (on port `50051`) for Dart client applications on tablets and screens, handling device registration, telemetry logs, and ad impressions.
@@ -105,6 +109,7 @@ d:/AIBotInk/CMS/
 ## 🛠️ Installation & Getting Started
 
 ### 1. Prerequisites
+
 - [Node.js](https://nodejs.org/) (v18 or higher recommended)
 - [Docker & Docker Compose](https://www.docker.com/)
 - [Flutter SDK](https://docs.flutter.dev/get-started/install) (only for mobile app builds)
@@ -114,6 +119,7 @@ d:/AIBotInk/CMS/
 Automate database provisioning, dependency setups, and builds using target flags (`-m` / `-M`) with the root deployment helpers.
 
 #### On Windows (PowerShell)
+
 ```powershell
 # Setup development databases and run local servers
 .\deploy.ps1 -m development
@@ -125,6 +131,7 @@ Automate database provisioning, dependency setups, and builds using target flags
 ```
 
 #### On Linux / macOS (Shell)
+
 ```bash
 # Make deploy script executable
 chmod +x deploy.sh
@@ -143,11 +150,13 @@ chmod +x deploy.sh
 To run individual elements manually:
 
 #### A. Launch Databases
+
 ```bash
 docker compose up -d
 ```
 
 #### B. Start Backend Server
+
 ```bash
 cd server
 npm install
@@ -155,7 +164,9 @@ npm run dev
 ```
 
 #### C. Start Frontend Portals
+
 Open separate terminals for each app:
+
 ```bash
 # Marketing page
 cd landing-page && npm install && npm run dev
@@ -171,7 +182,8 @@ cd admin-portal && npm install && npm run dev
 
 ## 🛡️ Zero-Hardcoding Policy
 
-No server, portal, database, or API credentials may be hardcoded. 
+No server, portal, database, or API credentials may be hardcoded.
+
 - All environment-specific variables are imported and exported inside the `config.js` of each package.
 - All code modules load environment values solely from the centralized config configuration.
 - Local configuration is loaded from `.env.dev` during `npm run dev`, and `.env.prod` during builds.

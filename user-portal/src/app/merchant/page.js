@@ -691,7 +691,6 @@ export default function MerchantDashboard() {
 
     fetchApplications(storedToken);
     fetchDevices(storedToken);
-    fetchPaymentOrders(storedToken);
     fetchLiveOrders(storedToken);
     setupWebSocket(storedToken);
 
@@ -705,11 +704,8 @@ export default function MerchantDashboard() {
   // Persist Active Tab
   useEffect(() => {
     localStorage.setItem('merchantActiveTab', activeTab);
-    if (activeTab === 'payment' && token) {
-      fetchPaymentOrders(token);
-      if (selectedOutletId) {
-        fetchPaymentConfig(token, selectedOutletId);
-      }
+    if (activeTab === 'payment' && token && selectedOutletId) {
+      fetchPaymentConfig(token, selectedOutletId);
     }
     if ((activeTab === 'promos' || selectedOutletId) && token) {
       fetchHostPromos(selectedOutletId);
@@ -834,43 +830,36 @@ export default function MerchantDashboard() {
     }
   };
 
-  // Fetch payment order history
-  const fetchPaymentOrders = async (authToken) => {
+  // Fetch payment and live order history in a single HTTP call
+  const fetchLiveOrders = async (authToken) => {
+    const activeToken = authToken || token;
+    if (!activeToken) return;
     try {
       const res = await axios.get(`${API_BASE}/host/orders`, {
-        headers: { Authorization: `Bearer ${authToken}` }
+        headers: { Authorization: `Bearer ${activeToken}` }
       });
-      const completed = (res.data.data || []).filter(
+      const allOrders = res.data.data || [];
+      const completed = allOrders.filter(
         ord => ord.paymentStatus === 'completed'
       );
-      setPaymentOrders(completed);
-    } catch (err) {
-      console.error('fetchPaymentOrders Error:', err);
-    }
-  };
-
-  // Fetch live orders (active ones only)
-  const fetchLiveOrders = async (authToken) => {
-    try {
-      const res = await axios.get(`${API_BASE}/host/orders`, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      const live = (res.data.data || []).filter(
+      const live = allOrders.filter(
         ord => ord.tableStatus !== 'completed' && ord.tableStatus !== 'completed_acked' && ord.orderStatus !== 'cancelled'
       );
+      setPaymentOrders(completed);
       setOrders(live);
     } catch (err) {
       console.error('fetchLiveOrders Error:', err);
     }
   };
 
-  // Real-time WebSocket Order Stream & Fallback Polling
+  const fetchPaymentOrders = fetchLiveOrders;
+
+  // Real-time WebSocket Order Stream
   useEffect(() => {
     if (!token) return;
 
     // Initial fetch
     fetchLiveOrders(token);
-    fetchPaymentOrders(token);
 
     let ws = null;
     let reconnectTimer = null;
@@ -893,7 +882,6 @@ export default function MerchantDashboard() {
             if (data.event === 'new_order' || data.event === 'order_update' || data.event === 'table_session') {
               console.log('[WS] Live order update received:', data.event);
               fetchLiveOrders(token);
-              fetchPaymentOrders(token);
             }
           } catch (e) {
             console.error('[WS] Message parse error:', e);
@@ -917,16 +905,9 @@ export default function MerchantDashboard() {
 
     connectWebSocket();
 
-    // 4-second safety net polling fallback
-    const pollInterval = setInterval(() => {
-      fetchLiveOrders(token);
-      fetchPaymentOrders(token);
-    }, 4000);
-
     return () => {
       if (ws) ws.close();
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      clearInterval(pollInterval);
     };
   }, [token]);
 
@@ -952,7 +933,6 @@ export default function MerchantDashboard() {
     try {
       await axios.post(`${API_BASE}/host/orders/update-status`, { orderId, orderStatus: newStatus }, { headers: { Authorization: `Bearer ${token}` } });
       fetchLiveOrders(token);
-      fetchPaymentOrders(token);
     } catch (err) {
       console.error('updateOrderStatus Error:', err);
     }
@@ -962,7 +942,6 @@ export default function MerchantDashboard() {
     try {
       await axios.post(`${API_BASE}/host/orders/confirm`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
       fetchLiveOrders(token);
-      fetchPaymentOrders(token);
     } catch (err) { console.error(err); }
   };
 
@@ -970,7 +949,6 @@ export default function MerchantDashboard() {
     try {
       await axios.post(`${API_BASE}/host/orders/close-table`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
       fetchLiveOrders(token);
-      fetchPaymentOrders(token);
     } catch (err) { console.error(err); }
   };
 
@@ -978,7 +956,6 @@ export default function MerchantDashboard() {
     try {
       await axios.post(`${API_BASE}/host/orders/payment-received`, { orderId, paymentType }, { headers: { Authorization: `Bearer ${token}` } });
       fetchLiveOrders(token);
-      fetchPaymentOrders(token);
     } catch (err) { console.error('markPaymentReceived error:', err); }
   };
 
@@ -1002,7 +979,6 @@ export default function MerchantDashboard() {
       setShowTakeoutModal(false);
       setTakeoutCart([]);
       fetchLiveOrders(token);
-      fetchPaymentOrders(token);
     } catch (err) {
       console.error('handleCreateTakeoutOrder error:', err);
     } finally {
@@ -1014,7 +990,6 @@ export default function MerchantDashboard() {
     try {
       await axios.post(`${API_BASE}/host/orders/service-waiter`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
       fetchLiveOrders(token);
-      fetchPaymentOrders(token);
     } catch (err) { console.error('serviceWaiter error:', err); }
   };
 
@@ -5590,17 +5565,45 @@ export default function MerchantDashboard() {
                 </div>
               </div>
 
-              {/* Right Column: Live 80mm Thermal Receipt Preview */}
+              {/* Right Column: Live Thermal Receipt Preview with 80mm / 58mm Paper Toggle */}
               <div className="lg:col-span-5 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-black uppercase text-foreground flex items-center space-x-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                    <span>Live 80mm Thermal Preview</span>
+                    <span>Live Thermal Receipt Preview</span>
                   </span>
-                  <span className="text-[10px] text-muted-foreground font-mono font-bold">Standard 80mm POS</span>
+                  <span className="text-[10px] text-muted-foreground font-mono font-bold">
+                    {billForm.billWidthFormat === '58mm' ? '2-Inch (58mm Portable)' : '3-Inch (80mm POS)'}
+                  </span>
                 </div>
 
-                {globalThis.__renderUnifiedThermalReceipt ? globalThis.__renderUnifiedThermalReceipt(billForm, null, false) : null}
+                {/* 80mm vs 58mm Interactive Tab Switcher */}
+                <div className="flex items-center space-x-2 bg-muted/40 p-1 rounded-xl border border-border/40">
+                  <button
+                    type="button"
+                    onClick={() => setBillForm({ ...billForm, billWidthFormat: '80mm' })}
+                    className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-1.5 ${billForm.billWidthFormat !== '58mm'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                  >
+                    <span>📄 3-Inch (80mm POS)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBillForm({ ...billForm, billWidthFormat: '58mm' })}
+                    className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-1.5 ${billForm.billWidthFormat === '58mm'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                  >
+                    <span>📄 2-Inch (58mm Portable)</span>
+                  </button>
+                </div>
+
+                <div className="pt-1">
+                  {globalThis.__renderUnifiedThermalReceipt ? globalThis.__renderUnifiedThermalReceipt(billForm, null, false, billForm.billWidthFormat) : null}
+                </div>
               </div>
             </div>
 

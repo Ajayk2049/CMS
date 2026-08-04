@@ -60,7 +60,12 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
           return item.category.toLowerCase() == widget.selectedCategory.toLowerCase();
         }).toList();
 
-        final totalItems = categoryItems.length;
+        // Fallback: If Popular category is selected but no item has isPopular == true, show top menu items so section is NEVER empty
+        final displayItems = (widget.selectedCategory.toLowerCase() == 'popular' && categoryItems.isEmpty)
+            ? menuState.items.take(8).toList()
+            : categoryItems;
+
+        final totalItems = displayItems.length;
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -110,7 +115,7 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
 
             // Grid items
             Expanded(
-              child: categoryItems.isEmpty
+              child: displayItems.isEmpty
                   ? Center(
                       child: Text(
                         "No items available in ${widget.selectedCategory}",
@@ -125,12 +130,12 @@ class _MenuCatalogWidgetState extends State<MenuCatalogWidget> {
                         mainAxisSpacing: 20,
                         childAspectRatio: 0.82, // Slightly taller aspect ratio for full-width bottom ADD button
                       ),
-                      itemCount: categoryItems.length,
+                      itemCount: displayItems.length,
                       physics: const ClampingScrollPhysics(),
                       itemBuilder: (context, index) {
                         return _MenuCard(
-                          key: ValueKey(categoryItems[index].itemId),
-                          item: categoryItems[index],
+                          key: ValueKey(displayItems[index].itemId),
+                          item: displayItems[index],
                           cartNotifier: widget.cartNotifier,
                           serverHost: widget.serverHost,
                           imageCache: widget.imageCache,

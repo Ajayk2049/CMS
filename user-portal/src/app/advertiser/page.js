@@ -35,7 +35,10 @@ import {
   IndianRupee,
   BarChart3,
   Activity,
-  Eye
+  Eye,
+  Loader2,
+  Receipt,
+  ShieldCheck
 } from 'lucide-react';
 import { config } from '@/config';
 
@@ -91,6 +94,7 @@ export default function AdvertiserDashboard() {
   const dismissToast = (id) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
+  const [submittingBooking, setSubmittingBooking] = useState(false);
   const [roleActionLoading, setRoleActionLoading] = useState(false);
   const [expandedCampaigns, setExpandedCampaigns] = useState({});
   const [previewVideoUrl, setPreviewVideoUrl] = useState('');
@@ -190,6 +194,7 @@ export default function AdvertiserDashboard() {
   const [selectedDeviceType, setSelectedDeviceType] = useState('');
   const [selectedOutlet, setSelectedOutlet] = useState(null);
   const [selectedMediaType, setSelectedMediaType] = useState(''); // 'image' or 'video'
+  const [maxVideoLengthSeconds, setMaxVideoLengthSeconds] = useState(30); // 30 or 60
 
   // Form Fields
   const [mediaUrl, setMediaUrl] = useState('');
@@ -337,7 +342,7 @@ export default function AdvertiserDashboard() {
   // Active paid booking pending media upload persistence
   const [activeUploadBooking, setActiveUploadBooking] = useState(null);
   const [uploadSuccessMsg, setUploadSuccessMsg] = useState('');
-  
+
   useEffect(() => {
     if (activeUploadBooking) {
       if (activeUploadBooking.mediaType === 'image') {
@@ -347,7 +352,7 @@ export default function AdvertiserDashboard() {
       }
     }
   }, [activeUploadBooking]);
-  
+
   // Local browser media preview state (before server upload)
   const [selectedVideoFile, setSelectedVideoFile] = useState(null);
   const [localVideoPreviewUrl, setLocalVideoPreviewUrl] = useState('');
@@ -481,7 +486,7 @@ export default function AdvertiserDashboard() {
     }
 
     // Inspect video duration locally before creating preview
-    const maxDuration = config.maxVideoDurationSeconds || 30;
+    const maxDuration = targetBooking?.maxVideoLengthSeconds || maxVideoLengthSeconds || 60;
     try {
       const duration = await new Promise((resolve) => {
         const video = document.createElement('video');
@@ -496,8 +501,11 @@ export default function AdvertiserDashboard() {
         video.src = URL.createObjectURL(file);
       });
 
-      if (duration > maxDuration) {
-        showToast('error', `Video duration (${Math.round(duration)}s) exceeds the maximum allowed limit of ${maxDuration} seconds.`);
+      if (duration > maxDuration + 0.5) {
+        const errMsg = maxDuration === 30
+          ? `Video duration (${Math.round(duration)}s) exceeds your paid 30-second plan limit. Please upload a video under 30s or select the 60s plan.`
+          : `Video duration (${Math.round(duration)}s) exceeds maximum platform limit of 60 seconds.`;
+        showToast('error', errMsg);
         if (e && e.target) e.target.value = '';
         return;
       }
@@ -563,7 +571,7 @@ export default function AdvertiserDashboard() {
       if (response.data.success) {
         const uploadedUrl = response.data.data?.url || '';
         showToast('success', 'Campaign ad creative uploaded and submitted for admin review!');
-        
+
         // Update local bookings state array in memory immediately to prevent stale state race condition
         if (targetBooking) {
           setBookings(prev => prev.map(b => {
@@ -748,9 +756,20 @@ export default function AdvertiserDashboard() {
       (r) =>
         r.deviceType === selectedOutlet.deviceType &&
         (r.mediaType ? r.mediaType === selectedMediaType : true) &&
+        (selectedMediaType === 'video' ? (r.maxVideoLengthSeconds ? r.maxVideoLengthSeconds === maxVideoLengthSeconds : true) : true) &&
         r.durationDays === dur &&
         r.frequency === frequency
     );
+
+    if (!matchRate) {
+      matchRate = rates.find(
+        (r) =>
+          r.deviceType === selectedOutlet.deviceType &&
+          (r.mediaType ? r.mediaType === selectedMediaType : true) &&
+          r.durationDays === dur &&
+          r.frequency === frequency
+      );
+    }
 
     if (!matchRate) {
       matchRate = rates.find(
@@ -766,11 +785,12 @@ export default function AdvertiserDashboard() {
     } else {
       setComputedAmount(0);
     }
-  }, [selectedOutlet, selectedMediaType, quantity, adDurationDays, frequency, rates]);
+  }, [selectedOutlet, selectedMediaType, maxVideoLengthSeconds, quantity, adDurationDays, frequency, rates]);
 
   // Handle Ad booking initiation (Paywall First)
   const handleInitiateBooking = async (e) => {
     e.preventDefault();
+    if (submittingBooking) return;
 
     if (!selectedOutlet) {
       showToast('error', 'Please select a target venue and display type.');
@@ -793,6 +813,8 @@ export default function AdvertiserDashboard() {
       return;
     }
 
+    setSubmittingBooking(true);
+
     try {
       const redirectUrl = `${config.userPortalUrl}/advertiser`;
       const response = await axios.post(
@@ -801,6 +823,7 @@ export default function AdvertiserDashboard() {
           outletId: selectedOutlet._id,
           deviceType: selectedOutlet.deviceType,
           mediaType: selectedMediaType,
+          maxVideoLengthSeconds: selectedMediaType === 'video' ? maxVideoLengthSeconds : 30,
           quantity: bookingQty,
           adDurationDays: parseInt(adDurationDays, 10),
           frequency,
@@ -817,9 +840,12 @@ export default function AdvertiserDashboard() {
 
       if (response.data.data.paymentUrl) {
         window.location.href = response.data.data.paymentUrl;
+      } else {
+        setSubmittingBooking(false);
       }
     } catch (err) {
       showToast('error', err.response?.data?.message || 'Failed to initiate campaign booking.');
+      setSubmittingBooking(false);
     }
   };
 
@@ -1334,8 +1360,8 @@ export default function AdvertiserDashboard() {
 
         {/* 3. New Booking Flow Tab */}
         {activeTab === 'new-booking' && (
-          <div className="animate-fade-in max-w-4xl mx-auto p-4 sm:p-6 rounded-2xl bg-card border border-[#0069a8]/80 shadow-[0_0_20px_rgba(0,105,168,0.3)] dark:shadow-[0_0_35px_rgba(0,105,168,0.55)] space-y-6 transition-all duration-500">
-            
+          <div className="animate-fade-in max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 rounded-2xl bg-card border border-[#0069a8]/80 shadow-[0_0_20px_rgba(0,105,168,0.3)] dark:shadow-[0_0_35px_rgba(0,105,168,0.55)] space-y-6 transition-all duration-500">
+
             {activeUploadBooking ? (
               <div className="space-y-6 animate-fade-in">
                 {/* ACTIVE PAID CAMPAIGN MEDIA UPLOAD PANEL */}
@@ -1370,7 +1396,7 @@ export default function AdvertiserDashboard() {
                   </div>
                   <div className="text-xs text-muted-foreground leading-relaxed pl-6 space-y-1 font-semibold">
                     <p>• <strong>Aspect Ratio</strong>: {activeUploadBooking.deviceType === 'tablet' ? 'Portrait 10:16 / 9:16 (Vertical)' : 'Landscape 16:9 (Horizontal Widescreen)'}</p>
-                    <p>• <strong>Video Format</strong>: Up to <strong>{config.maxVideoDurationSeconds || 30} seconds</strong> (MP4 / WEBM formats)</p>
+                    <p>• <strong>Video Format</strong>: Up to <strong>{activeUploadBooking?.maxVideoLengthSeconds || 60} seconds</strong> (MP4 / WEBM formats)</p>
                     <p>• <strong>Image Format</strong>: Up to <strong>2 Images</strong> (Front & Back switching creatives)</p>
                     <p>• <strong>Preferred Resolution</strong>: <strong>{activeUploadBooking.deviceType === 'tablet' ? '800 × 1280 px' : '1920 × 1080 px Full HD'}</strong></p>
                   </div>
@@ -1387,7 +1413,7 @@ export default function AdvertiserDashboard() {
                       {activeUploadBooking?.mediaType === 'image' ? (
                         <span>🖼️ Paid Format: Static Image Ad</span>
                       ) : (
-                        <span>🎬 Paid Format: Dynamic Video Ad</span>
+                        <span>🎬 Paid Format: Dynamic Video Ad ({activeUploadBooking?.maxVideoLengthSeconds || 30}s Plan)</span>
                       )}
                     </span>
                   </div>
@@ -1403,7 +1429,7 @@ export default function AdvertiserDashboard() {
                         <span className="text-sm font-bold text-foreground">
                           {selectedVideoFile ? `Selected: ${selectedVideoFile.name}` : 'Click to select ad video file (.mp4, .webm)'}
                         </span>
-                        <span className="text-xs text-muted-foreground mt-1">Maximum duration: {config.maxVideoDurationSeconds || 30}s</span>
+                        <span className="text-xs text-muted-foreground mt-1">Maximum paid plan limit: {activeUploadBooking?.maxVideoLengthSeconds || maxVideoLengthSeconds || 60}s</span>
                         <input
                           type="file"
                           accept="video/mp4,video/webm"
@@ -1734,12 +1760,63 @@ export default function AdvertiserDashboard() {
                         </div>
                         <h4 className="font-bold text-xs text-foreground">Dynamic Video Ad</h4>
                         <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                          High-impact motion video clips (Up to 30s MP4/WEBM with sound).
+                          High-impact motion video clips (Select 30s or 60s plan tier below).
                         </p>
                       </div>
                       <span className="text-[9px] font-black uppercase text-purple-500 mt-3">Premium Dynamic Rates</span>
                     </button>
                   </div>
+
+                  {/* Video Duration Tier Selector & Warning Banner */}
+                  {selectedMediaType === 'video' && (
+                    <div className="pt-3 space-y-3 animate-fade-in border-t border-border/30 mt-3">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Select Video Duration Plan Tier</label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setMaxVideoLengthSeconds(30)}
+                          className={`p-3.5 rounded-xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between ${maxVideoLengthSeconds === 30
+                            ? 'border-blue-500 bg-blue-500/10 text-foreground shadow-sm'
+                            : 'border-border/60 hover:border-blue-500/40 bg-card/10 text-muted-foreground'
+                            }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-extrabold text-xs text-foreground">🎬 30s Standard Plan</span>
+                            {maxVideoLengthSeconds === 30 && <CheckCircle className="w-4 h-4 text-blue-500" />}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-1 font-medium">For videos from 1 second up to 30 seconds</p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setMaxVideoLengthSeconds(60)}
+                          className={`p-3.5 rounded-xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between ${maxVideoLengthSeconds === 60
+                            ? 'border-purple-500 bg-purple-500/10 text-foreground shadow-sm'
+                            : 'border-border/60 hover:border-purple-500/40 bg-card/10 text-muted-foreground'
+                            }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-extrabold text-xs text-foreground">🎬 60s Extended Plan</span>
+                            {maxVideoLengthSeconds === 60 && <CheckCircle className="w-4 h-4 text-purple-500" />}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-1 font-medium">For long commercials from 31 to 60 seconds</p>
+                        </button>
+                      </div>
+
+                      {/* Explicit Pre-Payment Warning Banner */}
+                      <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400 space-y-1">
+                        <div className="flex items-center space-x-1.5 font-bold">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>Important Video Plan Rule</span>
+                        </div>
+                        <div className="text-[11px] text-muted-foreground font-semibold leading-relaxed pl-5 space-y-0.5">
+                          <p>• <strong>30s Plan</strong>: Covers videos from <strong>1s up to 30s</strong>.</p>
+                          <p>• <strong>60s Plan</strong>: Covers commercials from <strong>31s up to 60s</strong>.</p>
+                          <p className="text-amber-500 pt-0.5">⚠️ <em>Videos exceeding your selected paid plan duration tier will be rejected during media upload.</em></p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Step 3: Campaign Schedule & Pricing Package (Unlocked only when media type selected) */}
@@ -1750,7 +1827,7 @@ export default function AdvertiserDashboard() {
                   </div>
                 ) : (
                   <form onSubmit={handleInitiateBooking} className="space-y-4 pt-6 border-t border-border/40 mt-6 animate-fade-in">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between mb-2">
                       <h3 className="font-outfit text-md font-bold text-foreground flex items-center">
                         <CreditCard className="w-4 h-4 mr-2 text-primary shrink-0" />
                         <span>Step 3: Select Plan & Proceed to Pay ({selectedMediaType === 'image' ? '🖼️ Static Image Pricing' : '🎬 Dynamic Video Pricing'})</span>
@@ -1760,79 +1837,177 @@ export default function AdvertiserDashboard() {
                       </span>
                     </div>
 
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Quantity of Devices</label>
-                        <input
-                          type="text"
-                          required
-                          value={quantity}
-                          onChange={(e) => handleQuantityChange(e.target.value)}
-                          className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                        />
-                        {selectedOutlet && (
-                          <p className="text-[10px] text-muted-foreground mt-1 font-semibold">Max available: {selectedOutlet.quantity}</p>
+                    {/* 2-Column Side-by-Side Layout inside the Blue Glow Box */}
+                    <div className="grid lg:grid-cols-12 gap-6 items-start">
+                      {/* LEFT SIDE: Inputs & Options (lg:col-span-7) */}
+                      <div className="lg:col-span-7 space-y-4">
+                        <div className="grid sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Quantity of Devices</label>
+                            <input
+                              type="text"
+                              required
+                              value={quantity}
+                              onChange={(e) => handleQuantityChange(e.target.value)}
+                              className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                            {selectedOutlet && (
+                              <p className="text-[10px] text-muted-foreground mt-1 font-semibold">Max available: {selectedOutlet.quantity}</p>
+                            )}
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Duration (Days)</label>
+                            <select
+                              value={adDurationDays}
+                              onChange={(e) => setAdDurationDays(parseInt(e.target.value, 10))}
+                              className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                            >
+                              <option value={7}>7 Days Plan</option>
+                              <option value={30}>30 Days Plan</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Frequency</label>
+                            <select
+                              value={frequency}
+                              onChange={(e) => setFrequency(e.target.value)}
+                              className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                            >
+                              {getAvailableFrequencies().map((freq) => (
+                                <option key={freq} value={freq}>{getFrequencyLabel(freq)}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Ad Category</label>
+                            <select
+                              value={adCategory}
+                              onChange={(e) => setAdCategory(e.target.value)}
+                              className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                            >
+                              <option value="Electronics">Electronics & Gadgets</option>
+                              <option value="RealEstate">Real Estate & Housing</option>
+                              <option value="Automotive">Automotive & Vehicles</option>
+                              <option value="Beverages">Beverages & Soft Drinks</option>
+                              <option value="Fashion">Fashion & Apparel</option>
+                              <option value="Finance">Finance & Banking</option>
+                              <option value="Entertainment">Entertainment & Media</option>
+                              <option value="Other">Other Commercial Brands</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Submit Pay button for Mobile View */}
+                        <div className="pt-2 block lg:hidden">
+                          <button
+                            type="submit"
+                            disabled={computedAmount === 0 || submittingBooking || uploading}
+                            className="w-full bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 disabled:bg-muted disabled:text-muted-foreground text-white font-black py-4 px-6 rounded-2xl transition-all duration-200 flex items-center justify-center space-x-3 shadow-xl hover:shadow-emerald-500/20 cursor-pointer disabled:cursor-not-allowed text-sm min-h-[54px]"
+                          >
+                            {submittingBooking ? (
+                              <>
+                                <Loader2 className="w-5 h-5 animate-spin shrink-0 text-white" />
+                                <span>Processing Payment...</span>
+                              </>
+                            ) : (
+                              <>
+                                <ShieldCheck className="w-5 h-5 shrink-0 text-white" />
+                                <span>
+                                  {computedAmount > 0
+                                    ? `Pay ₹${(computedAmount / 100).toLocaleString('en-IN')} & Reserve Ad Slots`
+                                    : 'Select Plan Options to Calculate Total'}
+                                </span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* RIGHT SIDE: Order & Pricing Summary Card (lg:col-span-5) */}
+                      <div className="lg:col-span-5">
+                        {computedAmount > 0 ? (
+                          <div className="p-5 rounded-2xl bg-card/60 border border-border/80 shadow-xl space-y-4 animate-fade-in">
+                            <div className="flex items-center justify-between border-b border-border/60 pb-3">
+                              <div className="flex items-center space-x-2">
+                                <Receipt className="w-4 h-4 text-emerald-500 shrink-0" />
+                                <h4 className="font-outfit text-xs font-bold uppercase tracking-wider text-foreground">Order & Pricing Summary</h4>
+                              </div>
+                              <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                                Verified Rate
+                              </span>
+                            </div>
+
+                            <div className="space-y-2.5 text-xs">
+                              <div className="flex justify-between items-center p-2.5 rounded-xl bg-background/50 border border-border/40">
+                                <span className="text-[11px] text-muted-foreground font-semibold">Selected Format</span>
+                                <span className="font-extrabold text-foreground">
+                                  {selectedMediaType === 'image' ? '🖼️ Static Image' : `🎬 ${maxVideoLengthSeconds}s Video Plan`}
+                                </span>
+                              </div>
+
+                              <div className="flex justify-between items-center p-2.5 rounded-xl bg-background/50 border border-border/40">
+                                <span className="text-[11px] text-muted-foreground font-semibold">Target Hardware</span>
+                                <span className="font-extrabold text-foreground capitalize">
+                                  {selectedOutlet?.deviceType === 'tablet' ? '📱 Tablet Kiosk (3:4)' : '📺 Wall Screen (16:9)'}
+                                </span>
+                              </div>
+
+                              <div className="flex justify-between items-center p-2.5 rounded-xl bg-background/50 border border-border/40">
+                                <span className="text-[11px] text-muted-foreground font-semibold">Duration & Units</span>
+                                <span className="font-extrabold text-foreground">
+                                  {adDurationDays} Days × {quantity} {quantity === 1 || quantity === '1' ? 'Device' : 'Devices'}
+                                </span>
+                              </div>
+
+                              <div className="flex justify-between items-center p-2.5 rounded-xl bg-background/50 border border-border/40">
+                                <span className="text-[11px] text-muted-foreground font-semibold">Rotation Frequency</span>
+                                <span className="font-extrabold text-foreground">
+                                  {getFrequencyLabel(frequency)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Total Cost Summary Row */}
+                            <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 space-y-1 mt-2">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] uppercase font-black tracking-wider text-emerald-600 dark:text-emerald-400">Total Payable Amount</span>
+                                <div className="font-outfit text-2xl font-black text-emerald-500">₹{(computedAmount / 100).toLocaleString('en-IN')}</div>
+                              </div>
+                              <p className="text-[10px] text-muted-foreground font-medium">Phone Pe Payments Gateway</p>
+                            </div>
+
+                            {/* Pay Button on Right Column (Desktop View) */}
+                            <div className="pt-2 hidden lg:block">
+                              <button
+                                type="submit"
+                                disabled={computedAmount === 0 || submittingBooking || uploading}
+                                className="w-full bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 disabled:bg-muted disabled:text-muted-foreground text-white font-black py-3.5 px-4 rounded-2xl transition-all duration-200 flex items-center justify-center space-x-2 shadow-xl hover:shadow-emerald-500/20 cursor-pointer disabled:cursor-not-allowed text-xs min-h-[48px]"
+                              >
+                                {submittingBooking ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 animate-spin shrink-0 text-white" />
+                                    <span>Processing Payment...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <ShieldCheck className="w-4 h-4 shrink-0 text-white" />
+                                    <span>Pay ₹{(computedAmount / 100).toLocaleString('en-IN')}</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-6 rounded-2xl bg-card/30 border border-dashed border-border/60 text-center space-y-2">
+                            <Receipt className="w-6 h-6 text-muted-foreground mx-auto opacity-50" />
+                            <p className="text-xs font-bold text-foreground">Order & Pricing Summary</p>
+                            <p className="text-[11px] text-muted-foreground font-medium">Select options on the left to calculate total payable rate card amount.</p>
+                          </div>
                         )}
                       </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Duration (Days)</label>
-                        <select
-                          value={adDurationDays}
-                          onChange={(e) => setAdDurationDays(parseInt(e.target.value, 10))}
-                          className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                        >
-                          <option value={7}>7 Days Plan</option>
-                          <option value={30}>30 Days Plan</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Frequency</label>
-                        <select
-                          value={frequency}
-                          onChange={(e) => setFrequency(e.target.value)}
-                          className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                        >
-                          {getAvailableFrequencies().map((freq) => (
-                            <option key={freq} value={freq}>{getFrequencyLabel(freq)}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Ad Category</label>
-                        <select
-                          value={adCategory}
-                          onChange={(e) => setAdCategory(e.target.value)}
-                          className="w-full bg-background border border-input rounded-xl px-4 py-3 text-xs font-bold text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                        >
-                          <option value="Electronics">Electronics & Gadgets</option>
-                          <option value="RealEstate">Real Estate & Housing</option>
-                          <option value="Automotive">Automotive & Vehicles</option>
-                          <option value="Beverages">Beverages & Soft Drinks</option>
-                          <option value="Fashion">Fashion & Apparel</option>
-                          <option value="Finance">Finance & Banking</option>
-                          <option value="Entertainment">Entertainment & Media</option>
-                          <option value="Other">Other Commercial Brands</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Submit Pay button */}
-                    <div className="pt-4">
-                      <button
-                        type="submit"
-                        disabled={computedAmount === 0 || uploading}
-                        className="w-full bg-primary hover:bg-primary/95 disabled:bg-muted disabled:text-muted-foreground text-primary-foreground font-bold py-4 rounded-xl transition-all flex items-center justify-center space-x-2 shadow-lg cursor-pointer"
-                      >
-                        <CreditCard className="w-4 h-4" />
-                        <span>
-                          {computedAmount > 0
-                            ? `Pay ₹${computedAmount / 100} via PhonePe Payment Gateway (${selectedMediaType === 'image' ? 'Static Image Rate' : 'Dynamic Video Rate'})`
-                            : 'Select Plan to Calculate Price'}
-                        </span>
-                      </button>
                     </div>
                   </form>
                 )}
@@ -1895,11 +2070,10 @@ export default function AdvertiserDashboard() {
                 <button
                   onClick={() => fetchCampaignAnalytics(analyticsBookingId)}
                   disabled={analyticsLoading || cooldownRemaining > 0}
-                  className={`p-2 border border-border/40 rounded-xl text-xs font-bold flex items-center space-x-1 transition-all ${
-                    analyticsLoading || cooldownRemaining > 0
-                      ? 'bg-muted/40 text-muted-foreground opacity-60 cursor-not-allowed'
-                      : 'hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer'
-                  }`}
+                  className={`p-2 border border-border/40 rounded-xl text-xs font-bold flex items-center space-x-1 transition-all ${analyticsLoading || cooldownRemaining > 0
+                    ? 'bg-muted/40 text-muted-foreground opacity-60 cursor-not-allowed'
+                    : 'hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer'
+                    }`}
                   title={cooldownRemaining > 0 ? `Refresh available in ${cooldownRemaining}s` : "Refresh Live Data"}
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${analyticsLoading ? 'animate-spin' : ''}`} />

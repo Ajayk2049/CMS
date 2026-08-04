@@ -125,7 +125,7 @@ async function startFastify() {
       }
     });
 
-    fastifyInstance.get('/ws/device', { websocket: true }, (connection, req) => {
+    fastifyInstance.get('/ws/device', { websocket: true }, async (connection, req) => {
       const token = req.query.token;
       const socket = connection.socket || connection;
       if (!token) {
@@ -146,6 +146,16 @@ async function startFastify() {
         global.deviceSockets.set(deviceId, socket);
         console.log(`[WS] Device connected: ${deviceId}`);
 
+        // Update MongoDB Device status to online
+        try {
+          await Device.updateOne(
+            { deviceId },
+            { $set: { status: 'online', lastHeartbeat: new Date() } }
+          );
+        } catch (dbErr) {
+          console.error(`[WS] Failed to update Device ${deviceId} status to online:`, dbErr.message);
+        }
+
         socket.send(JSON.stringify({
           event: 'connected',
           message: 'Connected to device update feed',
@@ -156,18 +166,85 @@ async function startFastify() {
           }
         }));
 
-        socket.on('message', (msg) => {
+        socket.on('message', async (msg) => {
           try {
             const data = JSON.parse(msg.toString());
-            if (data && (data.event === 'ping' || data.type === 'ping')) {
+            if (!data) return;
+
+            if (data.event === 'ping' || data.type === 'ping') {
               socket.send(JSON.stringify({ event: 'pong', timestamp: Date.now() }));
+              await Device.updateOne({ deviceId }, { $set: { lastHeartbeat: new Date() } }).catch(() => {});
+            } else if (data.event === 'call_waiter') {
+              const { waiterOption, tableNumber } = data;
+              let activeOrder = await Order.findOne({
+                deviceId,
+                tableStatus: { $in: ['active', 'close_table'] }
+              }).sort({ createdAt: -1 });
+
+              if (!activeOrder) {
+                const deviceDoc = await Device.findOne({ deviceId });
+                if (deviceDoc && deviceDoc.hostApplicationId) {
+                  const HostApplication = require('./models/HostApplication');
+                  const app = await HostApplication.findById(deviceDoc.hostApplicationId);
+                  if (app) {
+                    activeOrder = new Order({
+                      orderId: 'ORD-' + Math.random().toString(36).substring(2, 7).toUpperCase(),
+                      merchantId: app.userId,
+                      hostApplicationId: deviceDoc.hostApplicationId,
+                      deviceId,
+                      tableNumber: tableNumber || 'T1',
+                      items: [],
+                      totalAmount: 0,
+                      paymentStatus: 'pending',
+                      orderStatus: 'placed',
+                      tableStatus: 'active',
+                      waiterCallStatus: 'pending',
+                      waiterCallCount: 1,
+                      waiterCallOption: waiterOption || 'Others'
+                    });
+                    await activeOrder.save();
+                  }
+                }
+              } else {
+                activeOrder.waiterCallCount = (activeOrder.waiterCallCount || 0) + 1;
+                activeOrder.waiterCallStatus = 'pending';
+                activeOrder.waiterCallOption = waiterOption || 'Others';
+                await activeOrder.save();
+              }
+
+              if (activeOrder && activeOrder.merchantId) {
+                const wsClient = global.merchantSockets ? global.merchantSockets.get(activeOrder.merchantId.toString()) : null;
+                if (wsClient) {
+                  wsClient.send(JSON.stringify({
+                    event: 'waiter_call',
+                    data: {
+                      deviceId,
+                      tableNumber: activeOrder.tableNumber,
+                      waiterCallCount: activeOrder.waiterCallCount,
+                      waiterCallOption: activeOrder.waiterCallOption,
+                      waiterCallStatus: activeOrder.waiterCallStatus,
+                      orderId: activeOrder.orderId
+                    }
+                  }));
+                }
+              }
             }
-          } catch (e) {}
+          } catch (e) {
+            console.error('[WS] Device message parse error:', e.message);
+          }
         });
 
-        socket.on('close', () => {
+        socket.on('close', async () => {
           global.deviceSockets.delete(deviceId);
           console.log(`[WS] Device disconnected: ${deviceId}`);
+          try {
+            await Device.updateOne(
+              { deviceId },
+              { $set: { status: 'offline', lastHeartbeat: new Date() } }
+            );
+          } catch (dbErr) {
+            console.error(`[WS] Failed to update Device ${deviceId} status to offline:`, dbErr.message);
+          }
         });
 
       } catch (err) {
@@ -898,7 +975,10 @@ const orderServiceHandlers = {
         await order.save();
       }
 
-      // Notify merchant dashboard via WebSocket
+      // Notify kiosk tablet & merchant dashboard via WebSocket
+      const { notifyDeviceSessionUpdate } = require('./controllers/hostController');
+      notifyDeviceSessionUpdate(order);
+
       const wsClient = merchantSockets.get(merchantId.toString());
       if (wsClient) {
         wsClient.send(JSON.stringify({

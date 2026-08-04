@@ -130,16 +130,10 @@ const pollTransactionStatus = (bookingId, transactionId) => {
   }, 10000); // Poll every 10 seconds
 };
 
+const { generateUniqueCustomId } = require('../utils/idGenerator');
+
 async function generateBookingId() {
-  let bookingId;
-  let exists = true;
-  while (exists) {
-    const randomPart = Math.random().toString(36).substring(2, 7).toUpperCase();
-    bookingId = `AD-${randomPart}`;
-    const count = await AdBooking.countDocuments({ bookingId });
-    if (count === 0) exists = false;
-  }
-  return bookingId;
+  return await generateUniqueCustomId(AdBooking, 'bookingId', 'AD_');
 }
 
 class AdController {
@@ -245,6 +239,7 @@ class AdController {
       outletId,
       deviceType,
       mediaType,
+      maxVideoLengthSeconds,
       quantity,
       adDurationDays,
       frequency,
@@ -258,6 +253,7 @@ class AdController {
     }
 
     const resolvedMediaType = (mediaType || 'video').toLowerCase();
+    const resolvedMaxVideoLength = parseInt(maxVideoLengthSeconds, 10) === 60 ? 60 : 30;
 
     try {
       // Find outlet
@@ -292,15 +288,26 @@ class AdController {
         return res.status(400).send({ success: false, message: 'Invalid deviceType requested' });
       }
 
-      // Fetch rates with mediaType validation
+      // Fetch rates with mediaType and maxVideoLengthSeconds validation
       let rate = await AdsRates.findOne({
         deviceType,
         mediaType: resolvedMediaType,
+        maxVideoLengthSeconds: resolvedMaxVideoLength,
         durationDays: parseInt(adDurationDays, 10),
         frequency
       });
 
-      // Fallback: If no mediaType-specific rate found yet, fallback to deviceType rate
+      // Fallback 1: If no specific video length rate found, try matching mediaType
+      if (!rate) {
+        rate = await AdsRates.findOne({
+          deviceType,
+          mediaType: resolvedMediaType,
+          durationDays: parseInt(adDurationDays, 10),
+          frequency
+        });
+      }
+
+      // Fallback 2: Fallback to general deviceType rate
       if (!rate) {
         rate = await AdsRates.findOne({
           deviceType,
@@ -319,7 +326,7 @@ class AdController {
       const totalAmount = rate.amount * bookingQty; // amount is in paise
 
       // Generate IDs first
-      const transactionId = `TXN_AD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+      const transactionId = await generateUniqueCustomId(PhonePeTransaction, 'transactionId', 'AD_PAY_');
       const orderId = `ORD_AD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
       const bookingId = await generateBookingId();
 
@@ -357,6 +364,7 @@ class AdController {
         outletId: outlet._id,
         deviceType,
         mediaType: resolvedMediaType,
+        maxVideoLengthSeconds: resolvedMaxVideoLength,
         quantity: bookingQty,
         adDurationDays: parseInt(adDurationDays, 10),
         frequency,
@@ -669,7 +677,8 @@ class AdController {
       await pipeline(req.body, fs.createWriteStream(tempPath));
 
       // Inspect video duration via ffprobe before queueing
-      const maxVideoDurationSeconds = config.maxVideoDurationSeconds || 30;
+      const allowedMaxDuration = targetBookingObj?.maxVideoLengthSeconds || 30;
+      let durationSeconds = 0;
       try {
         const metadata = await new Promise((resolve, reject) => {
           ffmpeg.ffprobe(tempPath, (err, meta) => {
@@ -678,16 +687,22 @@ class AdController {
           });
         });
 
-        const durationSeconds = metadata?.format?.duration || 0;
-        if (durationSeconds > maxVideoDurationSeconds) {
+        durationSeconds = metadata?.format?.duration || 0;
+        // Allow 0.5s tolerance for encoding container overhead
+        if (durationSeconds > allowedMaxDuration + 0.5) {
           if (fs.existsSync(tempPath)) {
             try { fs.unlinkSync(tempPath); } catch (e) {}
           }
           mediaLog.status = 'failed';
           await mediaLog.save();
+          
+          const userFriendlyError = allowedMaxDuration === 30
+            ? `Uploaded video duration (${Math.round(durationSeconds)}s) exceeds your paid 30-second plan limit. Please upload a video under 30s or select the 60s plan.`
+            : `Uploaded video duration (${Math.round(durationSeconds)}s) exceeds maximum platform limit of 60 seconds.`;
+
           return res.status(400).send({
             success: false,
-            message: `Video duration (${Math.round(durationSeconds)}s) exceeds maximum allowed limit of ${maxVideoDurationSeconds} seconds.`
+            message: userFriendlyError
           });
         }
       } catch (probeErr) {

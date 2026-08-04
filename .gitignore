@@ -30,6 +30,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 .db/
+dump.rdb
 
 # Local personal development files
 progress.md

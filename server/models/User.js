@@ -38,6 +38,11 @@ const UserSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  advertiserId: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
