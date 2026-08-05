@@ -10,6 +10,7 @@ const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 
 const config = require('./config/config');
+const logger = require('./utils/logger');
 const apiRoutes = require('./routes/api');
 const phonePeService = require('./services/phonePeService');
 const { v4: uuidv4 } = require('uuid');
@@ -35,7 +36,7 @@ global.adminSockets = new Map();
 // Fastify Setup (REST & WebSocket)
 // ----------------------------------------------------
 const fastify = Fastify({
-  logger: { level: 'error' },
+  loggerInstance: logger,
   bodyLimit: 1048576 // 1MB default body limit
 });
 
@@ -638,12 +639,12 @@ const deviceServiceHandlers = {
         const sgstPct = typeof billConfig.sgstPercent === 'number' ? billConfig.sgstPercent : 2.5;
         const enableAutoRoundOff = billConfig.enableAutoRoundOff !== false;
 
-        let subtotalPaise = 0;
+        let subtotalCalc = 0;
         const itemsBreakdown = [];
         if (activeOrder.items && activeOrder.items.length > 0) {
           for (const item of activeOrder.items) {
             const lineTotal = (item.price || 0) * (item.quantity || 1);
-            subtotalPaise += lineTotal;
+            subtotalCalc += lineTotal;
             itemsBreakdown.push({
               name: item.name,
               quantity: item.quantity,
@@ -652,15 +653,26 @@ const deviceServiceHandlers = {
           }
         }
 
-        const cgstPaise = Math.round(subtotalPaise * (cgstPct / 100));
-        const sgstPaise = Math.round(subtotalPaise * (sgstPct / 100));
-        const gstPaise = cgstPaise + sgstPaise;
-        const rawTotalPaise = subtotalPaise + gstPaise;
+        let subtotalPaise = activeOrder.subtotalAmount || subtotalCalc;
+        let cgstPaise = activeOrder.cgstAmount || 0;
+        let sgstPaise = activeOrder.sgstAmount || 0;
+        let roundOffPaise = activeOrder.roundOffAmount || 0;
 
-        let finalAmountPaise = activeOrder.totalAmount || rawTotalPaise;
-        if (activeOrder.tableStatus === 'close_table') {
-          finalAmountPaise = enableAutoRoundOff ? Math.round(rawTotalPaise / 100) * 100 : rawTotalPaise;
+
+        if (!activeOrder.subtotalAmount && subtotalCalc > 0) {
+          cgstPaise = Math.round(subtotalCalc * (cgstPct / 100));
+          sgstPaise = Math.round(subtotalCalc * (sgstPct / 100));
+          const rawTotal = subtotalCalc + cgstPaise + sgstPaise;
+          let finalTotal = rawTotal;
+          if (enableAutoRoundOff) {
+            finalTotal = Math.ceil(rawTotal / 100) * 100;
+            roundOffPaise = finalTotal - rawTotal;
+          }
+          subtotalPaise = subtotalCalc;
         }
+
+        const gstPaise = cgstPaise + sgstPaise;
+        const finalAmountPaise = activeOrder.totalAmount || (subtotalPaise + gstPaise + roundOffPaise);
 
         const upiId = app?.upiId || '';
         const payeeName = app?.payeeName || '';
@@ -682,6 +694,8 @@ const deviceServiceHandlers = {
           cgst: cgstPaise,
           sgst: sgstPaise,
           gst: gstPaise,
+          roundOff: roundOffPaise,
+
           otherCharges: 0,
           upiUrl,
           orderStatus: activeOrder.orderStatus,
@@ -1061,7 +1075,7 @@ function startHeartbeatMonitor() {
       for (const device of staleDevices) {
         device.status = 'offline';
         await device.save();
-        console.log(`[Heartbeat Monitor] Device ${device.deviceId} is stale (last ping: ${device.lastHeartbeat.toLocaleTimeString()}). Marked OFFLINE.`);
+        logger.info(`[Heartbeat Monitor] Device ${device.deviceId} is stale (last ping: ${device.lastHeartbeat.toLocaleTimeString()}). Marked OFFLINE.`);
       }
 
       // 2) Auto-detach devices that have been offline for the full grace period
@@ -1078,10 +1092,10 @@ function startHeartbeatMonitor() {
         device.kioskPasswordHash = null;
         device.status = 'offline';
         await device.save();
-        console.log(`[Heartbeat Monitor] Device ${device.deviceId} auto-detached after extended offline (was bound to hardware ${previousHardware}). ID is now available for re-activation.`);
+        logger.info(`[Heartbeat Monitor] Device ${device.deviceId} auto-detached after extended offline (was bound to hardware ${previousHardware}). ID is now available for re-activation.`);
       }
     } catch (err) {
-      console.error('[Heartbeat Monitor] Error running device check:', err.message);
+      logger.error(`[Heartbeat Monitor] Error running device check: ${err.message}`);
     }
   }, 15000); // Check every 15 seconds
 }
@@ -1093,11 +1107,12 @@ async function main() {
     startGrpc();
     startHeartbeatMonitor();
   } catch (err) {
-    console.error('Server Startup Failed:', err.message);
+    logger.error(`Server Startup Failed: ${err.message}`);
     process.exit(1);
   }
 }
 
 main();
+
 
 

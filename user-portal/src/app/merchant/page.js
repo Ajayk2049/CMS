@@ -41,8 +41,15 @@ import {
   FileText,
   Receipt,
   Image,
-  ShoppingBag
+  ShoppingBag,
+  Download,
+  Calendar,
+  Search,
+  Loader2
 } from 'lucide-react';
+import ExcelJS from 'exceljs';
+import { saveAs } from 'file-saver';
+
 import { config } from '@/config';
 
 const API_BASE = config.apiUrl;
@@ -255,6 +262,299 @@ export default function MerchantDashboard() {
     qrCaption: ''
   });
 
+  // Export Payment History Modal States
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportPreset, setExportPreset] = useState('today'); // 'today', '7d', '15d', '30d', 'custom'
+
+  const [exportStartDate, setExportStartDate] = useState('');
+  const [exportEndDate, setExportEndDate] = useState('');
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+
+  // Set default export dates when preset changes
+  useEffect(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (exportPreset === 'today') {
+      setExportStartDate(todayStr);
+      setExportEndDate(todayStr);
+    } else if (exportPreset === '7d') {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      setExportStartDate(d.toISOString().split('T')[0]);
+      setExportEndDate(todayStr);
+    } else if (exportPreset === '15d') {
+      const d = new Date();
+      d.setDate(d.getDate() - 15);
+      setExportStartDate(d.toISOString().split('T')[0]);
+      setExportEndDate(todayStr);
+    } else if (exportPreset === '30d') {
+      const d = new Date();
+      d.setDate(d.getDate() - 30);
+      setExportStartDate(d.toISOString().split('T')[0]);
+      setExportEndDate(todayStr);
+    }
+  }, [exportPreset]);
+
+  // Excel Generator Function
+  const handleExportPaymentExcel = async () => {
+    if (!exportStartDate || !exportEndDate) {
+      showToast('Please select a valid date range for export', 'error');
+      return;
+    }
+
+    setIsExportingExcel(true);
+    try {
+      const currentVenueApp = applications.find(app => app._id === activeOrderVenueTab) || applications.find(app => app.status === 'approved');
+      const venueName = currentVenueApp?.outletName || 'Venue';
+
+      const startMs = new Date(`${exportStartDate}T00:00:00.000`).getTime();
+      const endMs = new Date(`${exportEndDate}T23:59:59.999`).getTime();
+
+      // Combine all orders (completed transactions + live orders)
+      const allVenueOrders = [...paymentOrders, ...orders];
+
+      // Filter matching orders for this venue within the selected date range
+      const matchingOrders = allVenueOrders.filter(ord => {
+        if (ord.hostApplicationId && currentVenueApp && ord.hostApplicationId !== currentVenueApp._id) return false;
+        const ordTime = new Date(ord.createdAt || ord.updatedAt || 0).getTime();
+        return ordTime >= startMs && ordTime <= endMs;
+      });
+
+      if (matchingOrders.length === 0) {
+        showToast('No transaction orders found for the selected date range', 'error');
+        setIsExportingExcel(false);
+        return;
+      }
+
+
+      // Create Excel Workbook
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'DigiAds Platform';
+      workbook.created = new Date();
+
+      const worksheet = workbook.addWorksheet('Payment History');
+
+      // Title Banner Row (Merged A1:K1)
+      worksheet.mergeCells('A1:K1');
+      const titleCell = worksheet.getCell('A1');
+      titleCell.value = `${venueName.toUpperCase()} — PAYMENT & TRANSACTION HISTORY`;
+      titleCell.font = { name: 'Arial', size: 14, bold: true, color: { argb: 'FFFFFF' } };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0069A8' } };
+      titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      worksheet.getRow(1).height = 30;
+
+      // Subtitle Date Range Row (Merged A2:K2)
+      worksheet.mergeCells('A2:K2');
+      const subtitleCell = worksheet.getCell('A2');
+      const formattedStart = new Date(exportStartDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const formattedEnd = new Date(exportEndDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      subtitleCell.value = `Report Period: ${formattedStart} to ${formattedEnd}  |  Generated On: ${new Date().toLocaleString('en-IN')}`;
+      subtitleCell.font = { name: 'Arial', size: 10, italic: true, color: { argb: '475569' } };
+      subtitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      worksheet.getRow(2).height = 20;
+
+      // Blank Spacer Row 3
+      worksheet.getRow(3).height = 10;
+
+      // Table Headers Row 4
+      const headers = [
+        'Sl. No.',
+        'Date & Time',
+        'Order ID',
+        'Type / Location',
+        'Items Summary',
+        'Payment Mode',
+        'Subtotal (₹)',
+        'CGST (₹)',
+        'SGST (₹)',
+        'Round Off (₹)',
+        'Grand Total (₹)'
+      ];
+
+      const headerRow = worksheet.getRow(4);
+      headerRow.values = headers;
+      headerRow.height = 24;
+
+      headerRow.eachCell((cell) => {
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E293B' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'CBD5E1' } },
+          left: { style: 'thin', color: { argb: 'CBD5E1' } },
+          bottom: { style: 'medium', color: { argb: '0F172A' } },
+          right: { style: 'thin', color: { argb: 'CBD5E1' } }
+        };
+      });
+
+      // Obtain venue tax config (default 2.5% CGST + 2.5% SGST)
+      const billCfg = currentVenueApp?.billConfig || activeBillConfig || billForm || {};
+      const cgstPct = typeof billCfg.cgstPercent === 'number' ? billCfg.cgstPercent : 2.5;
+      const sgstPct = typeof billCfg.sgstPercent === 'number' ? billCfg.sgstPercent : 2.5;
+      const totalTaxPct = cgstPct + sgstPct;
+      const enableAutoRoundOff = billCfg.enableAutoRoundOff !== false;
+
+      // Data Rows
+      let totalSubtotalSum = 0;
+      let totalCgstSum = 0;
+      let totalSgstSum = 0;
+      let totalRoundOffSum = 0;
+      let totalGrandTotalSum = 0;
+
+      matchingOrders.forEach((ord, index) => {
+        const rowNum = index + 5;
+        const ordDate = new Date(ord.createdAt || ord.updatedAt).toLocaleString('en-IN', {
+          day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+
+        const itemsText = (ord.items || []).map(i => `${i.name} (x${i.quantity})`).join(', ');
+
+        // Use frozen order snapshot values if available; otherwise calculate dynamically
+        let subtotal = 0;
+        let cgst = 0;
+        let sgst = 0;
+        let roundOff = 0;
+        let grandTotal = (ord.totalAmount || 0) / 100;
+
+        if (typeof ord.subtotalAmount === 'number' && ord.subtotalAmount > 0) {
+          subtotal = ord.subtotalAmount / 100;
+          cgst = (ord.cgstAmount || 0) / 100;
+          sgst = (ord.sgstAmount || 0) / 100;
+          roundOff = (ord.roundOffAmount || 0) / 100;
+        } else {
+          // Legacy orders fallback: calculate items subtotal & venue tax rates
+          if (ord.items && ord.items.length > 0) {
+            subtotal = ord.items.reduce((sum, i) => sum + ((i.price || 0) * (i.quantity || 1)), 0) / 100;
+          } else {
+            subtotal = grandTotal / (1 + (totalTaxPct / 100));
+          }
+
+          const effectiveCgstPct = typeof ord.cgstPercent === 'number' ? ord.cgstPercent : cgstPct;
+          const effectiveSgstPct = typeof ord.sgstPercent === 'number' ? ord.sgstPercent : sgstPct;
+
+          cgst = subtotal * (effectiveCgstPct / 100);
+          sgst = subtotal * (effectiveSgstPct / 100);
+          const rawTotal = subtotal + cgst + sgst;
+
+          if (grandTotal > 0) {
+            roundOff = Math.max(0, grandTotal - rawTotal);
+          } else {
+            grandTotal = enableAutoRoundOff ? Math.ceil(rawTotal) : rawTotal;
+            roundOff = grandTotal - rawTotal;
+          }
+        }
+
+        totalSubtotalSum += subtotal;
+        totalCgstSum += cgst;
+        totalSgstSum += sgst;
+        totalRoundOffSum += roundOff;
+        totalGrandTotalSum += grandTotal;
+
+        const row = worksheet.getRow(rowNum);
+        row.values = [
+          index + 1,
+          ordDate,
+          ord.orderId,
+          ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' ? '🛍️ TAKEOUT' : `Table ${ord.tableNumber}`,
+          itemsText,
+          ord.paymentType || 'UPI',
+          subtotal,
+          cgst,
+          sgst,
+          roundOff,
+          grandTotal
+        ];
+        row.height = 20;
+
+
+        row.eachCell((cell, colNumber) => {
+          cell.font = { name: 'Arial', size: 9 };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'E2E8F0' } },
+            left: { style: 'thin', color: { argb: 'E2E8F0' } },
+            bottom: { style: 'thin', color: { argb: 'E2E8F0' } },
+            right: { style: 'thin', color: { argb: 'E2E8F0' } }
+          };
+
+          // Alignment & Number formatting
+          if (colNumber === 1 || colNumber === 3 || colNumber === 6) {
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          } else if (colNumber >= 7) {
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
+            cell.numFmt = '₹#,##0.00';
+          } else {
+            cell.alignment = { horizontal: 'left', vertical: 'middle' };
+          }
+        });
+      });
+
+      // Total Summary Row
+      const summaryRowNum = matchingOrders.length + 5;
+      const summaryRow = worksheet.getRow(summaryRowNum);
+      summaryRow.values = [
+        '',
+        'TOTAL SUMMARY',
+        `${matchingOrders.length} Orders`,
+        '',
+        '',
+        '',
+        totalSubtotalSum,
+        totalCgstSum,
+        totalSgstSum,
+        totalRoundOffSum,
+        totalGrandTotalSum
+      ];
+      summaryRow.height = 25;
+
+      summaryRow.eachCell((cell, colNumber) => {
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: '0F172A' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F1F5F9' } };
+        cell.border = {
+          top: { style: 'medium', color: { argb: '0F172A' } },
+          bottom: { style: 'double', color: { argb: '0F172A' } }
+        };
+        if (colNumber >= 7) {
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          cell.numFmt = '₹#,##0.00';
+        } else {
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+      });
+
+      // Auto Column Widths
+      worksheet.columns = [
+        { width: 8 },  // Sl No
+        { width: 22 }, // Date & Time
+        { width: 16 }, // Order ID
+        { width: 18 }, // Type
+        { width: 35 }, // Items
+        { width: 14 }, // Payment Mode
+        { width: 14 }, // Subtotal
+        { width: 12 }, // CGST
+        { width: 12 }, // SGST
+        { width: 14 }, // Round Off
+        { width: 16 }  // Grand Total
+      ];
+
+
+      // Export Blob & Save File
+      const buffer = await workbook.xlsx.writeBuffer();
+      const cleanVenueStr = venueName.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const fileName = `${cleanVenueStr}_Payment_History_${exportStartDate}_to_${exportEndDate}.xlsx`;
+
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      saveAs(blob, fileName);
+
+      showToast(`Exported ${matchingOrders.length} payment records to Excel!`, 'success');
+      setShowExportModal(false);
+    } catch (err) {
+      console.error('Excel Export Error:', err);
+      showToast('Failed to export payment history to Excel', 'error');
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
+
+
   const [showPrintBillModal, setShowPrintBillModal] = useState(false);
   const [printingOrder, setPrintingOrder] = useState(null);
   const [activeBillConfig, setActiveBillConfig] = useState(null);
@@ -403,12 +703,104 @@ export default function MerchantDashboard() {
   const [orders, setOrders] = useState([]);
   const wsRef = useRef(null);
 
+  // Helper to format local YYYY-MM-DD date string without UTC timezone offset shift
+  const getLocalDateString = (d = new Date()) => {
+    const dateObj = new Date(d);
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   // Payment tab states
   const [paymentConfig, setPaymentConfig] = useState({ hasUpiId: false, upiId: '' });
   const [paymentUpiInput, setPaymentUpiInput] = useState('');
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentOrders, setPaymentOrders] = useState([]);
+  const [paymentSearchInput, setPaymentSearchInput] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [isSearchingPayments, setIsSearchingPayments] = useState(false);
+  const searchAbortControllerRef = useRef(null);
+  const [paymentCustomDate, setPaymentCustomDate] = useState(() => getLocalDateString());
   const [paymentTab, setPaymentTab] = useState('config'); // 'config' or 'history'
+
+  // Debounce search input changes by 350ms to prevent rapid DB request spamming
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(paymentSearchInput);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [paymentSearchInput]);
+
+  // Re-fetch payment orders from backend when calendar date picker or debounced search query changes
+  useEffect(() => {
+    if (!token) return;
+
+    // Cancel any in-flight pending search request to prevent race conditions
+    if (searchAbortControllerRef.current) {
+      searchAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    searchAbortControllerRef.current = controller;
+
+    const queryParams = {};
+    if (selectedOutletId) queryParams.hostApplicationId = selectedOutletId;
+
+    if (debouncedSearchQuery.trim()) {
+      // When searching, search across all historical database records
+      queryParams.search = debouncedSearchQuery.trim();
+    } else if (paymentCustomDate) {
+      queryParams.startDate = paymentCustomDate;
+      queryParams.endDate = paymentCustomDate;
+    }
+
+    setIsSearchingPayments(true);
+    fetchLiveOrders(token, queryParams, controller.signal).finally(() => {
+      setIsSearchingPayments(false);
+    });
+  }, [token, selectedOutletId, paymentCustomDate, debouncedSearchQuery]);
+
+  // Derived sorted & filtered payment orders (newest first)
+  const sortedAndFilteredPaymentOrders = useMemo(() => {
+    // Sort orders newest first by createdAt / updatedAt
+    const sorted = [...paymentOrders].sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.updatedAt || 0).getTime();
+      const timeB = new Date(b.createdAt || b.updatedAt || 0).getTime();
+      return timeB - timeA;
+    });
+
+    const isSearching = !!debouncedSearchQuery.trim();
+
+    return sorted.filter(ord => {
+      const ordDate = new Date(ord.createdAt || ord.updatedAt || Date.now());
+
+      // Only restrict by calendar date when user is NOT actively typing a search query
+      if (!isSearching && paymentCustomDate) {
+        const targetDateStr = getLocalDateString(ordDate);
+        if (targetDateStr !== paymentCustomDate) return false;
+      }
+
+      // Search Query Filter
+      if (isSearching) {
+        const q = debouncedSearchQuery.trim().toLowerCase();
+        const orderIdMatch = (ord.orderId || '').toLowerCase().includes(q);
+        const tableMatch = (ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' ? 'takeout' : `table ${ord.tableNumber}`).toLowerCase().includes(q);
+        const paymentTypeMatch = (ord.paymentType || 'UPI').toLowerCase().includes(q);
+        const amountMatch = (ord.totalAmount ? (ord.totalAmount / 100).toFixed(2) : '').includes(q) ||
+          (ord.totalAmount ? (ord.totalAmount / 100).toString() : '').includes(q) ||
+          (ord.totalAmount ? ord.totalAmount.toString() : '').includes(q);
+        const itemsMatch = (ord.items || []).some(item => (item.name || '').toLowerCase().includes(q));
+        const formattedDateStr = ordDate.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }).toLowerCase();
+        const dateMatch = formattedDateStr.includes(q);
+
+        if (!orderIdMatch && !tableMatch && !paymentTypeMatch && !amountMatch && !itemsMatch && !dateMatch) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [paymentOrders, paymentCustomDate, debouncedSearchQuery]);
   const [showUpiModal, setShowUpiModal] = useState(false);
   const [tempUpiInput, setTempUpiInput] = useState('');
   const [isUpiVerified, setIsUpiVerified] = useState(false);
@@ -831,11 +1223,20 @@ export default function MerchantDashboard() {
   };
 
   // Fetch payment and live order history in a single HTTP call
-  const fetchLiveOrders = async (authToken) => {
+  const fetchLiveOrders = async (authToken, queryParams = {}, signal = null) => {
     const activeToken = authToken || token;
     if (!activeToken) return;
     try {
+      const params = {};
+      if (queryParams.startDate) params.startDate = queryParams.startDate;
+      if (queryParams.endDate) params.endDate = queryParams.endDate;
+      if (queryParams.search) params.search = queryParams.search;
+      if (queryParams.hostApplicationId) params.hostApplicationId = queryParams.hostApplicationId;
+      params.limit = 1000;
+
       const res = await axios.get(`${API_BASE}/host/orders`, {
+        params,
+        signal,
         headers: { Authorization: `Bearer ${activeToken}` }
       });
       const allOrders = res.data.data || [];
@@ -848,6 +1249,9 @@ export default function MerchantDashboard() {
       setPaymentOrders(completed);
       setOrders(live);
     } catch (err) {
+      if (axios.isCancel(err) || err.name === 'CanceledError' || err.name === 'AbortError') {
+        return; // Request aborted by newer debounced search query
+      }
       console.error('fetchLiveOrders Error:', err);
     }
   };
@@ -2274,30 +2678,34 @@ export default function MerchantDashboard() {
                 </p>
               </div>
 
-              {/* Date Filter Selector */}
-              <div className="flex items-center space-x-2 bg-card border border-border/40 p-1.5 rounded-2xl shadow-sm overflow-x-auto">
-                {[
-                  { label: 'Today', value: 0 },
-                  { label: 'Last 7 Days', value: 7 },
-                  { label: 'Last 15 Days', value: 15 },
-                  { label: 'Last 30 Days', value: 30 }
-                ].map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    onClick={() => {
-                      setAnalyticsDays(item.value);
-                      fetchVenueAnalytics(token, item.value);
-                    }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${analyticsDays === item.value
-                      ? 'bg-primary text-primary-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
-                      }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+              <div className="flex items-center space-x-3 flex-wrap gap-2">
+                {/* Date Filter Selector */}
+
+                <div className="flex items-center space-x-2 bg-card border border-border/40 p-1.5 rounded-2xl shadow-sm overflow-x-auto">
+                  {[
+                    { label: 'Today', value: 0 },
+                    { label: 'Last 7 Days', value: 7 },
+                    { label: 'Last 15 Days', value: 15 },
+                    { label: 'Last 30 Days', value: 30 }
+                  ].map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => {
+                        setAnalyticsDays(item.value);
+                        fetchVenueAnalytics(token, item.value);
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${analyticsDays === item.value
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                        }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
               </div>
+
             </div>
 
             {/* Key Summary Cards */}
@@ -3205,6 +3613,8 @@ export default function MerchantDashboard() {
                       <span>LIVE</span>
                     </div>
                   </div>
+
+
                 </div>
 
                 {(() => {
@@ -3273,17 +3683,21 @@ export default function MerchantDashboard() {
                               </td>
                               <td className="py-4 pr-2">
                                 <div className="space-y-1 font-semibold text-foreground">
-                                  {ord.items.map((item, idx) => (
-                                    <div key={idx} className="text-xs">
-                                      {item.name} &nbsp;&nbsp; <span className="text-muted-foreground">x &nbsp;{item.quantity}</span>
-                                    </div>
-                                  ))}
+                                  <div className="max-h-28 overflow-y-auto pr-1 space-y-1 scrollbar-thin">
+                                    {ord.items.map((item, idx) => (
+                                      <div key={idx} className="text-xs flex items-center justify-between space-x-2">
+                                        <span className="truncate max-w-[150px]" title={item.name}>{item.name}</span>
+                                        <span className="text-muted-foreground shrink-0 font-mono text-[11px]">x {item.quantity}</span>
+                                      </div>
+                                    ))}
+                                  </div>
                                   <div className="w-12 border-t-2 border-border/50 my-1.5"></div>
                                   <div className="text-xs font-bold text-foreground">
                                     Total: ₹{(ord.totalAmount / 100).toFixed(2)}
                                   </div>
                                 </div>
                               </td>
+
                               <td className="py-4 pr-2">
                                 <select
                                   value={ord.orderStatus}
@@ -3900,12 +4314,44 @@ export default function MerchantDashboard() {
         {activeTab === 'payment' && (
           <div className="animate-fade-in w-full">
             {/* Header row */}
-            <div className="flex justify-between items-center mb-6 border-b border-border/40 pb-3 flex-wrap gap-4">
+            <div className="flex justify-between items-center mb-6 border-b border-border/40 pb-4 flex-wrap gap-4">
               <h1 className="font-outfit text-2xl font-black text-foreground uppercase tracking-wider">
                 PAYMENT HISTORY
               </h1>
 
-              <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-3 flex-wrap gap-y-2">
+                {/* Standalone Calendar Date Picker defaulting to Today (Entire Container Clickable) */}
+                <div
+                  onClick={(e) => {
+                    const input = e.currentTarget.querySelector('input[type="date"]');
+                    if (input && typeof input.showPicker === 'function') {
+                      try { input.showPicker(); } catch (err) {}
+                    } else if (input) {
+                      input.focus();
+                    }
+                  }}
+                  className="flex items-center space-x-2 bg-card hover:bg-muted/50 border border-border/40 rounded-xl px-3.5 py-1.5 shadow-sm cursor-pointer transition-colors"
+                >
+                  <Calendar className="w-4 h-4 text-primary shrink-0 pointer-events-none" />
+                  <input
+                    type="date"
+                    value={paymentCustomDate}
+                    onChange={(e) => setPaymentCustomDate(e.target.value)}
+                    className="bg-transparent text-xs font-bold text-foreground focus:outline-none cursor-pointer py-1"
+                  />
+                </div>
+
+                <button
+                  onClick={() => {
+                    setExportPreset('today');
+                    setShowExportModal(true);
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-all cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Export Payments</span>
+                </button>
+
                 <button
                   onClick={() => {
                     if (selectedOutletId) {
@@ -3913,9 +4359,9 @@ export default function MerchantDashboard() {
                     }
                     setShowConfigureBillModal(true);
                   }}
-                  className="bg-card hover:bg-muted border border-border/40 text-foreground font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-all cursor-pointer shadow-sm flex items-center justify-center space-x-1.5"
+                  className="bg-[#0069a8] hover:bg-[#0069a8] border border-border/40 text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-all cursor-pointer shadow-sm flex items-center justify-center space-x-1.5"
                 >
-                  <FileText className="w-4 h-4 text-[#0069a8]" />
+                  <FileText className="w-4 h-4 text-white" />
                   <span>Configure Bill</span>
                 </button>
 
@@ -3928,82 +4374,122 @@ export default function MerchantDashboard() {
                   className="bg-[#0069a8] hover:bg-[#005b94] text-white font-bold py-2.5 px-4 rounded-xl text-xs tracking-wider transition-colors cursor-pointer shadow-md flex items-center justify-center space-x-1.5"
                 >
                   <Lock className="w-4 h-4" />
-                  <span>Configure UPI Payments</span>
+                  <span>Configure UPI</span>
                 </button>
+
+                {/* Search Bar - Positioned to the right of Configure UPI button */}
+                <div className="relative min-w-[240px] max-w-sm">
+                  {isSearchingPayments ? (
+                    <Loader2 className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-primary animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  )}
+                  <input
+                    type="text"
+                    placeholder="Search amount, table, dish, UPI, date, ID..."
+                    value={paymentSearchInput}
+                    onChange={(e) => setPaymentSearchInput(e.target.value)}
+                    className="w-full pl-9 pr-8 py-2.5 bg-background border border-input rounded-xl text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all shadow-sm"
+                  />
+                  {paymentSearchInput && (
+                    <button
+                      onClick={() => {
+                        setPaymentSearchInput('');
+                        setDebouncedSearchQuery('');
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs font-bold cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Always show history/orders table */}
-            {paymentOrders.length === 0 ? (
-              <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
+            {/* Always show history/orders table full-width */}
+            {sortedAndFilteredPaymentOrders.length === 0 ? (
+              <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl w-full">
                 <Bell className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                <p className="text-sm font-bold text-foreground">No completed payments found</p>
-                <p className="text-xs text-muted-foreground mt-1">Paid order transaction history will appear here once finalized.</p>
+                <p className="text-sm font-bold text-foreground">No completed payment orders found</p>
+                <p className="text-xs text-muted-foreground mt-1">Adjust search parameters or date filters to locate specific transaction records.</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="w-full overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
-                    <tr className="border-b border-border/40 text-muted-foreground font-bold uppercase tracking-wider">
-                      <th className="pb-3 pr-2">Table</th>
-                      <th className="pb-3 pr-2">Order ID</th>
-                      <th className="pb-3 pr-2">Items</th>
-                      <th className="pb-3 pr-2">Status</th>
-                      <th className="pb-3 pr-2">Payment Status</th>
-                      <th className="pb-3 pr-2">Actions</th>
+                    <tr className="border-b border-border/60 text-muted-foreground font-bold uppercase tracking-wider bg-muted/20">
+                      <th className="py-3 px-4 w-12 text-center">#</th>
+                      <th className="py-3 px-4">Table</th>
+                      <th className="py-3 px-4">Order ID</th>
+                      <th className="py-3 px-4">Items</th>
+                      <th className="py-3 px-4">Payment Status</th>
+                      <th className="py-3 px-4">Date & Time</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {paymentOrders.map((ord) => (
-                      <tr key={ord.orderId} className="hover:bg-muted/10">
-                        <td className="py-4 pr-2">
-                          <span className={`font-black px-3.5 py-1.5 rounded-xl text-sm whitespace-nowrap shadow-sm ${ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT'
-                            ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
-                            : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20'
-                            }`}>
-                            {ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' ? '🛍️ TAKEOUT' : `Table ${ord.tableNumber}`}
-                          </span>
-                        </td>
-                        <td className="py-4 pr-2 font-mono font-bold text-foreground text-xs">
-                          {ord.orderId}
-                        </td>
-                        <td className="py-4 pr-2">
-                          <div className="space-y-1 font-semibold text-foreground">
-                            {ord.items.map((item, idx) => (
-                              <div key={idx} className="text-xs">
-                                {item.name} &nbsp;&nbsp; <span className="text-muted-foreground">x &nbsp;{item.quantity}</span>
+                    {sortedAndFilteredPaymentOrders.map((ord, idx) => {
+                      const ordDateObj = new Date(ord.createdAt || ord.updatedAt || Date.now());
+                      const formattedDateTime = ordDateObj.toLocaleString('en-IN', {
+                        day: '2-digit',
+                        month: 'short',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: true
+                      });
+
+                      return (
+                        <tr key={ord.orderId || idx} className="border-b border-border/60 hover:bg-muted/15 transition-colors">
+                          <td className="py-4 px-4 text-center font-bold text-muted-foreground text-xs">
+                            {idx + 1}
+                          </td>
+                          <td className="py-4 px-4">
+                            <span className={`font-black px-3.5 py-1.5 rounded-xl text-xs whitespace-nowrap shadow-sm inline-block ${ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT'
+                              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                              : 'bg-blue-500/10 text-blue-500 dark:text-blue-400 border border-blue-500/20'
+                              }`}>
+                              {ord.orderType === 'TAKEOUT' || ord.tableNumber === 'TAKEOUT' ? '🛍️ TAKEOUT' : `Table ${ord.tableNumber}`}
+                            </span>
+                          </td>
+                          <td className="py-4 px-4 font-mono font-bold text-foreground text-xs">
+                            {ord.orderId}
+                          </td>
+                          <td className="py-4 px-4">
+                            <div className="space-y-1 font-semibold text-foreground">
+                              {ord.items && ord.items.map((item, itemIdx) => (
+                                <div key={itemIdx} className="text-xs">
+                                  {item.name} &nbsp;&nbsp; <span className="text-muted-foreground">x &nbsp;{item.quantity}</span>
+                                </div>
+                              ))}
+                              <div className="w-16 border-t-2 border-border/50 my-1.5"></div>
+                              <div className="text-xs font-bold text-foreground">
+                                Total: ₹{(ord.totalAmount / 100).toFixed(2)}
                               </div>
-                            ))}
-                            <div className="w-12 border-t-2 border-border/50 my-1.5"></div>
-                            <div className="text-xs font-bold text-foreground">
-                              Total: ₹{(ord.totalAmount / 100).toFixed(2)}
                             </div>
-                          </div>
-                        </td>
-                        <td className="py-4 pr-2">
-                          <span className="w-fit text-xs font-black uppercase px-3.5 py-2 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 shadow-sm">
-                            <span className="w-2 h-2 rounded-full mr-2 shrink-0 bg-emerald-500" />
-                            Completed
-                          </span>
-                        </td>
-                        <td className="py-4 pr-2">
-                          <span className="w-fit text-xs font-black uppercase px-3.5 py-2 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 shadow-sm">
-                            <span className="w-2 h-2 rounded-full mr-2 shrink-0 bg-emerald-500" />
-                            Paid {ord.paymentType ? `(${ord.paymentType})` : ''}
-                          </span>
-                        </td>
-                        <td className="py-4 pr-2">
-                          <button
-                            onClick={() => openPrintBillModal(ord)}
-                            className="bg-card hover:bg-muted text-foreground border border-border/40 text-xs font-black uppercase px-4 py-2.5 rounded-xl flex items-center space-x-2 cursor-pointer transition-all shadow-md whitespace-nowrap tracking-wide"
-                            title="Print Thermal Bill"
-                          >
-                            <Printer className="w-4 h-4 text-primary" />
-                            <span>Print Bill</span>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="py-4 px-4">
+                            <span className="w-fit text-xs font-black uppercase px-3.5 py-2 rounded-xl flex items-center border bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 shadow-sm">
+                              <span className="w-2 h-2 rounded-full mr-2 shrink-0 bg-emerald-500" />
+                              Paid {ord.paymentType ? `(${ord.paymentType})` : ''}
+                            </span>
+                          </td>
+                          <td className="py-4 px-4 font-semibold text-muted-foreground text-xs whitespace-nowrap">
+                            {formattedDateTime}
+                          </td>
+                          <td className="py-4 px-4 text-right">
+                            <button
+                              onClick={() => openPrintBillModal(ord)}
+                              className="bg-card hover:bg-muted text-foreground border border-border/40 text-xs font-black uppercase px-4 py-2.5 rounded-xl inline-flex items-center space-x-2 cursor-pointer transition-all shadow-md whitespace-nowrap tracking-wide"
+                              title="Print Thermal Bill"
+                            >
+                              <Printer className="w-4 h-4 text-primary" />
+                              <span>Print Bill</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -5010,7 +5496,10 @@ export default function MerchantDashboard() {
       {/* Unified Thermal Receipt Rendering Helper */}
       {(() => {
         // Shared thermal receipt template for 100% parity across Configure Bill & Print Bill modals
-        globalThis.__renderUnifiedThermalReceipt = (config, order, isPrintMode = false, overrideWidthFormat = null) => {
+        globalThis.__renderUnifiedThermalReceipt = (liveConfig, order, isPrintMode = false, overrideWidthFormat = null) => {
+          // If order has a frozen billConfigSnapshot, use it to ensure historic venue info/address/GSTIN/header metadata never change
+          const config = (order && order.billConfigSnapshot) ? order.billConfigSnapshot : liveConfig;
+
           const items = order?.items || [
             { name: 'Empire Special Porota', quantity: 2, price: 4900 },
             { name: 'Green Salad', quantity: 1, price: 7500 },
@@ -5020,16 +5509,87 @@ export default function MerchantDashboard() {
           const widthFormat = overrideWidthFormat || config?.billWidthFormat || '80mm';
           const is58mm = widthFormat === '58mm';
 
-          const subtotalPaise = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-          const subtotal = subtotalPaise > 0 ? (subtotalPaise / 100) : ((order?.totalAmount || 0) / 100);
-          const cgstRate = Math.max(0, typeof config?.cgstPercent === 'number' ? config.cgstPercent : (parseFloat(config?.cgstPercent) || 0));
-          const sgstRate = Math.max(0, typeof config?.sgstPercent === 'number' ? config.sgstPercent : (parseFloat(config?.sgstPercent) || 0));
-          const cgstAmt = Math.max(0, subtotal * (cgstRate / 100));
-          const sgstAmt = Math.max(0, subtotal * (sgstRate / 100));
+
+          let subtotal = 0;
+          let cgstAmt = 0;
+          let sgstAmt = 0;
+          let roundOffDiff = 0;
+          let roundedTotal = 0;
+          let cgstRate = 0;
+          let sgstRate = 0;
+
+          if (order && typeof order.subtotalAmount === 'number' && order.subtotalAmount > 0) {
+            // Priority 1: Frozen order billing snapshot fields from actual transaction time
+            subtotal = order.subtotalAmount / 100;
+            cgstAmt = (order.cgstAmount || 0) / 100;
+            sgstAmt = (order.sgstAmount || 0) / 100;
+            roundOffDiff = (order.roundOffAmount || 0) / 100;
+            roundedTotal = (order.totalAmount || 0) / 100;
+
+            if (subtotal > 0) {
+              cgstRate = typeof order.cgstPercent === 'number' ? order.cgstPercent : Number(((cgstAmt / subtotal) * 100).toFixed(2));
+              sgstRate = typeof order.sgstPercent === 'number' ? order.sgstPercent : Number(((sgstAmt / subtotal) * 100).toFixed(2));
+            }
+          } else if (order && order.totalAmount) {
+            // Priority 2: Historic DB order created prior to subtotalAmount snapshot field
+            const subtotalPaise = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+            subtotal = subtotalPaise > 0 ? (subtotalPaise / 100) : (order.totalAmount / 100);
+            roundedTotal = order.totalAmount / 100;
+
+            const frozenCgstPct = order.billConfigSnapshot?.cgstPercent ?? order.cgstPercent;
+            const frozenSgstPct = order.billConfigSnapshot?.sgstPercent ?? order.sgstPercent;
+
+            if (typeof frozenCgstPct === 'number' || typeof frozenSgstPct === 'number') {
+              cgstRate = frozenCgstPct || 0;
+              sgstRate = frozenSgstPct || 0;
+              cgstAmt = subtotal * (cgstRate / 100);
+              sgstAmt = subtotal * (sgstRate / 100);
+              const rawTotal = subtotal + cgstAmt + sgstAmt;
+              // Round-off CANNOT exceed 0.99
+              const calcDiff = roundedTotal - rawTotal;
+              roundOffDiff = (calcDiff >= 0 && calcDiff < 1.00) ? Math.round(calcDiff * 100) / 100 : 0;
+            } else {
+              // Deduce tax vs round-off strictly from DB order values
+              const diff = Math.round((roundedTotal - subtotal) * 100) / 100;
+              if (diff <= 0) {
+                cgstRate = 0;
+                sgstRate = 0;
+                cgstAmt = 0;
+                sgstAmt = 0;
+                roundOffDiff = 0;
+              } else {
+                // Read venue config rates or fallback to 2.5% CGST + 2.5% SGST
+                cgstRate = typeof config?.cgstPercent === 'number' ? config.cgstPercent : 2.5;
+                sgstRate = typeof config?.sgstPercent === 'number' ? config.sgstPercent : 2.5;
+                cgstAmt = subtotal * (cgstRate / 100);
+                sgstAmt = subtotal * (sgstRate / 100);
+                const rawTotal = subtotal + cgstAmt + sgstAmt;
+                const calcDiff = roundedTotal - rawTotal;
+                // Round-off CANNOT exceed 0.99
+                roundOffDiff = (calcDiff >= 0 && calcDiff < 1.00) ? Math.round(calcDiff * 100) / 100 : 0;
+              }
+            }
+          }
+
+          else {
+            // Priority 3: Live billConfig fallback (ONLY for Configure Bill modal sample preview)
+            const subtotalPaise = items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+            subtotal = subtotalPaise / 100;
+            cgstRate = Math.max(0, typeof config?.cgstPercent === 'number' ? config.cgstPercent : (parseFloat(config?.cgstPercent) || 0));
+            sgstRate = Math.max(0, typeof config?.sgstPercent === 'number' ? config.sgstPercent : (parseFloat(config?.sgstPercent) || 0));
+            cgstAmt = Math.max(0, subtotal * (cgstRate / 100));
+            sgstAmt = Math.max(0, subtotal * (sgstRate / 100));
+            const totalGstAmt = Math.max(0, cgstAmt + sgstAmt);
+            const rawTotal = subtotal + totalGstAmt;
+
+            roundedTotal = config?.enableAutoRoundOff !== false ? Math.ceil(rawTotal) : rawTotal;
+            roundOffDiff = roundedTotal - rawTotal;
+          }
+
+
+
+
           const totalGstAmt = Math.max(0, cgstAmt + sgstAmt);
-          const rawTotal = subtotal + totalGstAmt;
-          const roundedTotal = config?.enableAutoRoundOff !== false ? Math.round(rawTotal) : rawTotal;
-          const roundOffDiff = roundedTotal - rawTotal;
           const absRoundOff = Math.abs(roundOffDiff);
           const roundOffStr = absRoundOff < 0.001 ? "0.00" : (roundOffDiff > 0 ? `+${roundOffDiff.toFixed(2)}` : roundOffDiff.toFixed(2));
           const paymentTypeStr = order?.paymentType || order?.paymentMethod || (order?.paymentStatus === 'completed' ? 'ONLINE / UPI' : 'CASH / PENDING');
@@ -5037,6 +5597,7 @@ export default function MerchantDashboard() {
           const orderIdStr = order?.orderId ? order.orderId : `${config?.billPrefix || 'INV'}-873`;
           const tableNumStr = order?.tableNumber !== undefined ? order.tableNumber : '17';
           const dateStr = order?.createdAt ? new Date(order.createdAt).toISOString().slice(0, 10) : '2026-08-01';
+
 
           return (
             <div
@@ -5157,8 +5718,9 @@ export default function MerchantDashboard() {
                 )}
                 <div className={`flex justify-between font-extrabold pt-1 border-t-2 border-black text-gray-900 mt-1 ${is58mm ? 'text-[9.5px]' : 'text-[11px]'}`}>
                   <span>TOTAL INVOICE VALUE:</span>
-                  <span>{roundedTotal}</span>
+                  <span>{roundedTotal.toFixed(2)}</span>
                 </div>
+
               </div>
 
               <div className={`flex justify-between ${is58mm ? 'text-[7.5px]' : 'text-[9px]'}`}>
@@ -5686,7 +6248,7 @@ export default function MerchantDashboard() {
               {/* On-screen Preview */}
               <div className="py-2 flex justify-center">
                 {globalThis.__renderUnifiedThermalReceipt
-                  ? globalThis.__renderUnifiedThermalReceipt(activeBillConfig || billForm, printingOrder, false, selectedPrintWidth)
+                  ? globalThis.__renderUnifiedThermalReceipt(printingOrder?.billConfigSnapshot || activeBillConfig || billForm, printingOrder, false, selectedPrintWidth)
                   : null
                 }
               </div>
@@ -5749,16 +6311,146 @@ export default function MerchantDashboard() {
                 }
               `}</style>
               {globalThis.__renderUnifiedThermalReceipt
-                ? globalThis.__renderUnifiedThermalReceipt(activeBillConfig || billForm, printingOrder, true, selectedPrintWidth)
+                ? globalThis.__renderUnifiedThermalReceipt(printingOrder?.billConfigSnapshot || activeBillConfig || billForm, printingOrder, true, selectedPrintWidth)
                 : null
               }
+
             </div>,
             document.body
           )}
         </>
       )}
+      {/* Export Payment History Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[180] p-4 animate-fade-in exclude-uppercase">
+          <div className="bg-card border border-border/40 rounded-2xl w-full max-w-lg p-6 relative flex flex-col space-y-6 shadow-2xl">
+            <button
+              onClick={() => setShowExportModal(false)}
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground cursor-pointer transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="border-b border-border/40 pb-3">
+              <h3 className="font-outfit text-xl font-black text-foreground flex items-center space-x-2">
+                <Download className="w-5 h-5 text-emerald-500" />
+                <span>Export Payment History (.xlsx)</span>
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5 font-semibold">
+                Generate styled Excel reports with custom date range filtering for venue transactions.
+              </p>
+            </div>
+
+            {/* Range Presets (Today, 7D, 15D, 30D, Custom) */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-foreground block">Select Date Range Shortcut:</label>
+              <div className="grid grid-cols-5 gap-2">
+                {[
+                  { id: 'today', label: 'Today' },
+                  { id: '7d', label: '7 Days' },
+                  { id: '15d', label: '15 Days' },
+                  { id: '30d', label: '30 Days' },
+                  { id: 'custom', label: 'Custom' }
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setExportPreset(item.id)}
+                    className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer text-center ${exportPreset === item.id
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'bg-muted/40 text-muted-foreground hover:text-foreground hover:bg-muted'
+                      }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Date Pickers */}
+            <div className="grid grid-cols-2 gap-4 pt-2">
+              <div>
+                <label className="text-[11px] font-bold text-muted-foreground block mb-1">From Date:</label>
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={exportStartDate}
+                    disabled={exportPreset !== 'custom'}
+                    onChange={(e) => setExportStartDate(e.target.value)}
+                    className="w-full bg-background border border-input rounded-xl px-3 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60 cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-muted-foreground block mb-1">To Date:</label>
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={exportEndDate}
+                    disabled={exportPreset !== 'custom'}
+                    onChange={(e) => setExportEndDate(e.target.value)}
+                    className="w-full bg-background border border-input rounded-xl px-3 py-2.5 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60 cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Matching Records Count Preview */}
+            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 flex items-center justify-between text-xs">
+              <span className="font-semibold text-muted-foreground">Matching Transactions:</span>
+              <span className="font-mono font-bold text-emerald-500">
+                {(() => {
+                  if (!exportStartDate || !exportEndDate) return '0 Orders';
+                  const sMs = new Date(`${exportStartDate}T00:00:00.000`).getTime();
+                  const eMs = new Date(`${exportEndDate}T23:59:59.999`).getTime();
+                  const currentVenueApp = applications.find(app => app._id === activeOrderVenueTab) || applications.find(app => app.status === 'approved');
+                  const count = [...paymentOrders, ...orders].filter(ord => {
+                    if (ord.hostApplicationId && currentVenueApp && ord.hostApplicationId !== currentVenueApp._id) return false;
+                    const ordTime = new Date(ord.createdAt || ord.updatedAt || 0).getTime();
+                    return ordTime >= sMs && ordTime <= eMs;
+                  }).length;
+                  return `${count} Orders Found`;
+
+                })()}
+              </span>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                className="flex-1 bg-muted hover:bg-muted/80 text-foreground font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer border border-border/40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExportPaymentExcel}
+                disabled={isExportingExcel}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-xs transition-all cursor-pointer shadow-md flex items-center justify-center space-x-1.5 uppercase"
+              >
+                {isExportingExcel ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Generating...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    <span>Download Excel</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Takeout / Pickup Order Creation Modal */}
       {showTakeoutModal && (
+
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[180] p-4 animate-fade-in exclude-uppercase">
           <div className="bg-card border border-border/40 rounded-2xl w-full max-w-4xl p-6 relative flex flex-col space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto">
             <button

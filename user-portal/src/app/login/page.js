@@ -45,6 +45,20 @@ export default function LoginPage() {
     }
   }, []);
 
+  // Check for active session and auto-redirect authenticated users
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const role = localStorage.getItem('role');
+    
+    if (token && role) {
+      if (role === 'merchant' || role === 'host' || role === 'admin') {
+        router.replace('/merchant');
+      } else if (role === 'advertiser') {
+        router.replace('/advertiser');
+      }
+    }
+  }, [router]);
+
   // Handle Forgot Password OTP cooldown timer
   useEffect(() => {
     if (resetOtpCooldown > 0) {

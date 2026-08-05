@@ -38,7 +38,8 @@ const config = {
     webhookStrict: process.env.PHONEPE_WEBHOOK_STRICT === 'true'
   },
   merchantRedirectUrl: process.env.MERCHANT_REDIRECT_URL || 'http://localhost:3001/merchant/orders',
-  maxVideoDurationSeconds: parseInt(process.env.MAX_VIDEO_DURATION_SECONDS, 10) || 60
+  maxVideoDurationSeconds: parseInt(process.env.MAX_VIDEO_DURATION_SECONDS, 10) || 60,
+  logLevel: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'warn' : 'debug')
 };
 
 // Validate critical parameters

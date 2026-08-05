@@ -49,15 +49,49 @@ const OrderSchema = new mongoose.Schema({
     required: true
   },
   items: [OrderItemSchema],
-  totalAmount: {
+  subtotalAmount: {
     type: Number,
-    required: true // in paise
+    default: 0 // in paise (base items subtotal)
+  },
+  cgstAmount: {
+    type: Number,
+    default: 0 // in paise
+  },
+  sgstAmount: {
+    type: Number,
+    default: 0 // in paise
+  },
+  roundOffAmount: {
+    type: Number,
+    default: 0 // in paise (always >= 0 ceiling round off in favor of venue)
+  },
+  cgstPercent: {
+    type: Number,
+    default: 0
+  },
+  sgstPercent: {
+    type: Number,
+    default: 0
+  },
+  enableAutoRoundOff: {
+    type: Boolean,
+    default: true
+  },
+  billConfigSnapshot: {
+    type: Object,
+    default: null
+  },
+  totalAmount: {
+
+    type: Number,
+    required: true // in paise (final paid grand total)
   },
   paymentStatus: {
     type: String,
     enum: ['pending', 'completed', 'failed'],
     default: 'pending',
     index: true
+
   },
   orderType: {
     type: String,

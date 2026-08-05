@@ -16,12 +16,12 @@ async function notifyDeviceSessionUpdate(order) {
     const sgstPct = typeof billConfig.sgstPercent === 'number' ? billConfig.sgstPercent : 2.5;
     const enableAutoRoundOff = billConfig.enableAutoRoundOff !== false;
 
-    let subtotalPaise = 0;
+    let subtotalCalc = 0;
     const itemsBreakdown = [];
     if (order.items && order.items.length > 0) {
       for (const item of order.items) {
         const lineTotal = (item.price || 0) * (item.quantity || 1);
-        subtotalPaise += lineTotal;
+        subtotalCalc += lineTotal;
         itemsBreakdown.push({
           name: item.name,
           quantity: item.quantity,
@@ -30,15 +30,29 @@ async function notifyDeviceSessionUpdate(order) {
       }
     }
 
-    const cgstPaise = Math.round(subtotalPaise * (cgstPct / 100));
-    const sgstPaise = Math.round(subtotalPaise * (sgstPct / 100));
-    const gstPaise = cgstPaise + sgstPaise;
-    const rawTotalPaise = subtotalPaise + gstPaise;
+    let subtotalPaise = order.subtotalAmount || subtotalCalc;
+    let cgstPaise = order.cgstAmount || 0;
+    let sgstPaise = order.sgstAmount || 0;
+    let roundOffPaise = order.roundOffAmount || 0;
 
-    let finalAmountPaise = order.totalAmount || rawTotalPaise;
-    if (order.tableStatus === 'close_table') {
-      finalAmountPaise = enableAutoRoundOff ? Math.round(rawTotalPaise / 100) * 100 : rawTotalPaise;
+
+    if (!order.subtotalAmount && subtotalCalc > 0) {
+      cgstPaise = Math.round(subtotalCalc * (cgstPct / 100));
+      sgstPaise = Math.round(subtotalCalc * (sgstPct / 100));
+      const rawTotal = subtotalCalc + cgstPaise + sgstPaise;
+      let finalTotal = rawTotal;
+      if (enableAutoRoundOff) {
+        finalTotal = Math.ceil(rawTotal / 100) * 100;
+        roundOffPaise = finalTotal - rawTotal;
+      }
+      subtotalPaise = subtotalCalc;
+      if (order.totalAmount) {
+        finalTotal = order.totalAmount;
+      }
     }
+
+    const gstPaise = cgstPaise + sgstPaise;
+    const finalAmountPaise = order.totalAmount || (subtotalPaise + gstPaise + roundOffPaise);
 
     const upiId = app?.upiId || '';
     const payeeName = app?.payeeName || '';
@@ -61,6 +75,8 @@ async function notifyDeviceSessionUpdate(order) {
       cgst: cgstPaise,
       sgst: sgstPaise,
       gst: gstPaise,
+      roundOff: roundOffPaise,
+
       otherCharges: 0,
       upiUrl,
       orderStatus: order.orderStatus,
@@ -697,21 +713,90 @@ class HostController {
   }
 
   /**
-   * Get all orders for merchant's venues (for payment tab)
+   * Get all orders for merchant's venues (with multi-field search aggregation & date filter)
    */
   async getMyOrders(req, res) {
     try {
-      const apps = await HostApplication.find({ userId: req.user.uid, status: 'approved' });
-      const appIds = apps.map(app => app._id);
+      const { hostApplicationId, startDate, endDate, search, limit } = req.query || {};
+      let appIds = [];
 
-      const orders = await Order.find({ hostApplicationId: { $in: appIds } })
-        .sort({ createdAt: -1 })
-        .limit(200);
+      if (hostApplicationId) {
+        const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid, status: 'approved' });
+        if (app) appIds = [app._id];
+      } else {
+        const apps = await HostApplication.find({ userId: req.user.uid, status: 'approved' });
+        appIds = apps.map(app => app._id);
+      }
 
-      return res.status(200).send({ success: true, data: orders });
+      const matchStage = { hostApplicationId: { $in: appIds } };
+      const queryLimit = parseInt(limit, 10) || 500;
+
+      if (search && search.trim()) {
+        const sRaw = search.trim();
+        const sClean = sRaw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Sanitize regex special chars
+        const numericVal = parseFloat(sRaw);
+        const paiseVal = !isNaN(numericVal) ? Math.round(numericVal * 100) : null;
+
+        // Use MongoDB Aggregation pipeline for multi-field full text & numeric matching
+        const pipeline = [
+          { $match: matchStage },
+          {
+            $addFields: {
+              amountRupeesStr: { $toString: { $divide: ['$totalAmount', 100] } },
+              amountPaiseStr: { $toString: '$totalAmount' },
+              dateFormattedStr: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+              dateFormattedIndian: { $dateToString: { format: '%d/%m/%Y', date: '$createdAt' } }
+            }
+          }
+        ];
+
+        const orConditions = [
+          { orderId: { $regex: sClean, $options: 'i' } },
+          { tableNumber: { $regex: sClean, $options: 'i' } },
+          { paymentType: { $regex: sClean, $options: 'i' } },
+          { orderType: { $regex: sClean, $options: 'i' } },
+          { 'items.name': { $regex: sClean, $options: 'i' } },
+          { amountRupeesStr: { $regex: sClean, $options: 'i' } },
+          { amountPaiseStr: { $regex: sClean, $options: 'i' } },
+          { dateFormattedStr: { $regex: sClean, $options: 'i' } },
+          { dateFormattedIndian: { $regex: sClean, $options: 'i' } }
+        ];
+
+        if (paiseVal !== null) {
+          orConditions.push({ totalAmount: paiseVal });
+        }
+
+        pipeline.push({ $match: { $or: orConditions } });
+        pipeline.push({ $sort: { createdAt: -1 } });
+        pipeline.push({ $limit: queryLimit });
+
+        const orders = await Order.aggregate(pipeline);
+        return res.status(200).send({ success: true, data: orders });
+      } else {
+        // Simple date-filtered query when not searching
+        if (startDate || endDate) {
+          matchStage.createdAt = {};
+          if (startDate) {
+            const start = new Date(startDate);
+            start.setHours(0, 0, 0, 0);
+            matchStage.createdAt.$gte = start;
+          }
+          if (endDate) {
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            matchStage.createdAt.$lte = end;
+          }
+        }
+
+        const orders = await Order.find(matchStage)
+          .sort({ createdAt: -1 })
+          .limit(queryLimit);
+
+        return res.status(200).send({ success: true, data: orders });
+      }
     } catch (error) {
       console.error('getMyOrders Error:', error.message);
-      return res.status(500).send({ success: false, message: 'Failed to fetch orders' });
+      return res.status(500).send({ success: false, message: 'Failed to fetch orders: ' + error.message });
     }
   }
 
@@ -830,18 +915,31 @@ class HostController {
 
         const cgstPaise = Math.round(subtotalPaise * (cgstPct / 100));
         const sgstPaise = Math.round(subtotalPaise * (sgstPct / 100));
-        const gstPaise = cgstPaise + sgstPaise;
-        const rawTotalPaise = subtotalPaise + gstPaise;
+        const rawTotalPaise = subtotalPaise + cgstPaise + sgstPaise;
 
+        // Round Off calculation: Always in favor of the venue (Ceiling to next whole rupee)
         let finalAmountPaise = rawTotalPaise;
+        let roundOffPaise = 0;
         if (enableAutoRoundOff) {
-          finalAmountPaise = Math.round(rawTotalPaise / 100) * 100;
+          finalAmountPaise = Math.ceil(rawTotalPaise / 100) * 100;
+          roundOffPaise = finalAmountPaise - rawTotalPaise;
         }
 
+        // Freeze immutable order billing snapshot fields
+        order.subtotalAmount = subtotalPaise;
+        order.cgstAmount = cgstPaise;
+        order.sgstAmount = sgstPaise;
+        order.roundOffAmount = roundOffPaise;
+        order.cgstPercent = cgstPct;
+        order.sgstPercent = sgstPct;
+        order.enableAutoRoundOff = enableAutoRoundOff;
+        order.billConfigSnapshot = billConfig;
         order.totalAmount = finalAmountPaise;
         order.tableStatus = 'close_table';
+
       }
       await order.save();
+
       notifyDeviceSessionUpdate(order);
 
       const message = isEmpty ? 'Session completed' : 'Table closed — showing payment QR to customer';

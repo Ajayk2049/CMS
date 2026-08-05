@@ -120,11 +120,7 @@ code, pre, .font-mono, [class*="font-mono"] {
   font-family: 'JetBrains Mono', monospace !important;
 }
 
-/* Force Uppercase on Everything except Brand Logos */
-*, *::placeholder, input, textarea, select {
-  text-transform: uppercase;
-}
-
+/* Force Uppercase on Headings and Buttons if needed, but preserve regular case on text inputs */
 .brandLogo, 
 .brandLogo *,
 .brand-logo, 
@@ -133,9 +129,12 @@ code, pre, .font-mono, [class*="font-mono"] {
 .exclude-uppercase *,
 [class*="brandLogo"],
 [class*="brand-logo"],
-input[type="password"],
-input[type="email"],
+input,
+textarea,
+select,
+::placeholder,
 .normal-case,
 .normal-case * {
   text-transform: none !important;
 }
+

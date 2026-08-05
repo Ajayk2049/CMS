@@ -339,27 +339,47 @@ export default function AdminPortal() {
       match(h.phone) ||
       match(h.email) ||
       match(h.status) ||
+      match(h.paymentConfig?.upiId) ||
+      match(h.paymentConfig?.payeeName) ||
       match(h.billConfig?.billPrefix) ||
       match(h.billConfig?.gstin) ||
       match(h.billConfig?.fssaiNo) ||
       match(h.userId?.name) ||
       match(h.userId?.phone) ||
-      match(h.userId?.email)
+      match(h.userId?.email) ||
+      (h.createdAt && match(new Date(h.createdAt).toLocaleDateString('en-IN')))
     );
 
-    // 2. Search Ad Bookings & Campaigns
+    // 2. Search Ad Bookings & Campaigns (including bookingId, campaignId, amounts & dates)
     const matchedCampaigns = campaigns.filter(c =>
       match(c._id) ||
+      match(c.bookingId) ||
+      match(c.campaignId) ||
       match(c.campaignName) ||
+      match(c.adTitle) ||
+      match(c.adCategory) ||
       match(c.approvalStatus) ||
       match(c.paymentStatus) ||
       match(c.mediaType) ||
       match(c.targetScreenType) ||
+      match(c.city) ||
+      match(c.state) ||
+      match(c.totalAmount) ||
+      (c.totalAmount && match((c.totalAmount / 100).toFixed(2))) ||
+      (c.totalAmount && match((c.totalAmount / 100).toString())) ||
+      match(c.amount) ||
+      (c.amount && match((c.amount / 100).toFixed(2))) ||
+      match(c.paymentDetails?.amount) ||
+      (c.paymentDetails?.amount && match((c.paymentDetails.amount / 100).toFixed(2))) ||
       match(c.paymentDetails?.txnId) ||
       match(c.paymentDetails?.merchantTransactionId) ||
       match(c.userId?.name) ||
       match(c.userId?.phone) ||
       match(c.userId?.email) ||
+      match(c.advertiserId?.name) ||
+      match(c.advertiserId?.phone) ||
+      match(c.advertiserId?.email) ||
+      (c.createdAt && match(new Date(c.createdAt).toLocaleDateString('en-IN'))) ||
       (Array.isArray(c.targetOutlets) && c.targetOutlets.some(o => match(o) || match(o?.outletName)))
     );
 
@@ -1134,9 +1154,11 @@ export default function AdminPortal() {
     const isApproved = h.status === 'approved';
     if (!isApproved) return false;
 
-    if (venueStatusFilter === 'paused' && !h.isPaused) return false;
-    if (venueStatusFilter === 'revoked' && !h.isRevoked) return false;
-    if (venueStatusFilter === 'approved' && (h.isPaused || h.isRevoked)) return false;
+    const isClosed = h.allowOpenAds === false || h.adMode === 'closed';
+
+    if (venueStatusFilter === 'open' && (isClosed || h.isPaused)) return false;
+    if (venueStatusFilter === 'private' && (!isClosed || h.isPaused)) return false;
+    if (venueStatusFilter === 'paused' && !h.isPaused && !h.isRevoked) return false;
 
     if (!searchQuery) return true;
     const query = searchQuery.trim().toLowerCase();
@@ -1449,202 +1471,24 @@ export default function AdminPortal() {
           </div>
 
           <div className="flex items-center space-x-4">
-            {/* Global Search Bar with Live Categorized Results Dropdown */}
-            <div className="relative hidden sm:block w-72 lg:w-96" ref={searchRef}>
+            {/* Global Search Bar (Direct Table & Panel Filtering) */}
+            <div className="relative hidden sm:block w-72 lg:w-96">
               <Search className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
               <input
                 type="text"
                 placeholder="Search venues, campaigns, users, devices, phone, IDs..."
                 value={searchQuery}
-                onFocus={() => setShowSearchDropdown(true)}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setShowSearchDropdown(true);
-                }}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full bg-background border border-border rounded-xl pl-9 pr-8 py-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
               />
               {searchQuery && (
                 <button
-                  onClick={() => {
-                    setSearchQuery('');
-                    setShowSearchDropdown(false);
-                  }}
+                  onClick={() => setSearchQuery('')}
                   className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground cursor-pointer"
                   aria-label="Clear search"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
-              )}
-
-              {/* Floating Categorized Search Results Dropdown */}
-              {showSearchDropdown && searchQuery.trim() !== '' && (
-                <div className="absolute left-0 right-0 mt-2 bg-card border border-border rounded-2xl shadow-2xl overflow-hidden z-[100] max-h-[75vh] overflow-y-auto animate-fade-in divide-y divide-border/40">
-                  <div className="p-3 bg-muted/20 flex justify-between items-center text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                    <span>Search Results ({searchResults.total})</span>
-                    <span>Click any item to inspect</span>
-                  </div>
-
-                  {searchResults.total === 0 ? (
-                    <div className="p-6 text-center text-xs text-muted-foreground font-semibold">
-                      No matching venues, campaigns, users, or devices found for "{searchQuery}".
-                    </div>
-                  ) : (
-                    <>
-                      {/* 1. Venues */}
-                      {searchResults.venues.length > 0 && (
-                        <div className="p-2 space-y-1">
-                          <div className="text-[10px] font-black uppercase text-purple-500 px-2 py-1 flex items-center space-x-1.5">
-                            <Building className="w-3 h-3" />
-                            <span>Venues ({searchResults.venues.length})</span>
-                          </div>
-                          {searchResults.venues.slice(0, 5).map(v => (
-                            <div
-                              key={v._id}
-                              onClick={() => handleSelectSearchResult('venue', v)}
-                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
-                            >
-                              <div className="flex justify-between items-center">
-                                <span className="font-bold text-xs text-foreground">{v.outletName || 'Unnamed Venue'}</span>
-                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                                  v.status === 'approved' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'
-                                }`}>
-                                  {v.status}
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
-                                <span>Contact: {v.phone || v.applicantName || 'N/A'}</span>
-                                <span>•</span>
-                                <span>{v.city || v.state || 'India'}</span>
-                                <span>•</span>
-                                <span className="font-mono">{v._id.slice(-6)}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* 2. Ad Campaigns */}
-                      {searchResults.campaigns.length > 0 && (
-                        <div className="p-2 space-y-1">
-                          <div className="text-[10px] font-black uppercase text-blue-500 px-2 py-1 flex items-center space-x-1.5">
-                            <Tv className="w-3 h-3" />
-                            <span>Ad Campaigns ({searchResults.campaigns.length})</span>
-                          </div>
-                          {searchResults.campaigns.slice(0, 5).map(c => (
-                            <div
-                              key={c._id}
-                              onClick={() => handleSelectSearchResult('campaign', c)}
-                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
-                            >
-                              <div className="flex justify-between items-center">
-                                <span className="font-bold text-xs text-foreground">{c.campaignName || 'Campaign'}</span>
-                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                                  c.approvalStatus === 'approved' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-amber-500/10 text-amber-500'
-                                }`}>
-                                  {c.approvalStatus}
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
-                                <span>Advertiser: {c.userId?.name || c.userId?.phone || 'N/A'}</span>
-                                <span>•</span>
-                                <span>Txn: {c.paymentDetails?.txnId ? c.paymentDetails.txnId.slice(-8) : 'N/A'}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* 3. Platform Users */}
-                      {searchResults.users.length > 0 && (
-                        <div className="p-2 space-y-1">
-                          <div className="text-[10px] font-black uppercase text-emerald-500 px-2 py-1 flex items-center space-x-1.5">
-                            <UserCheck className="w-3 h-3" />
-                            <span>Users ({searchResults.users.length})</span>
-                          </div>
-                          {searchResults.users.slice(0, 5).map(u => (
-                            <div
-                              key={u._id}
-                              onClick={() => handleSelectSearchResult('user', u)}
-                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
-                            >
-                              <div className="flex justify-between items-center">
-                                <span className="font-bold text-xs text-foreground">{u.name || 'Platform User'}</span>
-                                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                                  {u.role || (Array.isArray(u.roles) ? u.roles.join(', ') : 'user')}
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
-                                <span>Phone: {u.phone}</span>
-                                <span>•</span>
-                                <span>{u.email || 'No Email'}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* 4. Kiosk Devices */}
-                      {searchResults.devices.length > 0 && (
-                        <div className="p-2 space-y-1">
-                          <div className="text-[10px] font-black uppercase text-indigo-500 px-2 py-1 flex items-center space-x-1.5">
-                            <Smartphone className="w-3 h-3" />
-                            <span>Kiosk Devices ({searchResults.devices.length})</span>
-                          </div>
-                          {searchResults.devices.slice(0, 5).map(d => (
-                            <div
-                              key={d._id}
-                              onClick={() => handleSelectSearchResult('device', d)}
-                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
-                            >
-                              <div className="flex justify-between items-center">
-                                <span className="font-mono font-bold text-xs text-foreground">{d.deviceId}</span>
-                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                                  d.status === 'online' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'
-                                }`}>
-                                  {d.status}
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
-                                <span>Type: {d.deviceType}</span>
-                                <span>•</span>
-                                <span>Outlet: {d.hostApplicationId?.outletName || 'Unassigned'}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* 5. Hardware Requests */}
-                      {searchResults.requests.length > 0 && (
-                        <div className="p-2 space-y-1">
-                          <div className="text-[10px] font-black uppercase text-amber-500 px-2 py-1 flex items-center space-x-1.5">
-                            <FileCheck className="w-3 h-3" />
-                            <span>Device Requests ({searchResults.requests.length})</span>
-                          </div>
-                          {searchResults.requests.slice(0, 5).map(r => (
-                            <div
-                              key={r._id}
-                              onClick={() => handleSelectSearchResult('request', r)}
-                              className="p-2.5 rounded-xl hover:bg-muted/40 transition-colors cursor-pointer space-y-0.5"
-                            >
-                              <div className="flex justify-between items-center">
-                                <span className="font-bold text-xs text-foreground">{r.hostApplicationId?.outletName || 'Venue Request'}</span>
-                                <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-500">
-                                  {r.status}
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-muted-foreground flex items-center space-x-2">
-                                <span>Requested: {r.deviceType}</span>
-                                <span>•</span>
-                                <span>{r.userId?.name || r.userId?.phone || 'N/A'}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
               )}
             </div>
 
@@ -2364,10 +2208,10 @@ export default function AdminPortal() {
                 <div className="bg-card/40 border border-border p-4 rounded-2xl flex justify-between items-center flex-wrap gap-4 shadow-sm">
                   <div className="flex space-x-2 bg-muted/30 p-1 rounded-xl border border-border/60">
                     {[
-                      { id: 'all', label: 'All Active' },
-                      { id: 'approved', label: 'Standard' },
-                      { id: 'paused', label: 'Paused' },
-                      { id: 'revoked', label: 'Revoked' }
+                      { id: 'all', label: `All Outlets (${hosts.filter(h => h.status === 'approved').length})` },
+                      { id: 'open', label: `Open Ads Network (${hosts.filter(h => h.status === 'approved' && h.allowOpenAds !== false && h.adMode !== 'closed' && !h.isPaused).length})` },
+                      { id: 'private', label: `Private Promos (${hosts.filter(h => h.status === 'approved' && (h.allowOpenAds === false || h.adMode === 'closed') && !h.isPaused).length})` },
+                      { id: 'paused', label: `Paused (${hosts.filter(h => h.status === 'approved' && (h.isPaused || h.isRevoked)).length})` }
                     ].map((f) => (
                       <button
                         key={f.id}
