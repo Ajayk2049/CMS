@@ -106,10 +106,13 @@ class _KioskScreenState extends State<KioskScreen> {
   // ── Controllers ──
   final _passwordController = TextEditingController();
 
+  static const MethodChannel _perfChannel = MethodChannel('com.digiads.tabletop/performance');
+
   @override
   void initState() {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _enableLockTaskMode();
     _tableNumber = widget.tableNumber;
 
     _adPlayer = AdPlayerService(onImpression: _trackAdImpression);
@@ -875,6 +878,22 @@ class _KioskScreenState extends State<KioskScreen> {
 
   // ────────────────── Unlock/Reset ──────────────────
 
+  void _enableLockTaskMode() async {
+    try {
+      await _perfChannel.invokeMethod('startKioskMode');
+    } catch (e) {
+      debugPrint('Lock task mode start skipped or not supported: $e');
+    }
+  }
+
+  void _disableLockTaskMode() async {
+    try {
+      await _perfChannel.invokeMethod('stopKioskMode');
+    } catch (e) {
+      debugPrint('Lock task mode stop skipped: $e');
+    }
+  }
+
   void _promptUnlock() {
     _passwordController.clear();
     showDialog(
@@ -894,8 +913,16 @@ class _KioskScreenState extends State<KioskScreen> {
             child: const Text("Cancel"),
           ),
           ElevatedButton(
-            onPressed: () {
-              if (_passwordController.text == widget.bypassPassword) {
+            onPressed: () async {
+              final entered = _passwordController.text.trim();
+              String expected = widget.bypassPassword.trim();
+              if (expected.isEmpty) {
+                final prefs = await SharedPreferences.getInstance();
+                expected = (prefs.getString('bypassPassword') ?? '').trim();
+              }
+
+              if (entered.isNotEmpty && entered == expected) {
+                _disableLockTaskMode();
                 Navigator.pop(dialogCtx); // close the dialog
                 final kioskCtx = context;
                 Navigator.of(kioskCtx).push(
@@ -905,9 +932,12 @@ class _KioskScreenState extends State<KioskScreen> {
                       deviceId: widget.deviceId,
                       token: widget.token,
                       hostApplicationId: widget.hostApplicationId,
-                      bypassPassword: widget.bypassPassword,
+                      bypassPassword: expected,
                       tableNumber: _tableNumber,
-                      onBackToKiosk: () => Navigator.of(settingsCtx).pop(),
+                      onBackToKiosk: () {
+                        _enableLockTaskMode();
+                        Navigator.of(settingsCtx).pop();
+                      },
                     ),
                   ),
                 );

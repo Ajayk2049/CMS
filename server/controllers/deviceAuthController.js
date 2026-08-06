@@ -16,11 +16,10 @@ const resolveMediaUrl = (mediaUrl, host) => {
   return `http://${host}${cleanUrl}`;
 };
 
-// Helper to hash passwords using pbkdf2 (same as authController.js)
+const passwordUtils = require('../utils/password');
+
 function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-  return `${salt}:${hash}`;
+  return passwordUtils.hashPassword(password);
 }
 
 class DeviceAuthController {

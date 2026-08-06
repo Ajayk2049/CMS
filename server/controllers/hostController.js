@@ -484,11 +484,21 @@ class HostController {
    * Universal helper to safely delete physical media file from server/uploads/
    */
   unlinkMediaFile(mediaUrl) {
-    if (!mediaUrl || !mediaUrl.startsWith('/uploads/')) return;
+    if (!mediaUrl || !mediaUrl.includes('/uploads/')) return;
     const fs = require('fs');
     const path = require('path');
-    const relPath = mediaUrl.replace('/uploads/', '');
-    const fullPath = path.join(__dirname, '..', 'uploads', relPath);
+    const relPath = mediaUrl.split('/uploads/')[1];
+    if (!relPath) return;
+
+    const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+    const fullPath = path.resolve(uploadsDir, relPath);
+
+    // Prevent path traversal attacks
+    if (!fullPath.startsWith(uploadsDir)) {
+      console.warn(`[Security Warning] Blocked path traversal attempt in unlinkMediaFile: ${fullPath}`);
+      return;
+    }
+
     if (fs.existsSync(fullPath)) {
       try {
         fs.unlinkSync(fullPath);
@@ -509,6 +519,15 @@ class HostController {
     const { pipeline } = require('stream/promises');
 
     const hostApplicationId = req.headers['x-host-application-id'] || req.headers['X-Host-Application-Id'] || req.query.hostApplicationId;
+
+    if (req.user && req.user.role !== 'admin') {
+      const HostApplication = require('../models/HostApplication');
+      const merchantApp = await HostApplication.findOne({ userId: req.user.uid });
+      if (!merchantApp || (hostApplicationId && merchantApp._id.toString() !== hostApplicationId.toString())) {
+        return res.status(403).send({ success: false, message: 'Access denied: You can only upload menu images to your own venue.' });
+      }
+    }
+
     const { folderName } = await this.getVenueFolderInfo(hostApplicationId);
 
     const filenameHeader = req.headers['x-filename'] || 'image.png';
@@ -1150,15 +1169,10 @@ class HostController {
         return res.status(404).send({ success: false, message: 'User account not found' });
       }
 
-      const [salt, originalHash] = user.password.split(':');
-      if (!salt || !originalHash) {
-        return res.status(400).send({ success: false, message: 'Invalid password format' });
-      }
+      const passwordUtils = require('../utils/password');
+      const pwdResult = passwordUtils.comparePassword(password, user.password);
 
-      const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-      const isValid = crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
-
-      if (!isValid) {
+      if (!pwdResult.isValid) {
         return res.status(401).send({ success: false, message: 'Incorrect account password' });
       }
 
@@ -1354,6 +1368,13 @@ class HostController {
     const hostApplicationId = req.headers['x-host-application-id'] || req.query.hostApplicationId;
     if (!hostApplicationId) {
       return res.status(400).send({ success: false, message: 'Host application ID required' });
+    }
+
+    if (req.user && req.user.role !== 'admin') {
+      const merchantApp = await HostApplication.findOne({ userId: req.user.uid });
+      if (!merchantApp || merchantApp._id.toString() !== hostApplicationId.toString()) {
+        return res.status(403).send({ success: false, message: 'Access denied: You can only upload promos to your own venue.' });
+      }
     }
 
     try {
@@ -1902,6 +1923,15 @@ class HostController {
     const { pipeline } = require('stream/promises');
 
     const hostApplicationId = req.headers['x-host-application-id'] || req.headers['X-Host-Application-Id'] || req.query.hostApplicationId;
+
+    if (req.user && req.user.role !== 'admin') {
+      const HostApplication = require('../models/HostApplication');
+      const merchantApp = await HostApplication.findOne({ userId: req.user.uid });
+      if (!merchantApp || (hostApplicationId && merchantApp._id.toString() !== hostApplicationId.toString())) {
+        return res.status(403).send({ success: false, message: 'Access denied: You can only upload bill images to your own venue.' });
+      }
+    }
+
     const { folderName } = await this.getVenueFolderInfo(hostApplicationId);
 
     const filenameHeader = req.headers['x-filename'] || 'bill_image.png';

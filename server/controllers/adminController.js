@@ -28,11 +28,10 @@ const resolveMediaUrl = (mediaUrl, host) => {
   return resolved.join(',');
 };
 
+const passwordUtils = require('../utils/password');
+
 function verifyPassword(password, storedPassword) {
-  if (!storedPassword || !storedPassword.includes(':')) return false;
-  const [salt, originalHash] = storedPassword.split(':');
-  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+  return passwordUtils.comparePassword(password, storedPassword).isValid;
 }
 
 const { generateUniqueCustomId } = require('../utils/idGenerator');
@@ -148,12 +147,18 @@ class AdminController {
     }
   }
 
-  /**
-   * Update Host Application Status & Custom Quota Overrides (Pause / Revoke / Quotas)
-   */
   async updateHostStatusAndQuotas(req, res) {
     const { hostApplicationId } = req.params || {};
-    const { isPaused, isRevoked, customMaxVideoSlots, customMaxImageSlots, customDailyVideoQuota, customDailyImageQuota } = req.body || {};
+    const {
+      isPaused,
+      isRevoked,
+      customMaxVideoSlots,
+      customMaxImageSlots,
+      customMaxScreenSlots,
+      customDailyVideoQuota,
+      customDailyImageQuota,
+      customDailyScreenQuota
+    } = req.body || {};
 
     try {
       const HostApplication = require('../models/HostApplication');
@@ -723,70 +728,10 @@ class AdminController {
    * Refund a completed ad booking (admin-initiated)
    */
   async refundBooking(req, res) {
-    const { bookingId } = req.params;
-
-    try {
-      const booking = await AdBooking.findOne({ bookingId });
-      if (!booking) {
-        return res.status(404).send({ success: false, message: 'Booking not found' });
-      }
-
-      if (booking.paymentStatus !== 'completed') {
-        return res.status(400).send({ success: false, message: 'Cannot refund unpaid bookings' });
-      }
-
-      // Generate unique refund transaction ID
-      const refundTransactionId = `REFUND_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
-
-      // Fetch original completed transaction
-      const originalTxn = await PhonePeTransaction.findOne({ 
-        transactionId: booking.transactionId,
-        status: 'completed'
-      });
-
-      const providerReferenceId = booking.paymentId || (originalTxn?.rawCallbackPayload?.data?.transactionId || originalTxn?.rawCallbackPayload?.transactionId);
-      if (!providerReferenceId) {
-        return res.status(400).send({ success: false, message: 'Original completed transaction reference not found. Cannot issue refund.' });
-      }
-
-      // Call PhonePe Service to initiate refund
-      console.log(`[Refund] Initiating PhonePe V2 refund for booking ${bookingId}: original txn ${providerReferenceId}, amount ${booking.amount}`);
-      const refundResult = await phonePeService.initiateRefund({
-        refundTransactionId,
-        originalTransactionId: providerReferenceId,
-        amount: booking.amount,
-        orderId: booking.orderId
-      });
-
-      // Save refund transaction record
-      const refundTxn = new PhonePeTransaction({
-        transactionId: refundTransactionId,
-        orderId: booking.orderId,
-        userId: booking.advertiserId,
-        amount: booking.amount,
-        transactionType: 'refund',
-        originalTransactionId: booking.transactionId,
-        status: refundResult.status === 'SUCCESS' || refundResult.status === 'COMPLETED' ? 'completed' : 'pending',
-        responseCode: refundResult.code
-      });
-      await refundTxn.save();
-
-      // Update booking status
-      booking.paymentStatus = 'refunded';
-      await booking.save();
-
-      return res.status(200).send({
-        success: true,
-        message: 'Refund processed successfully',
-        data: {
-          refundTransactionId,
-          paymentStatus: booking.paymentStatus
-        }
-      });
-    } catch (error) {
-      console.error('refundBooking Error:', error.message);
-      return res.status(500).send({ success: false, message: 'Failed to process refund: ' + error.message });
-    }
+    return res.status(400).send({
+      success: false,
+      message: 'Automated online refunds are disabled. Please process refunds manually offline via customer support.'
+    });
   }
 
   /**

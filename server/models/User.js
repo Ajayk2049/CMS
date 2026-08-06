@@ -49,15 +49,20 @@ const UserSchema = new mongoose.Schema({
   }
 });
 
+const bcrypt = require('bcryptjs');
+
 // Pre-save hook to hash password before saving to MongoDB
 UserSchema.pre('save', function(next) {
   const user = this;
   if (!user.isModified('password')) return next();
 
+  // If password is already a bcrypt hash ($2a$ or $2b$), skip re-hashing
+  if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
+    return next();
+  }
+
   try {
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = crypto.pbkdf2Sync(user.password, salt, 1000, 64, 'sha512').toString('hex');
-    user.password = `${salt}:${hash}`;
+    user.password = bcrypt.hashSync(user.password, 10);
     next();
   } catch (err) {
     next(err);

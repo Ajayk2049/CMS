@@ -29,7 +29,15 @@ const deleteMediaFile = (mediaUrl) => {
   const urlParts = mediaUrl.split('/uploads/');
   if (urlParts.length > 1) {
     const relativePath = urlParts[1];
-    const localFilePath = path.join(__dirname, '..', 'uploads', relativePath);
+    const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+    const localFilePath = path.resolve(uploadsDir, relativePath);
+
+    // Prevent path traversal attacks
+    if (!localFilePath.startsWith(uploadsDir)) {
+      console.warn(`[Security Warning] Blocked attempt to delete path outside uploads directory: ${localFilePath}`);
+      return;
+    }
+
     if (fs.existsSync(localFilePath)) {
       try {
         fs.unlinkSync(localFilePath);
@@ -330,6 +338,14 @@ class AdController {
       const orderId = `ORD_AD_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
       const bookingId = await generateBookingId();
 
+      // Validate redirectUrl scheme to prevent open redirect vulnerabilities
+      if (!redirectUrl || typeof redirectUrl !== 'string' || (!redirectUrl.startsWith('/') && !redirectUrl.startsWith('http://') && !redirectUrl.startsWith('https://'))) {
+        return res.status(400).send({
+          success: false,
+          message: 'Invalid redirectUrl. Must be a relative path (starting with /) or a valid HTTP/HTTPS URL.'
+        });
+      }
+
       // Construct redirect URL with verifyBookingId parameter
       const finalRedirectUrl = redirectUrl.includes('?')
         ? `${redirectUrl}&verifyBookingId=${bookingId}`
@@ -598,9 +614,14 @@ class AdController {
     if (bookingId) {
       try {
         const isMongoId = bookingId.match(/^[0-9a-fA-F]{24}$/);
-        targetBookingObj = await AdBooking.findOne(
-          isMongoId ? { _id: bookingId } : { bookingId }
-        );
+        const query = isMongoId ? { _id: bookingId } : { bookingId };
+        
+        // IDOR Protection: Enforce ownership check for advertisers
+        if (req.user && req.user.role !== 'admin') {
+          query.advertiserId = req.user.uid;
+        }
+
+        targetBookingObj = await AdBooking.findOne(query);
         if (!targetBookingObj) {
           return res.status(404).send({ success: false, message: 'Ad booking campaign not found.' });
         }
@@ -775,9 +796,14 @@ class AdController {
     if (bookingId) {
       try {
         const isMongoId = bookingId.match(/^[0-9a-fA-F]{24}$/);
-        targetBookingObj = await AdBooking.findOne(
-          isMongoId ? { _id: bookingId } : { bookingId }
-        );
+        const query = isMongoId ? { _id: bookingId } : { bookingId };
+        
+        // IDOR Protection: Enforce ownership check for advertisers
+        if (req.user && req.user.role !== 'admin') {
+          query.advertiserId = req.user.uid;
+        }
+
+        targetBookingObj = await AdBooking.findOne(query);
         if (!targetBookingObj) {
           return res.status(404).send({ success: false, message: 'Ad booking campaign not found.' });
         }

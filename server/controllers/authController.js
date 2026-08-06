@@ -14,12 +14,11 @@ const {
   resetPasswordSchema
 } = require('../utils/zodSchemas');
 
-// Native secure password hashing functions
+const passwordUtils = require('../utils/password');
+
 function verifyPassword(password, storedPassword) {
-  if (!storedPassword || !storedPassword.includes(':')) return false;
-  const [salt, originalHash] = storedPassword.split(':');
-  const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+  const result = passwordUtils.comparePassword(password, storedPassword);
+  return result;
 }
 
 function generateToken(user, activeRole = null) {
@@ -334,9 +333,15 @@ class AuthController {
         return res.status(400).send({ success: false, message: 'Invalid email/phone or password' });
       }
 
-      const isPasswordValid = verifyPassword(password, user.password);
-      if (!isPasswordValid) {
+      const pwdResult = verifyPassword(password, user.password);
+      if (!pwdResult.isValid) {
         return res.status(400).send({ success: false, message: 'Invalid email/phone or password' });
+      }
+
+      // Automatically upgrade legacy PBKDF2 hash to bcrypt on successful login
+      if (pwdResult.needsRehash) {
+        user.password = passwordUtils.hashPassword(password);
+        await user.save();
       }
 
       // Resolve roles for backwards compatibility

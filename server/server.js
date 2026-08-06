@@ -9,11 +9,27 @@ const mongoose = require('mongoose');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
 
+const fs = require('fs');
 const config = require('./config/config');
 const logger = require('./utils/logger');
 const apiRoutes = require('./routes/api');
 const phonePeService = require('./services/phonePeService');
 const { v4: uuidv4 } = require('uuid');
+
+// Ensure required upload and log directories exist on server boot (for fresh VPS deployments)
+const requiredDirs = [
+  path.join(__dirname, 'uploads'),
+  path.join(__dirname, 'uploads/outlets'),
+  path.join(__dirname, 'uploads/ads'),
+  path.join(__dirname, 'uploads/staging'),
+  path.join(__dirname, 'logs')
+];
+
+requiredDirs.forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+});
 
 // Mongoose Models
 const User = require('./models/User');
@@ -176,7 +192,13 @@ async function startFastify() {
               socket.send(JSON.stringify({ event: 'pong', timestamp: Date.now() }));
               await Device.updateOne({ deviceId }, { $set: { lastHeartbeat: new Date() } }).catch(() => {});
             } else if (data.event === 'call_waiter') {
-              const { waiterOption, tableNumber } = data;
+              const rawWaiterOption = String(data.waiterOption || data.waiterCallOption || 'Others').trim();
+              const rawTableNumber = String(data.tableNumber || 'T1').trim();
+
+              // Sanitize inputs: restrict max length to 30 chars and strip control characters
+              const waiterOption = rawWaiterOption.slice(0, 30).replace(/[\r\n\t]/g, '');
+              const tableNumber = rawTableNumber.slice(0, 30).replace(/[\r\n\t]/g, '');
+
               let activeOrder = await Order.findOne({
                 deviceId,
                 tableStatus: { $in: ['active', 'close_table'] }
@@ -467,19 +489,6 @@ async function startFastify() {
       console.error('[CLEANUP] Failed to clear temp files:', err.message);
     }
   })();
-
-  // Seed some default pricing plans if none exist
-  const ratesCount = await AdsRates.countDocuments({});
-  if (ratesCount === 0) {
-    const defaultRates = [
-      { rateId: 'R_T_7_H', deviceType: 'tablet', durationDays: 7, frequency: 'hourly', amount: 50000 }, // 500 INR
-      { rateId: 'R_T_30_H', deviceType: 'tablet', durationDays: 30, frequency: 'hourly', amount: 180000 }, // 1800 INR
-      { rateId: 'R_S_7_C', deviceType: 'screen', durationDays: 7, frequency: 'continuous', amount: 150000 }, // 1500 INR
-      { rateId: 'R_S_30_C', deviceType: 'screen', durationDays: 30, frequency: 'continuous', amount: 500000 } // 5000 INR
-    ];
-    await AdsRates.insertMany(defaultRates);
-    console.log('[Seeding] Default advertising rates seeded');
-  }
 
 
 
@@ -776,17 +785,24 @@ const deviceServiceHandlers = {
           createdAt: new Date()
         });
 
-        // Atomically increment cumulative lifetime stats on AdBooking document (never lost even after log trimming)
+        // Atomically increment cumulative lifetime stats on AdBooking document (verified against device venue)
         if (booking) {
-          await AdBooking.updateOne(
-            { bookingId },
-            {
-              $inc: {
-                totalPlays: 1,
-                totalDurationSeconds: resolvedDuration
+          const bookingOutletId = booking.outletId ? booking.outletId.toString() : null;
+          const deviceHostAppId = (deviceDoc && deviceDoc.hostApplicationId) ? deviceDoc.hostApplicationId.toString() : null;
+
+          if (bookingOutletId && deviceHostAppId && bookingOutletId !== deviceHostAppId) {
+            console.warn(`[Security Warning] Impression attribution skipped: Device ${deviceId} (Venue: ${deviceHostAppId}) reported for Booking ${bookingId} (Target Venue: ${bookingOutletId})`);
+          } else {
+            await AdBooking.updateOne(
+              { bookingId },
+              {
+                $inc: {
+                  totalPlays: 1,
+                  totalDurationSeconds: resolvedDuration
+                }
               }
-            }
-          );
+            );
+          }
         }
 
         // Retention policy: Keep only the 10 most recent impression logs per bookingId
@@ -851,17 +867,24 @@ const deviceServiceHandlers = {
             createdAt: new Date()
           });
 
-          // Atomically increment cumulative lifetime stats on AdBooking
+          // Atomically increment cumulative lifetime stats on AdBooking (verified against device venue)
           if (booking) {
-            await AdBooking.updateOne(
-              { bookingId },
-              {
-                $inc: {
-                  totalPlays: 1,
-                  totalDurationSeconds: resolvedDuration
+            const bookingOutletId = booking.outletId ? booking.outletId.toString() : null;
+            const deviceHostAppId = (deviceDoc && deviceDoc.hostApplicationId) ? deviceDoc.hostApplicationId.toString() : null;
+
+            if (bookingOutletId && deviceHostAppId && bookingOutletId !== deviceHostAppId) {
+              console.warn(`[Security Warning] Batch impression attribution skipped: Device ${deviceId} (Venue: ${deviceHostAppId}) reported for Booking ${bookingId} (Target Venue: ${bookingOutletId})`);
+            } else {
+              await AdBooking.updateOne(
+                { bookingId },
+                {
+                  $inc: {
+                    totalPlays: 1,
+                    totalDurationSeconds: resolvedDuration
+                  }
                 }
-              }
-            );
+              );
+            }
           }
 
           // Rolling 10-log window cleanup per bookingId
@@ -938,6 +961,31 @@ const orderServiceHandlers = {
       }
       const merchantId = device.hostApplicationId.userId;
 
+      // Recalculate item prices server-side against active menu database
+      const requestedItemIds = (items || []).map(i => i.itemId).filter(Boolean);
+      const dbMenuItems = await Menu.find({ merchantId, itemId: { $in: requestedItemIds } });
+      const menuPriceMap = new Map();
+      const menuNameMap = new Map();
+      dbMenuItems.forEach(m => {
+        menuPriceMap.set(m.itemId, Number(m.price) || 0);
+        menuNameMap.set(m.itemId, m.name);
+      });
+
+      // Validated items with server-verified prices
+      const validatedItems = (items || []).map(item => {
+        const serverPrice = menuPriceMap.has(item.itemId) ? menuPriceMap.get(item.itemId) : Number(item.price || 0);
+        const serverName = menuNameMap.get(item.itemId) || item.name;
+        const qty = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+        return {
+          itemId: item.itemId,
+          name: serverName,
+          quantity: qty,
+          price: serverPrice
+        };
+      });
+
+      const serverCalculatedTotal = validatedItems.reduce((acc, curr) => acc + (curr.price * curr.quantity), 0);
+
       // Check if there is already an active order session on this table device
       let order = await Order.findOne({
         deviceId,
@@ -946,7 +994,7 @@ const orderServiceHandlers = {
 
       if (order) {
         // Merge items into existing active order
-        items.forEach(newItem => {
+        validatedItems.forEach(newItem => {
           const existingItem = order.items.find(i => i.itemId === newItem.itemId);
           if (existingItem) {
             existingItem.quantity += newItem.quantity;
@@ -960,7 +1008,7 @@ const orderServiceHandlers = {
           }
         });
         // Add new items amount to totalAmount
-        order.totalAmount += Number(totalAmount);
+        order.totalAmount += serverCalculatedTotal;
         // Reset orderStatus to 'placed' so the kitchen knows new items are added to prepare
         order.orderStatus = 'placed';
         
@@ -975,13 +1023,8 @@ const orderServiceHandlers = {
           hostApplicationId,
           deviceId,
           tableNumber,
-          items: items.map(item => ({
-            itemId: item.itemId,
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price
-          })),
-          totalAmount: Number(totalAmount),
+          items: validatedItems,
+          totalAmount: serverCalculatedTotal,
           paymentStatus: 'pending',
           orderStatus: 'placed',
           tableStatus: 'active'

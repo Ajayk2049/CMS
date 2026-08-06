@@ -1820,7 +1820,15 @@ export default function AdvertiserDashboard() {
                 </div>
 
                 {/* Step 3: Campaign Schedule & Pricing Package (Unlocked only when media type selected) */}
-                {!selectedMediaType ? (
+                {rates.length === 0 ? (
+                  <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-semibold flex items-center space-x-3 mt-6">
+                    <AlertCircle className="w-5 h-5 shrink-0" />
+                    <div>
+                      <p className="font-bold text-sm">No Rate Plans Configured</p>
+                      <p className="text-xs text-foreground/90 mt-0.5">The platform administrator has not created any pricing rate cards yet. Ad booking is currently unavailable until rate plans are configured in the admin panel.</p>
+                    </div>
+                  </div>
+                ) : !selectedMediaType ? (
                   <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-semibold flex items-center space-x-3 mt-6">
                     <AlertCircle className="w-5 h-5 shrink-0" />
                     <span>Please choose whether you want to advertise <strong>Static Image</strong> or <strong>Dynamic Video</strong> above to unlock pricing plans.</span>
@@ -1983,7 +1991,7 @@ export default function AdvertiserDashboard() {
                             <div className="pt-2 hidden lg:block">
                               <button
                                 type="submit"
-                                disabled={computedAmount === 0 || submittingBooking || uploading}
+                                disabled={rates.length === 0 || computedAmount === 0 || submittingBooking || uploading}
                                 className="w-full bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 disabled:bg-muted disabled:text-muted-foreground text-white font-black py-3.5 px-4 rounded-2xl transition-all duration-200 flex items-center justify-center space-x-2 shadow-xl hover:shadow-emerald-500/20 cursor-pointer disabled:cursor-not-allowed text-xs min-h-[48px]"
                               >
                                 {submittingBooking ? (

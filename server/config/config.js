@@ -35,7 +35,7 @@ const config = {
     callbackUrl: process.env.PHONEPE_CALLBACK_URL,
     webhookUser: process.env.PHONEPE_WEBHOOK_USER || 'cms_webhook',
     webhookPassword: process.env.PHONEPE_WEBHOOK_PASSWORD || 'webhook_secure_pass_123',
-    webhookStrict: process.env.PHONEPE_WEBHOOK_STRICT === 'true'
+    webhookStrict: process.env.PHONEPE_WEBHOOK_STRICT !== undefined ? process.env.PHONEPE_WEBHOOK_STRICT === 'true' : (process.env.NODE_ENV === 'production')
   },
   merchantRedirectUrl: process.env.MERCHANT_REDIRECT_URL || 'http://localhost:3001/merchant/orders',
   maxVideoDurationSeconds: parseInt(process.env.MAX_VIDEO_DURATION_SECONDS, 10) || 60,
@@ -61,6 +61,11 @@ requiredPhonePe.forEach(key => {
 
 if (missingKeys.length > 0 && !config.demoMode) {
   throw new Error(`Configuration Validation Failed. Missing keys: ${missingKeys.join(', ')}`);
+}
+
+// Security Check: Block default dev JWT secret in production mode
+if (config.env === 'production' && config.jwtSecret === 'dev_jwt_secret_key_12345!') {
+  throw new Error('SECURITY VIOLATION: Production mode cannot be started with the default development JWT secret key. Please set JWT_SECRET in environment variables.');
 }
 
 module.exports = config;

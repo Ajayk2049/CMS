@@ -27,7 +27,7 @@ class AdPlayerService {
     _channel.setMethodCallHandler(_handleMethodCall);
   }
 
-  static const MethodChannel _channel = MethodChannel('com.example.tabletop_ordering_app/native_video');
+  static const MethodChannel _channel = MethodChannel('com.digiads.tabletop/native_video');
 
   List<String> _playlist = [];
   int _currentIndex = 0;

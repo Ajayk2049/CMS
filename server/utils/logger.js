@@ -60,7 +60,18 @@ const logger = pino(
   {
     level: logLevel,
     base: { env: config.env },
-    timestamp: pino.stdTimeFunctions.isoTime
+    timestamp: pino.stdTimeFunctions.isoTime,
+    redact: {
+      paths: [
+        'req.headers.authorization',
+        'req.headers.Authorization',
+        '*.password',
+        '*.token',
+        '*.otp',
+        '*.clientSecret'
+      ],
+      censor: '[REDACTED]'
+    }
   },
   transport
 );

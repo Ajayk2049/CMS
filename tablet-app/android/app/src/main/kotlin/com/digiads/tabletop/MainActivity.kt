@@ -1,5 +1,8 @@
-package com.example.tabletop_ordering_app
+package com.digiads.tabletop
 
+import android.app.admin.DeviceAdminReceiver
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
 import android.os.Process
@@ -13,10 +16,13 @@ import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 
+class KioskAdminReceiver : DeviceAdminReceiver()
+
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.example.tabletop_ordering_app/performance"
-    private val VIDEO_CHANNEL = "com.example.tabletop_ordering_app/native_video"
+    private val CHANNEL = "com.digiads.tabletop/performance"
+    private val VIDEO_CHANNEL = "com.digiads.tabletop/native_video"
     private var methodChannel: MethodChannel? = null
+    private var kioskActive = true  // Lock Task is ON by default
 
     companion object {
         var activeVideoView: NativeVideoView? = null
@@ -28,12 +34,34 @@ class MainActivity : FlutterActivity() {
         // Boost the Flutter UI thread to display priority
         Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
 
+        // Allowlist this app for Lock Task Mode on every cold start
+        enableDeviceOwnerPolicies()
+
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VIDEO_CHANNEL)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getThreadPriority" -> {
                     result.success(Process.getThreadPriority(Process.myTid()))
+                }
+                "startKioskMode" -> {
+                    try {
+                        kioskActive = true
+                        enableDeviceOwnerPolicies()
+                        enterLockTask()
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("LOCK_TASK_ERROR", e.message, null)
+                    }
+                }
+                "stopKioskMode" -> {
+                    try {
+                        kioskActive = false
+                        stopLockTask()
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("LOCK_TASK_ERROR", e.message, null)
+                    }
                 }
                 else -> result.notImplemented()
             }
@@ -62,6 +90,97 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        hideSystemUI()
+        if (kioskActive) {
+            enterLockTask()
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemUI()
+        }
+    }
+
+    /**
+     * Allowlist this package for Lock Task Mode and strip ALL system UI features.
+     * This only works when the app is provisioned as Device Owner via:
+     *   adb shell dpm set-device-owner com.digiads.tabletop/.KioskAdminReceiver
+     */
+    private fun enableDeviceOwnerPolicies() {
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val adminComponent = ComponentName(this, KioskAdminReceiver::class.java)
+            if (dpm.isDeviceOwnerApp(packageName)) {
+                // Allowlist our package for Lock Task
+                dpm.setLockTaskPackages(adminComponent, arrayOf(packageName))
+                // Strip ALL system features: no nav bar, no notifications, no overview, no global actions
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    dpm.setLockTaskFeatures(adminComponent, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
+                }
+                // Disable the status bar completely
+                dpm.setStatusBarDisabled(adminComponent, true)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DigiAdsKiosk", "Device Owner policy setup failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Enter Lock Task Mode. This fully locks down the device:
+     * - Navigation bar is hidden and non-functional
+     * - Notification shade cannot be pulled down
+     * - Recent apps / multitask button does nothing
+     * - Home button does nothing
+     * - Settings is completely inaccessible
+     */
+    private fun enterLockTask() {
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            if (dpm.isDeviceOwnerApp(packageName)) {
+                if (!isInLockTaskMode()) {
+                    startLockTask()
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DigiAdsKiosk", "startLockTask failed: ${e.message}")
+        }
+    }
+
+    private fun isInLockTaskMode(): Boolean {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            activityManager.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE
+        } else {
+            @Suppress("DEPRECATION")
+            activityManager.isInLockTaskMode
+        }
+    }
+
+    private fun hideSystemUI() {
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let { controller ->
+                controller.hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+                controller.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_FULLSCREEN
+            )
         }
     }
 }
