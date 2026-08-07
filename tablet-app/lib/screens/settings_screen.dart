@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
 import 'device_setup_screen.dart';
@@ -147,6 +148,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
             subtitle: 'Clear all credentials. Requires full setup before kiosk can run.',
             onTap: _resetDevice,
             danger: true,
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: () async {
+              try {
+                await const MethodChannel('com.digiads.tabletop/performance').invokeMethod('openAndroidSettings');
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to open Android Settings: $e')),
+                  );
+                }
+              }
+            },
+            icon: const Icon(Icons.settings_applications_rounded, color: Colors.white),
+            label: const Text(
+              "System Settings",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade700,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 4,
+            ),
           ),
         ],
       ),

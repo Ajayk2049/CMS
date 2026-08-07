@@ -577,6 +577,18 @@ export default function MerchantDashboard() {
     }
     return '';
   });
+  const [deviceFilterStatus, setDeviceFilterStatus] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('deviceFilterStatus') || 'all';
+    }
+    return 'all';
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('deviceFilterStatus', deviceFilterStatus);
+    }
+  }, [deviceFilterStatus]);
 
   // Analytics Dashboard states
   const [analyticsDays, setAnalyticsDays] = useState(0);
@@ -1593,6 +1605,8 @@ export default function MerchantDashboard() {
               return next;
             });
           }
+        } else if (payload.event === 'device_status_changed') {
+          fetchDevices(authToken);
         }
       };
 
@@ -1867,21 +1881,66 @@ export default function MerchantDashboard() {
       return;
     }
 
+    // Client-side Video Duration Check (30s limit for Open Ads Mode, 60s for Closed Mode)
+    if (isVid) {
+      const selectedApp = applications.find(app => app._id === selectedOutletId);
+      const isClosedMode = selectedApp?.adMode === 'closed' || selectedApp?.allowOpenAds === false;
+      const maxAllowedSecs = isClosedMode ? 60 : 30;
+
+      const videoElement = document.createElement('video');
+      videoElement.preload = 'metadata';
+      videoElement.onloadedmetadata = () => {
+        window.URL.revokeObjectURL(videoElement.src);
+        const duration = videoElement.duration || 0;
+        if (duration > maxAllowedSecs + 0.5) {
+          showToast(`Video duration (${Math.round(duration)}s) exceeds the ${maxAllowedSecs}-second limit for ${isClosedMode ? 'Closed' : 'Open'} Ads Mode venues.`, 'error');
+          return;
+        }
+
+        const localPreviewUrl = URL.createObjectURL(file);
+        const key = `${slotType}_${slotIndex}`;
+
+        setPromoDraftSlots(prev => {
+          const newTitle = (prev[key]?.title && !prev[key]?.isDeleted) ? prev[key].title : file.name.replace(/\.[^/.]+$/, '');
+          return {
+            ...prev,
+            [key]: {
+              title: newTitle,
+              mediaUrl: prev[key]?.mediaUrl || '',
+              mediaType: 'video',
+              previewUrl: localPreviewUrl,
+              fileObj: file,
+              isModified: true,
+              isDeleted: false
+            }
+          };
+        });
+      };
+      videoElement.onerror = () => {
+        showToast('Failed to parse video duration metadata.', 'error');
+      };
+      videoElement.src = URL.createObjectURL(file);
+      return;
+    }
+
     const localPreviewUrl = URL.createObjectURL(file);
     const key = `${slotType}_${slotIndex}`;
 
-    setPromoDraftSlots(prev => ({
-      ...prev,
-      [key]: {
-        title: prev[key]?.title || (file.name.replace(/\.[^/.]+$/, '')),
-        mediaUrl: prev[key]?.mediaUrl || '',
-        mediaType: isVid ? 'video' : 'image',
-        previewUrl: localPreviewUrl,
-        fileObj: file,
-        isModified: true,
-        isDeleted: false
-      }
-    }));
+    setPromoDraftSlots(prev => {
+      const newTitle = (prev[key]?.title && !prev[key]?.isDeleted) ? prev[key].title : file.name.replace(/\.[^/.]+$/, '');
+      return {
+        ...prev,
+        [key]: {
+          title: newTitle,
+          mediaUrl: prev[key]?.mediaUrl || '',
+          mediaType: isVid ? 'video' : 'image',
+          previewUrl: localPreviewUrl,
+          fileObj: file,
+          isModified: true,
+          isDeleted: false
+        }
+      };
+    });
   };
 
   const handleClearPromoSlot = (slotType, slotIndex) => {
@@ -1975,10 +2034,14 @@ export default function MerchantDashboard() {
           }
         }
 
+        const resolvedTitle = (item.title && item.title.trim())
+          ? item.title.trim()
+          : (item.fileObj ? item.fileObj.name.replace(/\.[^/.]+$/, '') : `${slotType.replace('_', ' ').toUpperCase()} Slot ${slotIndex + 1}`);
+
         slotsPayload.push({
           slotType,
           slotIndex,
-          title: item.title,
+          title: resolvedTitle,
           mediaUrl: finalMediaUrl,
           mediaType: item.mediaType,
           tempPath,
@@ -3324,6 +3387,39 @@ export default function MerchantDashboard() {
                   ))}
                 </select>
 
+                {/* Status Filter Tabs (All, Online, Offline) */}
+                <div className="flex bg-muted p-1 rounded-xl border border-border/40 text-[10px] font-bold space-x-0.5">
+                  <button
+                    onClick={() => setDeviceFilterStatus('all')}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${deviceFilterStatus === 'all'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                  >
+                    All ({devices.filter(d => d.deviceType === deviceFilterType && (!deviceFilterVenue || d.hostApplicationId === deviceFilterVenue)).length})
+                  </button>
+                  <button
+                    onClick={() => setDeviceFilterStatus('online')}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center ${deviceFilterStatus === 'online'
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shadow-sm font-black'
+                      : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse" />
+                    Online ({devices.filter(d => d.deviceType === deviceFilterType && (!deviceFilterVenue || d.hostApplicationId === deviceFilterVenue) && d.status === 'online').length})
+                  </button>
+                  <button
+                    onClick={() => setDeviceFilterStatus('offline')}
+                    className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer flex items-center ${deviceFilterStatus === 'offline'
+                      ? 'bg-background text-foreground shadow-sm font-black'
+                      : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground mr-1.5" />
+                    Offline ({devices.filter(d => d.deviceType === deviceFilterType && (!deviceFilterVenue || d.hostApplicationId === deviceFilterVenue) && d.status !== 'online').length})
+                  </button>
+                </div>
+
                 {/* Device Type Tabs */}
                 <div className="flex bg-muted p-1 rounded-xl border border-border/40 text-[10px] font-bold">
                   <button
@@ -3352,14 +3448,18 @@ export default function MerchantDashboard() {
               const filteredDevices = devices.filter(device => {
                 const matchesType = device.deviceType === deviceFilterType;
                 const matchesVenue = !deviceFilterVenue || device.hostApplicationId === deviceFilterVenue;
-                return matchesType && matchesVenue;
+                const matchesStatus = deviceFilterStatus === 'all' || 
+                  (deviceFilterStatus === 'online' ? device.status === 'online' : device.status !== 'online');
+                return matchesType && matchesVenue && matchesStatus;
               });
 
               return filteredDevices.length === 0 ? (
                 <div className="text-center py-20 border border-dashed border-border/40 bg-card/5 rounded-2xl">
                   <Tablet className="w-12 h-12 text-[#0069a8] fill-[#0069a8] mx-auto mb-4 opacity-50" />
                   <p className="text-sm font-bold text-foreground">No Provisioned Devices Found</p>
-                  <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">No active {deviceFilterType === 'tablet' ? 'tablets' : 'screens'} match the selected venue criteria.</p>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto font-medium">
+                    No {deviceFilterStatus !== 'all' ? `${deviceFilterStatus} ` : ''}{deviceFilterType === 'tablet' ? 'tablets' : 'screens'} match the selected venue criteria.
+                  </p>
                 </div>
               ) : (
                 <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -3911,12 +4011,16 @@ export default function MerchantDashboard() {
                     </div>
                   </div>
 
-                  <div className="p-4 rounded-2xl bg-muted/20 border border-border/40 text-left flex items-center space-x-3">
-                    <Lock className="w-6 h-6 text-amber-500 shrink-0" />
+                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-left flex items-center space-x-3">
+                    <Video className="w-6 h-6 text-amber-500 shrink-0" />
                     <div>
-                      <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider">Safeguard</span>
+                      <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider">Video Duration Limit</span>
                       <p className="text-[10px] text-muted-foreground font-semibold leading-tight mt-0.5">
-                        Media changes apply live on tabletop devices when you click <strong className="text-foreground">Stream Ads</strong>.
+                        {(() => {
+                          const currentApp = applications.find(app => app._id === selectedOutletId);
+                          const isClosed = currentApp?.adMode === 'closed' || currentApp?.allowOpenAds === false;
+                          return isClosed ? 'Max 60 Seconds per video (Closed Mode)' : 'Max 30 Seconds per video (Open Ads Mode)';
+                        })()}
                       </p>
                     </div>
                   </div>

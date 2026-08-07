@@ -163,12 +163,26 @@ async function startFastify() {
         global.deviceSockets.set(deviceId, socket);
         console.log(`[WS] Device connected: ${deviceId}`);
 
-        // Update MongoDB Device status to online
+        // Update MongoDB Device status to online & broadcast to merchant
         try {
-          await Device.updateOne(
+          const updatedDevice = await Device.findOneAndUpdate(
             { deviceId },
-            { $set: { status: 'online', lastHeartbeat: new Date() } }
+            { $set: { status: 'online', lastHeartbeat: new Date() } },
+            { new: true }
           );
+          if (updatedDevice && updatedDevice.hostApplicationId) {
+            const HostApplication = require('./models/HostApplication');
+            const app = await HostApplication.findById(updatedDevice.hostApplicationId);
+            if (app && app.userId) {
+              const wsClient = global.merchantSockets ? global.merchantSockets.get(app.userId.toString()) : null;
+              if (wsClient) {
+                wsClient.send(JSON.stringify({
+                  event: 'device_status_changed',
+                  data: { deviceId, status: 'online' }
+                }));
+              }
+            }
+          }
         } catch (dbErr) {
           console.error(`[WS] Failed to update Device ${deviceId} status to online:`, dbErr.message);
         }
@@ -190,7 +204,10 @@ async function startFastify() {
 
             if (data.event === 'ping' || data.type === 'ping') {
               socket.send(JSON.stringify({ event: 'pong', timestamp: Date.now() }));
-              await Device.updateOne({ deviceId }, { $set: { lastHeartbeat: new Date() } }).catch(() => {});
+              await Device.updateOne(
+                { deviceId }, 
+                { $set: { status: 'online', lastHeartbeat: new Date() } }
+              ).catch(() => {});
             } else if (data.event === 'call_waiter') {
               const rawWaiterOption = String(data.waiterOption || data.waiterCallOption || 'Others').trim();
               const rawTableNumber = String(data.tableNumber || 'T1').trim();
@@ -261,10 +278,24 @@ async function startFastify() {
           global.deviceSockets.delete(deviceId);
           console.log(`[WS] Device disconnected: ${deviceId}`);
           try {
-            await Device.updateOne(
+            const updatedDevice = await Device.findOneAndUpdate(
               { deviceId },
-              { $set: { status: 'offline', lastHeartbeat: new Date() } }
+              { $set: { status: 'offline', lastHeartbeat: new Date() } },
+              { new: true }
             );
+            if (updatedDevice && updatedDevice.hostApplicationId) {
+              const HostApplication = require('./models/HostApplication');
+              const app = await HostApplication.findById(updatedDevice.hostApplicationId);
+              if (app && app.userId) {
+                const wsClient = global.merchantSockets ? global.merchantSockets.get(app.userId.toString()) : null;
+                if (wsClient) {
+                  wsClient.send(JSON.stringify({
+                    event: 'device_status_changed',
+                    data: { deviceId, status: 'offline' }
+                  }));
+                }
+              }
+            }
           } catch (dbErr) {
             console.error(`[WS] Failed to update Device ${deviceId} status to offline:`, dbErr.message);
           }

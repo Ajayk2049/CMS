@@ -163,6 +163,7 @@ class VideoQueueService {
           }
 
           ffmpegCommand
+            .noAudio()                 // Strip audio stream for silent kiosk video playback
             .outputOptions([
               '-threads 1',            // STRICT 1-THREAD LIMIT to keep CPU usage low
               '-vf scale=trunc(iw/2)*2:trunc(ih/2)*2', // Guarantees even dimensions for Android decoders
@@ -173,8 +174,6 @@ class VideoQueueService {
               '-preset faster',
               '-movflags +faststart'   // Enables fast progressive playback
             ])
-            .audioCodec('aac')
-            .audioChannels(2)
             .on('end', () => resolve(true))
             .on('error', (err) => reject(err))
             .save(filePath);

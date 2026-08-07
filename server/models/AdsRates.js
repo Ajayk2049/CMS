@@ -35,6 +35,11 @@ const AdsRatesSchema = new mongoose.Schema({
     required: true, // in paise
     min: 0
   },
+  pricingType: {
+    type: String,
+    enum: ['per_device', 'whole_venue'],
+    default: 'per_device'
+  },
   createdAt: {
     type: Date,
     default: Date.now

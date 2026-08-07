@@ -2,8 +2,10 @@ package com.digiads.tabletop
 
 import android.app.admin.DeviceAdminReceiver
 import android.app.admin.DevicePolicyManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Process
 import android.view.View
@@ -17,6 +19,20 @@ import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 
 class KioskAdminReceiver : DeviceAdminReceiver()
+
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED ||
+            intent.action == "android.intent.action.QUICKBOOT_POWERON" ||
+            intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
+            val i = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            context.startActivity(i)
+        }
+    }
+}
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.digiads.tabletop/performance"
@@ -58,9 +74,25 @@ class MainActivity : FlutterActivity() {
                     try {
                         kioskActive = false
                         stopLockTask()
+                        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                        val adminComponent = ComponentName(this, KioskAdminReceiver::class.java)
+                        if (dpm.isDeviceOwnerApp(packageName)) {
+                            dpm.setStatusBarDisabled(adminComponent, false)
+                        }
+                        showSystemUI()
                         result.success(true)
                     } catch (e: Exception) {
                         result.error("LOCK_TASK_ERROR", e.message, null)
+                    }
+                }
+                "openAndroidSettings" -> {
+                    try {
+                        val intent = android.content.Intent(android.provider.Settings.ACTION_SETTINGS)
+                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("SETTINGS_ERROR", e.message, null)
                     }
                 }
                 else -> result.notImplemented()
@@ -181,6 +213,16 @@ class MainActivity : FlutterActivity() {
                 or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 or View.SYSTEM_UI_FLAG_FULLSCREEN
             )
+        }
+    }
+
+    private fun showSystemUI() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(true)
+            window.insetsController?.show(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
         }
     }
 }

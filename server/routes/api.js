@@ -121,13 +121,16 @@ function registerRoutes(fastify, options, done) {
     adminRoutes.get('/admin/hosts', adminController.getHostApplications);
     adminRoutes.post('/admin/hosts/review', adminController.reviewHostApplication);
     adminRoutes.put('/admin/hosts/:hostApplicationId/status', adminController.updateHostStatusAndQuotas.bind(adminController));
+    adminRoutes.post('/admin/hosts/:hostApplicationId/reset-quota', adminController.resetHostQuotaNow.bind(adminController));
     adminRoutes.put('/admin/hosts/:hostApplicationId/watermark', adminController.updateVenueWatermark.bind(adminController));
     adminRoutes.get('/admin/bookings', adminController.getAdBookings);
     adminRoutes.post('/admin/bookings/review', adminController.reviewAdBooking);
     adminRoutes.put('/admin/bookings/revoke/:bookingId', adminController.revokeBooking);
     adminRoutes.post('/admin/bookings/:bookingId/refund', adminController.refundBooking);
-    adminRoutes.post('/admin/rates', adminController.manageAdsRates);
-    adminRoutes.delete('/admin/rates/:rateId', adminController.deleteAdsRate);
+    adminRoutes.get('/admin/rates', adminController.getAdsRates.bind(adminController));
+    adminRoutes.post('/admin/rates', adminController.manageAdsRates.bind(adminController));
+    adminRoutes.put('/admin/rates/:rateId', adminController.manageAdsRates.bind(adminController));
+    adminRoutes.delete('/admin/rates/:rateId', adminController.deleteAdsRate.bind(adminController));
     adminRoutes.get('/admin/stats', adminController.getStats);
     adminRoutes.get('/admin/devices', adminController.getDevices);
     adminRoutes.post('/admin/devices', adminController.createDevice);

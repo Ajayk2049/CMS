@@ -154,9 +154,13 @@ class AdminController {
       isRevoked,
       customMaxVideoSlots,
       customMaxImageSlots,
+      customMaxScreenVideoSlots,
+      customMaxScreenImageSlots,
       customMaxScreenSlots,
       customDailyVideoQuota,
       customDailyImageQuota,
+      customDailyScreenVideoQuota,
+      customDailyScreenImageQuota,
       customDailyScreenQuota
     } = req.body || {};
 
@@ -171,11 +175,24 @@ class AdminController {
       if (isRevoked !== undefined) app.isRevoked = !!isRevoked;
       if (customMaxVideoSlots !== undefined) app.customMaxVideoSlots = customMaxVideoSlots !== '' && customMaxVideoSlots !== null ? parseInt(customMaxVideoSlots, 10) : null;
       if (customMaxImageSlots !== undefined) app.customMaxImageSlots = customMaxImageSlots !== '' && customMaxImageSlots !== null ? parseInt(customMaxImageSlots, 10) : null;
+      if (customMaxScreenVideoSlots !== undefined) app.customMaxScreenVideoSlots = customMaxScreenVideoSlots !== '' && customMaxScreenVideoSlots !== null ? parseInt(customMaxScreenVideoSlots, 10) : null;
+      if (customMaxScreenImageSlots !== undefined) app.customMaxScreenImageSlots = customMaxScreenImageSlots !== '' && customMaxScreenImageSlots !== null ? parseInt(customMaxScreenImageSlots, 10) : null;
       if (customMaxScreenSlots !== undefined) app.customMaxScreenSlots = customMaxScreenSlots !== '' && customMaxScreenSlots !== null ? parseInt(customMaxScreenSlots, 10) : null;
 
       if (customDailyVideoQuota !== undefined) app.customDailyVideoQuota = customDailyVideoQuota !== '' && customDailyVideoQuota !== null ? parseInt(customDailyVideoQuota, 10) : null;
       if (customDailyImageQuota !== undefined) app.customDailyImageQuota = customDailyImageQuota !== '' && customDailyImageQuota !== null ? parseInt(customDailyImageQuota, 10) : null;
+      if (customDailyScreenVideoQuota !== undefined) app.customDailyScreenVideoQuota = customDailyScreenVideoQuota !== '' && customDailyScreenVideoQuota !== null ? parseInt(customDailyScreenVideoQuota, 10) : null;
+      if (customDailyScreenImageQuota !== undefined) app.customDailyScreenImageQuota = customDailyScreenImageQuota !== '' && customDailyScreenImageQuota !== null ? parseInt(customDailyScreenImageQuota, 10) : null;
       if (customDailyScreenQuota !== undefined) app.customDailyScreenQuota = customDailyScreenQuota !== '' && customDailyScreenQuota !== null ? parseInt(customDailyScreenQuota, 10) : null;
+
+      // Immediately top up daily remaining changes so updated quotas take effect right away
+      const isClosed = app.allowOpenAds === false || app.adMode === 'closed';
+      app.dailyVideoChangesRemaining = app.customDailyVideoQuota !== null && app.customDailyVideoQuota !== undefined ? app.customDailyVideoQuota : (isClosed ? 6 : 4);
+      app.dailyImageChangesRemaining = app.customDailyImageQuota !== null && app.customDailyImageQuota !== undefined ? app.customDailyImageQuota : (isClosed ? 15 : 10);
+      app.dailyScreenVideoChangesRemaining = app.customDailyScreenVideoQuota !== null && app.customDailyScreenVideoQuota !== undefined ? app.customDailyScreenVideoQuota : (isClosed ? 6 : 4);
+      app.dailyScreenImageChangesRemaining = app.customDailyScreenImageQuota !== null && app.customDailyScreenImageQuota !== undefined ? app.customDailyScreenImageQuota : (isClosed ? 15 : 10);
+      app.dailyScreenChangesRemaining = app.customDailyScreenQuota !== null && app.customDailyScreenQuota !== undefined ? app.customDailyScreenQuota : (isClosed ? 6 : 4);
+      app.lastQuotaResetDate = new Date();
 
       await app.save();
 
@@ -187,6 +204,39 @@ class AdminController {
     } catch (error) {
       console.error('updateHostStatusAndQuotas Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to update host status & quotas' });
+    }
+  }
+
+  /**
+   * Reset daily host quotas immediately (Instant 1-Click Reset)
+   */
+  async resetHostQuotaNow(req, res) {
+    const { hostApplicationId } = req.params || {};
+    try {
+      const HostApplication = require('../models/HostApplication');
+      const app = await HostApplication.findById(hostApplicationId);
+      if (!app) {
+        return res.status(404).send({ success: false, message: 'Host application not found' });
+      }
+
+      const isClosed = app.allowOpenAds === false || app.adMode === 'closed';
+      app.dailyVideoChangesRemaining = app.customDailyVideoQuota !== null && app.customDailyVideoQuota !== undefined ? app.customDailyVideoQuota : (isClosed ? 6 : 4);
+      app.dailyImageChangesRemaining = app.customDailyImageQuota !== null && app.customDailyImageQuota !== undefined ? app.customDailyImageQuota : (isClosed ? 15 : 10);
+      app.dailyScreenVideoChangesRemaining = app.customDailyScreenVideoQuota !== null && app.customDailyScreenVideoQuota !== undefined ? app.customDailyScreenVideoQuota : (isClosed ? 6 : 4);
+      app.dailyScreenImageChangesRemaining = app.customDailyScreenImageQuota !== null && app.customDailyScreenImageQuota !== undefined ? app.customDailyScreenImageQuota : (isClosed ? 15 : 10);
+      app.dailyScreenChangesRemaining = app.customDailyScreenQuota !== null && app.customDailyScreenQuota !== undefined ? app.customDailyScreenQuota : (isClosed ? 6 : 4);
+      app.lastQuotaResetDate = new Date();
+
+      await app.save();
+
+      return res.status(200).send({
+        success: true,
+        message: `Daily quotas for ${app.outletName} reset to full capacity successfully!`,
+        data: app
+      });
+    } catch (error) {
+      console.error('resetHostQuotaNow Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to reset daily host quotas' });
     }
   }
 
@@ -327,12 +377,31 @@ class AdminController {
 
   /**
    * Create or Update pricing plans
+  /**
+   * Get all rate cards for platform admin
+   */
+  async getAdsRates(req, res) {
+    try {
+      const AdsRates = require('../models/AdsRates');
+      const rates = await AdsRates.find({}).sort({ deviceType: 1, mediaType: 1, durationDays: 1 });
+      return res.status(200).send({ success: true, data: rates });
+    } catch (error) {
+      console.error('getAdsRates Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch rate plans' });
+    }
+  }
+
+  /**
+   * Create or Update a pricing rate plan
    */
   async manageAdsRates(req, res) {
-    const { rateId, deviceType, mediaType, maxVideoLengthSeconds, durationDays, frequency, amount } = req.body || {};
+    const { rateId: paramRateId } = req.params || {};
+    let { rateId, deviceType, mediaType, maxVideoLengthSeconds, durationDays, frequency, amount, pricingType } = req.body || {};
 
-    if (!rateId || !deviceType || !durationDays || !frequency || amount === undefined) {
-      return res.status(400).send({ success: false, message: 'rateId, deviceType, durationDays, frequency, and amount are required' });
+    const targetRateId = paramRateId || rateId;
+
+    if (!deviceType || !durationDays || !frequency || amount === undefined || amount === '' || isNaN(amount)) {
+      return res.status(400).send({ success: false, message: 'deviceType, durationDays, frequency, and valid amount are required' });
     }
 
     if (!['tablet', 'screen'].includes(deviceType)) {
@@ -341,17 +410,27 @@ class AdminController {
 
     const resolvedMediaType = (mediaType || 'video').toLowerCase();
     const resolvedMaxVideoLength = parseInt(maxVideoLengthSeconds, 10) === 60 ? 60 : 30;
+    const resolvedPricingType = ['per_device', 'whole_venue'].includes(pricingType) ? pricingType : 'per_device';
 
     try {
+      const AdsRates = require('../models/AdsRates');
+      const { generateCustomId } = require('../utils/idGenerator');
+      let finalRateId = targetRateId;
+      if (!finalRateId) {
+        finalRateId = generateCustomId('RATE');
+      }
+
       const rate = await AdsRates.findOneAndUpdate(
-        { rateId },
+        { rateId: finalRateId },
         { 
+          rateId: finalRateId,
           deviceType, 
           mediaType: resolvedMediaType,
           maxVideoLengthSeconds: resolvedMaxVideoLength,
           durationDays: parseInt(durationDays, 10), 
           frequency, 
           amount: parseInt(amount, 10), 
+          pricingType: resolvedPricingType,
           updatedAt: Date.now() 
         },
         { upsert: true, new: true }

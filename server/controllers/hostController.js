@@ -661,7 +661,23 @@ class HostController {
       const apps = await HostApplication.find({ userId: req.user.uid, status: 'approved' });
       const appIds = apps.map(app => app._id);
 
-      const devices = await Device.find({ hostApplicationId: { $in: appIds } });
+      const rawDevices = await Device.find({ hostApplicationId: { $in: appIds } });
+      const now = new Date();
+      const offlineThresholdMs = 35000;
+
+      const devices = rawDevices.map(d => {
+        const doc = d.toObject();
+        const hasActiveSocket = global.deviceSockets && global.deviceSockets.has(doc.deviceId);
+        const isRecentlyPinged = doc.lastHeartbeat && (now - new Date(doc.lastHeartbeat)) < offlineThresholdMs;
+
+        if (hasActiveSocket || isRecentlyPinged) {
+          doc.status = 'online';
+        } else {
+          doc.status = 'offline';
+        }
+        return doc;
+      });
+
       return res.status(200).send({ success: true, data: devices });
     } catch (error) {
       console.error('getMyDevices Error:', error.message);
@@ -1426,12 +1442,38 @@ class HostController {
         // 1. Stream raw upload directly to temp storage
         await pipeline(req.body, fs.createWriteStream(tempPath));
 
-        // 2. Make an initial raw copy so file exists immediately
+        // 2. Enforce 30-second duration limit for Open Ads Mode venues (with 0.5s encoding tolerance)
+        const isClosedMode = hostApp.adMode === 'closed' || hostApp.allowOpenAds === false;
+        const maxAllowedSeconds = isClosedMode ? 60 : 30;
+
+        try {
+          const metadata = await new Promise((resolve, reject) => {
+            ffmpeg.ffprobe(tempPath, (err, meta) => {
+              if (err) return reject(err);
+              resolve(meta);
+            });
+          });
+
+          const durationSeconds = metadata?.format?.duration || 0;
+          if (durationSeconds > maxAllowedSeconds + 0.5) {
+            if (fs.existsSync(tempPath)) {
+              try { fs.unlinkSync(tempPath); } catch (e) {}
+            }
+            return res.status(400).send({
+              success: false,
+              message: `Uploaded video duration (${Math.round(durationSeconds)}s) exceeds the ${maxAllowedSeconds}-second limit for ${isClosedMode ? 'Closed' : 'Open'} Ads Mode venues.`
+            });
+          }
+        } catch (probeErr) {
+          console.warn('[uploadHostPromoMedia] ffprobe duration check warning:', probeErr.message);
+        }
+
+        // 3. Make an initial raw copy so file exists immediately
         fs.copyFileSync(tempPath, rawFilePath);
 
         const initialMediaUrl = `/uploads/outlets/${folderName}/promos/${uniqueFilename}`;
 
-        // 3. Return HTTP 200 immediately (in 1-2 seconds!)
+        // 4. Return HTTP 200 immediately (in 1-2 seconds!)
         return res.status(200).send({
           success: true,
           message: 'Video uploaded! Background processing queued.',

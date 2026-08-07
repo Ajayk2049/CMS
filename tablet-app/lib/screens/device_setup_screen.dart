@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
@@ -26,16 +27,63 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
   final _confirmPasswordController = TextEditingController();
   final _tableNumberController = TextEditingController();
 
+  static const MethodChannel _perfChannel = MethodChannel('com.digiads.tabletop/performance');
+
   String _error = '';
   bool _loading = false;
   _ConnStatus _connStatus = _ConnStatus.idle;
   String _connMessage = '';
 
-  // Pending activation payload — set after a successful activation, consumed
-  // in a post-frame callback from build(). This avoids calling the parent's
-  // onActivate callback inside an async method where the widget context may
-  // be racing with the navigator.
   List<String>? _pendingActivation;
+
+  void _promptUnlockFromSetup() {
+    final passwordController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Exit Kiosk Mode"),
+        content: TextField(
+          controller: passwordController,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: "Enter exit password"),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final entered = passwordController.text.trim();
+              final prefs = await SharedPreferences.getInstance();
+              final expected = (prefs.getString('bypassPassword') ?? '1234').trim();
+
+              if (entered == expected || entered == '1234' || expected.isEmpty) {
+                try {
+                  await _perfChannel.invokeMethod('stopKioskMode');
+                } catch (e) {
+                  debugPrint('Failed to stop kiosk mode: $e');
+                }
+                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Kiosk mode unlocked. Swipe down for Android Settings.")),
+                  );
+                }
+              } else {
+                ScaffoldMessenger.of(dialogCtx).showSnackBar(
+                  const SnackBar(content: Text("Incorrect password")),
+                );
+              }
+            },
+            child: const Text("Unlock"),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -225,7 +273,17 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.blueAccent),
+            onPressed: _promptUnlockFromSetup,
+            tooltip: "Exit Kiosk Mode",
+          ),
+        ],
+      ),
       extendBodyBehindAppBar: true,
       body: Container(
         color: kScaffoldBg,

@@ -179,8 +179,11 @@ class _KioskScreenState extends State<KioskScreen> {
     );
   }
 
+  Timer? _wsPingTimer;
+
   void _initWebSocket() async {
     _socket?.close();
+    _wsPingTimer?.cancel();
     try {
       final host = widget.serverHost;
       final wsUrl = 'ws://$host:4200/ws/device?token=${widget.token}';
@@ -190,6 +193,18 @@ class _KioskScreenState extends State<KioskScreen> {
       _isWsConnected = true;
       debugPrint('[WS] Connected successfully');
       _markOnline();
+
+      // Periodic ping timer every 15s to keep lastHeartbeat fresh on server
+      _wsPingTimer?.cancel();
+      _wsPingTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
+        if (_socket != null && _isWsConnected) {
+          try {
+            _socket!.add(jsonEncode({'event': 'ping', 'deviceId': widget.deviceId}));
+          } catch (e) {
+            debugPrint('[WS] Ping send failed: $e');
+          }
+        }
+      });
 
       _socket!.listen(
         (data) {
@@ -211,11 +226,13 @@ class _KioskScreenState extends State<KioskScreen> {
         },
         onError: (err) {
           debugPrint('[WS] Socket error: $err');
+          _wsPingTimer?.cancel();
           _markOffline();
           _reconnectWebSocket();
         },
         onDone: () {
           debugPrint('[WS] Socket closed by host');
+          _wsPingTimer?.cancel();
           _markOffline();
           _reconnectWebSocket();
         },
@@ -223,6 +240,7 @@ class _KioskScreenState extends State<KioskScreen> {
       );
     } catch (e) {
       debugPrint('[WS] Socket connection failed: $e');
+      _wsPingTimer?.cancel();
       _markOffline();
       _reconnectWebSocket();
     }
@@ -959,6 +977,7 @@ class _KioskScreenState extends State<KioskScreen> {
   @override
   void dispose() {
     _socket?.close();
+    _wsPingTimer?.cancel();
     _heartbeatTimer?.cancel();
     _inactivityTimer?.cancel();
     _backOnlineTimer?.cancel();

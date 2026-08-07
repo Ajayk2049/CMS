@@ -39,9 +39,12 @@ class DeviceAuthController {
     const { deviceId, hardwareId, deviceType, kioskPassword } = parseResult.data;
 
     try {
-      const device = await Device.findOne({ deviceId });
+      const cleanDeviceId = deviceId.trim();
+      const device = await Device.findOne({ 
+        deviceId: { $regex: new RegExp(`^${cleanDeviceId}$`, 'i') } 
+      });
       if (!device) {
-        return res.status(404).send({ success: false, message: 'Device registration not found' });
+        return res.status(404).send({ success: false, message: `Device registration for ID "${cleanDeviceId}" not found in database.` });
       }
 
       if (device.deviceType !== deviceType) {

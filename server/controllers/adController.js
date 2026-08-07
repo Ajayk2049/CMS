@@ -296,42 +296,28 @@ class AdController {
         return res.status(400).send({ success: false, message: 'Invalid deviceType requested' });
       }
 
-      // Fetch rates with mediaType and maxVideoLengthSeconds validation
-      let rate = await AdsRates.findOne({
+      // Fetch exact matching rate plan created by platform admin
+      const rateQuery = {
         deviceType,
         mediaType: resolvedMediaType,
-        maxVideoLengthSeconds: resolvedMaxVideoLength,
         durationDays: parseInt(adDurationDays, 10),
         frequency
-      });
-
-      // Fallback 1: If no specific video length rate found, try matching mediaType
-      if (!rate) {
-        rate = await AdsRates.findOne({
-          deviceType,
-          mediaType: resolvedMediaType,
-          durationDays: parseInt(adDurationDays, 10),
-          frequency
-        });
+      };
+      if (resolvedMediaType === 'video') {
+        rateQuery.maxVideoLengthSeconds = resolvedMaxVideoLength;
       }
 
-      // Fallback 2: Fallback to general deviceType rate
-      if (!rate) {
-        rate = await AdsRates.findOne({
-          deviceType,
-          durationDays: parseInt(adDurationDays, 10),
-          frequency
-        });
-      }
+      let rate = await AdsRates.findOne(rateQuery);
 
       if (!rate) {
         return res.status(400).send({ 
           success: false, 
-          message: 'No active pricing rate plan found for this duration, media type, and frequency combination' 
+          message: 'No active pricing rate plan configured by admin for this duration, media type, and frequency selection.' 
         });
       }
 
-      const totalAmount = rate.amount * bookingQty; // amount is in paise
+      // Calculate total amount (whole_venue flat rate vs per_device rate x qty)
+      const totalAmount = rate.pricingType === 'whole_venue' ? rate.amount : (rate.amount * bookingQty); // amount is in paise
 
       // Generate IDs first
       const transactionId = await generateUniqueCustomId(PhonePeTransaction, 'transactionId', 'AD_PAY_');

@@ -771,17 +771,12 @@ export default function AdvertiserDashboard() {
       );
     }
 
-    if (!matchRate) {
-      matchRate = rates.find(
-        (r) =>
-          r.deviceType === selectedOutlet.deviceType &&
-          r.durationDays === dur &&
-          r.frequency === frequency
-      );
-    }
-
     if (matchRate) {
-      setComputedAmount(matchRate.amount * qty); // in paise
+      if (matchRate.pricingType === 'whole_venue') {
+        setComputedAmount(matchRate.amount); // Flat rate for whole venue
+      } else {
+        setComputedAmount(matchRate.amount * qty); // Per device rate x qty
+      }
     } else {
       setComputedAmount(0);
     }
@@ -1986,6 +1981,12 @@ export default function AdvertiserDashboard() {
                               </div>
                               <p className="text-[10px] text-muted-foreground font-medium">Phone Pe Payments Gateway</p>
                             </div>
+
+                            {computedAmount === 0 && (
+                              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-600 dark:text-amber-400 text-[11px] font-bold text-center">
+                                ⚠️ No active rate plan configured by admin for this selection. Booking is unavailable until a rate plan is created.
+                              </div>
+                            )}
 
                             {/* Pay Button on Right Column (Desktop View) */}
                             <div className="pt-2 hidden lg:block">

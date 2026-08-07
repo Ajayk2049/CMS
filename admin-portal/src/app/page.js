@@ -36,6 +36,7 @@ import {
   UserCheck,
   Settings,
   Video,
+  Image,
   Mail,
   Phone,
   KeyRound,
@@ -148,7 +149,8 @@ export default function AdminPortal() {
     mediaType: 'video',
     durationDays: '7',
     frequency: 'hourly',
-    amount: ''
+    amount: '',
+    pricingType: 'per_device'
   });
   const [editingRateId, setEditingRateId] = useState(null);
   const [frequencyOption, setFrequencyOption] = useState('hourly');
@@ -162,13 +164,32 @@ export default function AdminPortal() {
   const [deletingUser, setDeletingUser] = useState(null);
   const [adminDeletePassword, setAdminDeletePassword] = useState('');
 
+  // Helper: Format rotation frequency labels cleanly
+  const getFrequencyLabel = (freq) => {
+    if (!freq) return '--';
+    const f = freq.toLowerCase().trim();
+    if (f === 'continuous') return 'Continuous Loop';
+    if (f === 'hourly') return 'Hourly (Every 60 mins)';
+    if (f === 'daily') return 'Daily';
+    if (f.startsWith('every_')) {
+      const mins = f.replace('every_', '').replace('_mins', '');
+      return `Every ${mins} mins`;
+    }
+    return freq;
+  };
+
   // Quota Override Modal States
   const [isQuotaModalOpen, setIsQuotaModalOpen] = useState(false);
+  const [activeQuotaTab, setActiveQuotaTab] = useState('tablet'); // 'tablet' | 'screen'
   const [quotaForm, setQuotaForm] = useState({
     customMaxVideoSlots: '',
     customDailyVideoQuota: '',
     customMaxImageSlots: '',
     customDailyImageQuota: '',
+    customMaxScreenVideoSlots: '',
+    customDailyScreenVideoQuota: '',
+    customMaxScreenImageSlots: '',
+    customDailyScreenImageQuota: '',
     customMaxScreenSlots: '',
     customDailyScreenQuota: ''
   });
@@ -176,11 +197,16 @@ export default function AdminPortal() {
   const openQuotaModal = (hostApp) => {
     setSelectedHostApp(hostApp);
     const isClosedVenue = hostApp?.allowOpenAds === false || hostApp?.adMode === 'closed';
+    setActiveQuotaTab('tablet');
     setQuotaForm({
       customMaxVideoSlots: hostApp?.customMaxVideoSlots ?? (isClosedVenue ? 3 : 2),
       customDailyVideoQuota: hostApp?.customDailyVideoQuota ?? (isClosedVenue ? 6 : 4),
       customMaxImageSlots: hostApp?.customMaxImageSlots ?? (isClosedVenue ? 8 : 3),
       customDailyImageQuota: hostApp?.customDailyImageQuota ?? (isClosedVenue ? 15 : 10),
+      customMaxScreenVideoSlots: hostApp?.customMaxScreenVideoSlots ?? hostApp?.customMaxScreenSlots ?? (isClosedVenue ? 3 : 2),
+      customDailyScreenVideoQuota: hostApp?.customDailyScreenVideoQuota ?? hostApp?.customDailyScreenQuota ?? (isClosedVenue ? 6 : 4),
+      customMaxScreenImageSlots: hostApp?.customMaxScreenImageSlots ?? hostApp?.customMaxScreenSlots ?? (isClosedVenue ? 8 : 3),
+      customDailyScreenImageQuota: hostApp?.customDailyScreenImageQuota ?? (isClosedVenue ? 15 : 10),
       customMaxScreenSlots: hostApp?.customMaxScreenSlots ?? (isClosedVenue ? 8 : 3),
       customDailyScreenQuota: hostApp?.customDailyScreenQuota ?? (isClosedVenue ? 6 : 4)
     });
@@ -195,15 +221,42 @@ export default function AdminPortal() {
       customDailyVideoQuota: isClosedVenue ? 6 : 4,
       customMaxImageSlots: isClosedVenue ? 8 : 3,
       customDailyImageQuota: isClosedVenue ? 15 : 10,
+      customMaxScreenVideoSlots: isClosedVenue ? 3 : 2,
+      customDailyScreenVideoQuota: isClosedVenue ? 6 : 4,
+      customMaxScreenImageSlots: isClosedVenue ? 8 : 3,
+      customDailyScreenImageQuota: isClosedVenue ? 15 : 10,
       customMaxScreenSlots: isClosedVenue ? 8 : 3,
       customDailyScreenQuota: isClosedVenue ? 6 : 4
     });
   };
 
+  const handleResetQuotaNow = async (hostAppToReset) => {
+    const targetApp = hostAppToReset || selectedHostApp;
+    if (!targetApp) return;
+    try {
+      const res = await axios.post(`${API_BASE}/admin/hosts/${targetApp._id}/reset-quota`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        showNotification(res.data.message || `Daily quotas for ${targetApp.outletName} reset to full capacity!`, 'success');
+        setSelectedHostApp(res.data.data);
+        fetchHosts(token);
+      }
+    } catch (err) {
+      console.error(err);
+      showNotification(err.response?.data?.message || 'Failed to reset daily quotas.', 'error');
+    }
+  };
+
   const handleSaveQuotas = async () => {
     if (!selectedHostApp) return;
     try {
-      const res = await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, quotaForm, {
+      const submitPayload = {
+        ...quotaForm,
+        customMaxScreenSlots: quotaForm.customMaxScreenImageSlots || quotaForm.customMaxScreenVideoSlots,
+        customDailyScreenQuota: quotaForm.customDailyScreenVideoQuota
+      };
+      const res = await axios.put(`${API_BASE}/admin/hosts/${selectedHostApp._id}/status`, submitPayload, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.data.success) {
@@ -953,7 +1006,7 @@ export default function AdminPortal() {
       }
 
       setEditingRateId(null);
-      setRateForm({ rateId: '', deviceType: 'tablet', mediaType: 'video', durationDays: '7', frequency: 'hourly', amount: '' });
+      setRateForm({ rateId: '', deviceType: 'tablet', mediaType: 'video', durationDays: '7', frequency: 'hourly', amount: '', pricingType: 'per_device' });
       const ratesRes = await axios.get(`${API_BASE}/admin/rates`, { headers: { Authorization: `Bearer ${token}` } });
       setRates(ratesRes.data.data || []);
     } catch (err) {
@@ -975,7 +1028,8 @@ export default function AdminPortal() {
       mediaType: rate.mediaType || 'video',
       durationDays: rate.durationDays.toString(),
       frequency: rate.frequency,
-      amount: (rate.amount / 100).toString()
+      amount: (rate.amount / 100).toString(),
+      pricingType: rate.pricingType || 'per_device'
     });
   };
 
@@ -1312,28 +1366,28 @@ export default function AdminPortal() {
               transition={{ duration: 0.25, ease: 'easeOut' }}
               className={`pointer-events-auto p-4 rounded-2xl border shadow-2xl backdrop-blur-xl flex items-start justify-between space-x-3 transition-all duration-300 ${
                 toast.type === 'error' || toast.type === 'destructive'
-                  ? 'bg-destructive/90 border-destructive text-white shadow-[0_0_25px_rgba(239,68,68,0.35)]'
+                  ? '!bg-red-600 !border-red-500 !text-white shadow-[0_0_25px_rgba(239,68,68,0.4)]'
                   : toast.type === 'warning'
-                  ? 'bg-amber-500/90 border-amber-500 text-white shadow-[0_0_25px_rgba(245,158,11,0.35)]'
+                  ? '!bg-amber-600 !border-amber-500 !text-white shadow-[0_0_25px_rgba(245,158,11,0.4)]'
                   : toast.type === 'info'
-                  ? 'bg-blue-600/90 border-blue-500 text-white shadow-[0_0_25px_rgba(59,130,246,0.35)]'
-                  : 'bg-emerald-600/90 border-emerald-500 text-white shadow-[0_0_25px_rgba(16,185,129,0.35)]'
+                  ? '!bg-blue-600 !border-blue-500 !text-white shadow-[0_0_25px_rgba(59,130,246,0.4)]'
+                  : '!bg-emerald-600 !border-emerald-500 !text-white shadow-[0_0_25px_rgba(16,185,129,0.4)]'
               }`}
             >
               <div className="flex items-start space-x-3 min-w-0">
                 <div className="shrink-0 mt-0.5">
                   {toast.type === 'error' || toast.type === 'destructive' ? (
-                    <XCircle className="w-5 h-5 text-white" />
+                    <XCircle className="w-5 h-5 !text-white" />
                   ) : toast.type === 'warning' ? (
-                    <AlertTriangle className="w-5 h-5 text-white" />
+                    <AlertTriangle className="w-5 h-5 !text-white" />
                   ) : toast.type === 'info' ? (
-                    <AlertCircle className="w-5 h-5 text-white" />
+                    <AlertCircle className="w-5 h-5 !text-white" />
                   ) : (
-                    <CheckCircle className="w-5 h-5 text-white" />
+                    <CheckCircle className="w-5 h-5 !text-white" />
                   )}
                 </div>
                 <div className="min-w-0 space-y-0.5">
-                  <h5 className="font-outfit text-xs font-black uppercase tracking-wider text-white">
+                  <h5 className="font-outfit text-xs font-black uppercase tracking-wider !text-white">
                     {toast.type === 'error' || toast.type === 'destructive'
                       ? 'System Error'
                       : toast.type === 'warning'
@@ -1342,17 +1396,17 @@ export default function AdminPortal() {
                       ? 'System Info'
                       : 'Success'}
                   </h5>
-                  <p className="text-xs font-semibold leading-relaxed break-words text-white/95">
+                  <p className="text-xs font-semibold leading-relaxed break-words !text-white">
                     {toast.message}
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => dismissToast(toast.id)}
-                className="p-1 hover:bg-white/20 rounded-lg transition-colors cursor-pointer text-white/80 hover:text-white shrink-0 mt-0.5"
+                className="p-1 hover:bg-white/20 rounded-lg transition-colors cursor-pointer !text-white shrink-0 mt-0.5"
                 aria-label="Dismiss toast"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4 !text-white" />
               </button>
             </motion.div>
           ))}
@@ -2769,6 +2823,36 @@ export default function AdminPortal() {
                         </div>
                       )}
 
+                      <div>
+                        <label className="block text-[10px] uppercase text-muted-foreground mb-1">Pricing Model Scope</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setRateForm({ ...rateForm, pricingType: 'per_device' })}
+                            className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer border ${
+                              (rateForm.pricingType || 'per_device') === 'per_device'
+                                ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                                : 'bg-background text-muted-foreground border-input hover:text-foreground'
+                            }`}
+                          >
+                            <Tablet className="w-3.5 h-3.5" />
+                            <span>Per Device</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRateForm({ ...rateForm, pricingType: 'whole_venue' })}
+                            className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer border ${
+                              rateForm.pricingType === 'whole_venue'
+                                ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                                : 'bg-background text-muted-foreground border-input hover:text-foreground'
+                            }`}
+                          >
+                            <Building className="w-3.5 h-3.5" />
+                            <span>Whole Venue Flat</span>
+                          </button>
+                        </div>
+                      </div>
+
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[10px] uppercase text-muted-foreground mb-1">Duration (Days)</label>
@@ -2810,7 +2894,7 @@ export default function AdminPortal() {
                           className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none"
                         >
                           <option value="hourly">Hourly (Every 60 mins)</option>
-                          <option value="daily">Daily</option>
+                          <option value="continuous">Continuous Loop (Non-stop Streaming)</option>
                           <option value="custom">Custom Minute Interval...</option>
                         </select>
 
@@ -2836,7 +2920,7 @@ export default function AdminPortal() {
                           type="button"
                           onClick={() => {
                             setEditingRateId(null);
-                            setRateForm({ rateId: '', deviceType: 'tablet', mediaType: 'video', durationDays: '7', frequency: 'hourly', amount: '' });
+                            setRateForm({ rateId: '', deviceType: 'tablet', mediaType: 'video', durationDays: '7', frequency: 'hourly', amount: '', pricingType: 'per_device' });
                           }}
                           className="px-4 py-2 bg-muted text-foreground font-bold rounded-xl text-xs cursor-pointer"
                         >
@@ -2873,6 +2957,7 @@ export default function AdminPortal() {
                         <thead>
                           <tr className="border-b border-border/80 text-muted-foreground font-bold uppercase tracking-wider bg-card/10">
                             <th className="p-4 pl-6">Media Type</th>
+                            <th className="p-4">Pricing Model</th>
                             <th className="p-4">Duration</th>
                             <th className="p-4">Frequency</th>
                             <th className="p-4">Price Rate</th>
@@ -2882,7 +2967,7 @@ export default function AdminPortal() {
                         <tbody className="divide-y divide-border/40">
                           {rates.filter(r => r.deviceType === rateSubTab).length === 0 ? (
                             <tr>
-                              <td colSpan="5" className="p-8 text-center text-muted-foreground font-medium italic">
+                              <td colSpan="6" className="p-8 text-center text-muted-foreground font-medium italic">
                                 No rates configured for {rateSubTab} displays.
                               </td>
                             </tr>
@@ -2895,9 +2980,16 @@ export default function AdminPortal() {
                                     <span>{rate.mediaType === 'image' ? 'Static Image' : `Dynamic Video (${rate.maxVideoLengthSeconds || 30}s Plan)`}</span>
                                   </span>
                                 </td>
+                                <td className="p-4 font-semibold text-foreground">
+                                  <span className={`inline-flex items-center gap-1 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded ${rate.pricingType === 'whole_venue' ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-slate-500/10 text-muted-foreground border border-border/50'}`}>
+                                    <span>{rate.pricingType === 'whole_venue' ? 'Whole Venue (Flat)' : 'Per Device'}</span>
+                                  </span>
+                                </td>
                                 <td className="p-4 font-semibold text-foreground">{rate.durationDays} Days</td>
-                                <td className="p-4 font-semibold text-muted-foreground">{rate.frequency}</td>
-                                <td className="p-4 font-black text-emerald-500 text-sm">₹{rate.amount / 100}</td>
+                                <td className="p-4 font-semibold text-muted-foreground">{getFrequencyLabel(rate.frequency)}</td>
+                                <td className="p-4 font-black text-emerald-500 text-sm">
+                                  ₹{rate.amount / 100} <span className="text-[10px] text-muted-foreground font-normal">{rate.pricingType === 'whole_venue' ? '/ venue' : '/ device'}</span>
+                                </td>
                                 <td className="p-4 text-right pr-6">
                                   <div className="flex items-center justify-end space-x-2">
                                     <button
@@ -3297,33 +3389,50 @@ export default function AdminPortal() {
               </div>
 
               <div className="p-4 bg-background/40 rounded-2xl border border-border/40 space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-black text-muted-foreground uppercase flex items-center gap-1">
-                    <Sliders className="w-3.5 h-3.5 text-primary" /> Network Ad Mode & Quotas
-                  </span>
+                <div className="flex justify-between items-center flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black text-muted-foreground uppercase flex items-center gap-1">
+                      <Sliders className="w-3.5 h-3.5 text-primary" /> Network Ad Mode & Quotas
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleResetQuotaNow(selectedHostApp)}
+                      className="px-2 py-0.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 font-bold rounded-lg text-[9px] cursor-pointer border border-amber-500/30 flex items-center gap-1 transition-colors"
+                      title="Reset daily quota remaining counters to 100% full capacity immediately"
+                    >
+                      <RefreshCw className="w-2.5 h-2.5" />
+                      <span>Reset Quotas Now</span>
+                    </button>
+                  </div>
                   <span className={`inline-flex items-center gap-1 text-[9px] font-extrabold uppercase px-2.5 py-1 rounded-full ${selectedHostApp.allowOpenAds !== false ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20' : 'bg-purple-500/10 text-purple-500 border border-purple-500/20'}`}>
                     {selectedHostApp.allowOpenAds !== false ? <Unlock className="w-3 h-3 text-blue-500 shrink-0" /> : <Lock className="w-3 h-3 text-purple-500 shrink-0" />}
                     <span>{selectedHostApp.allowOpenAds !== false ? 'OPEN ADS MODE' : 'PRIVATE MODE'}</span>
                   </span>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 font-mono text-[11px] pt-1">
-                  <div className="p-2.5 bg-card/60 rounded-xl border border-border/40 text-center">
-                    <span className="text-[9px] font-sans text-muted-foreground block">Video Max / Daily</span>
-                    <p className="font-bold text-foreground mt-0.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono text-[11px] pt-1">
+                  <div className="p-2 bg-card/60 rounded-xl border border-border/40 text-center">
+                    <span className="text-[9px] font-sans text-muted-foreground block truncate">Tablet Video</span>
+                    <p className="font-bold text-foreground mt-0.5 text-[10px]">
                       {selectedHostApp.customMaxVideoSlots ?? (selectedHostApp.allowOpenAds === false ? 3 : 2)} / {selectedHostApp.customDailyVideoQuota ?? (selectedHostApp.allowOpenAds === false ? 6 : 4)}d
                     </p>
                   </div>
-                  <div className="p-2.5 bg-card/60 rounded-xl border border-border/40 text-center">
-                    <span className="text-[9px] font-sans text-muted-foreground block">Image Max / Daily</span>
-                    <p className="font-bold text-foreground mt-0.5">
+                  <div className="p-2 bg-card/60 rounded-xl border border-border/40 text-center">
+                    <span className="text-[9px] font-sans text-muted-foreground block truncate">Tablet Image</span>
+                    <p className="font-bold text-foreground mt-0.5 text-[10px]">
                       {selectedHostApp.customMaxImageSlots ?? (selectedHostApp.allowOpenAds === false ? 8 : 3)} / {selectedHostApp.customDailyImageQuota ?? (selectedHostApp.allowOpenAds === false ? 15 : 10)}d
                     </p>
                   </div>
-                  <div className="p-2.5 bg-card/60 rounded-xl border border-border/40 text-center">
-                    <span className="text-[9px] font-sans text-muted-foreground block">Screen Max / Daily</span>
-                    <p className="font-bold text-foreground mt-0.5">
-                      {selectedHostApp.customMaxScreenSlots ?? (selectedHostApp.allowOpenAds === false ? 8 : 3)} / {selectedHostApp.customDailyScreenQuota ?? (selectedHostApp.allowOpenAds === false ? 6 : 4)}d
+                  <div className="p-2 bg-card/60 rounded-xl border border-border/40 text-center">
+                    <span className="text-[9px] font-sans text-muted-foreground block truncate">Screen Video</span>
+                    <p className="font-bold text-foreground mt-0.5 text-[10px]">
+                      {selectedHostApp.customMaxScreenVideoSlots ?? selectedHostApp.customMaxScreenSlots ?? (selectedHostApp.allowOpenAds === false ? 3 : 2)} / {selectedHostApp.customDailyScreenVideoQuota ?? selectedHostApp.customDailyScreenQuota ?? (selectedHostApp.allowOpenAds === false ? 6 : 4)}d
+                    </p>
+                  </div>
+                  <div className="p-2 bg-card/60 rounded-xl border border-border/40 text-center">
+                    <span className="text-[9px] font-sans text-muted-foreground block truncate">Screen Image</span>
+                    <p className="font-bold text-foreground mt-0.5 text-[10px]">
+                      {selectedHostApp.customMaxScreenImageSlots ?? selectedHostApp.customMaxScreenSlots ?? (selectedHostApp.allowOpenAds === false ? 8 : 3)} / {selectedHostApp.customDailyScreenImageQuota ?? (selectedHostApp.allowOpenAds === false ? 15 : 10)}d
                     </p>
                   </div>
                 </div>
@@ -3732,7 +3841,7 @@ export default function AdminPortal() {
                   </div>
                   <div className="p-2.5 bg-card/60 rounded-xl border border-border/40">
                     <span className="text-[9px] text-muted-foreground block">Frequency</span>
-                    <p className="font-bold text-foreground text-[11px] mt-0.5">{selectedCampaign.frequency}</p>
+                    <p className="font-bold text-foreground text-[11px] mt-0.5">{getFrequencyLabel(selectedCampaign.frequency)}</p>
                   </div>
                 </div>
               </div>
@@ -4297,92 +4406,175 @@ export default function AdminPortal() {
                 </span>
               </div>
 
-              <div className="space-y-3">
-                <h4 className="font-bold text-foreground uppercase tracking-wider text-[10px]">Video Promo Quotas</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[9px] text-muted-foreground mb-1">Max Concurrent Slots</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={quotaForm.customMaxVideoSlots}
-                      onChange={(e) => setQuotaForm({ ...quotaForm, customMaxVideoSlots: e.target.value })}
-                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] text-muted-foreground mb-1">Daily Changes Limit</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={quotaForm.customDailyVideoQuota}
-                      onChange={(e) => setQuotaForm({ ...quotaForm, customDailyVideoQuota: e.target.value })}
-                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3 pt-2 border-t border-border/40">
-                <h4 className="font-bold text-foreground uppercase tracking-wider text-[10px]">Image Promo Quotas</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[9px] text-muted-foreground mb-1">Max Concurrent Slots</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={quotaForm.customMaxImageSlots}
-                      onChange={(e) => setQuotaForm({ ...quotaForm, customMaxImageSlots: e.target.value })}
-                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] text-muted-foreground mb-1">Daily Changes Limit</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={quotaForm.customDailyImageQuota}
-                      onChange={(e) => setQuotaForm({ ...quotaForm, customDailyImageQuota: e.target.value })}
-                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3 pt-2 border-t border-border/40">
-                <h4 className="font-bold text-foreground uppercase tracking-wider text-[10px]">Screen Promo Quotas</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[9px] text-muted-foreground mb-1">Max Concurrent Slots</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={quotaForm.customMaxScreenSlots}
-                      onChange={(e) => setQuotaForm({ ...quotaForm, customMaxScreenSlots: e.target.value })}
-                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] text-muted-foreground mb-1">Daily Changes Limit</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={quotaForm.customDailyScreenQuota}
-                      onChange={(e) => setQuotaForm({ ...quotaForm, customDailyScreenQuota: e.target.value })}
-                      className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-between items-center pt-4 border-t border-border/40">
+              {/* Tab Navigation */}
+              <div className="flex bg-muted/50 p-1 rounded-xl border border-border/50 gap-1">
                 <button
                   type="button"
-                  onClick={handleResetQuotaDefaults}
-                  className="px-3 py-2 bg-muted hover:bg-muted/80 text-foreground font-bold rounded-xl text-xs cursor-pointer"
+                  onClick={() => setActiveQuotaTab('tablet')}
+                  className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    activeQuotaTab === 'tablet'
+                      ? 'bg-primary text-primary-foreground shadow-md font-extrabold'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                  }`}
                 >
-                  Reset Plan Defaults
+                  <Tablet className="w-3.5 h-3.5" />
+                  <span>Tabletop Tablets</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveQuotaTab('screen')}
+                  className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    activeQuotaTab === 'screen'
+                      ? 'bg-primary text-primary-foreground shadow-md font-extrabold'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+                  }`}
+                >
+                  <Tv className="w-3.5 h-3.5" />
+                  <span>Wall Display Screens</span>
+                </button>
+              </div>
+
+              {/* Tab Content: Tablet */}
+              {activeQuotaTab === 'tablet' && (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="space-y-3 p-3 bg-card/40 border border-border/40 rounded-2xl">
+                    <h4 className="font-bold text-foreground uppercase tracking-wider text-[10px] flex items-center gap-1.5 text-blue-500">
+                      <Video className="w-3.5 h-3.5" /> Video Promo Quotas (Tablet)
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[9px] text-muted-foreground mb-1">Max Concurrent Slots</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quotaForm.customMaxVideoSlots}
+                          onChange={(e) => setQuotaForm({ ...quotaForm, customMaxVideoSlots: e.target.value })}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[9px] text-muted-foreground mb-1">Daily Changes Limit</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quotaForm.customDailyVideoQuota}
+                          onChange={(e) => setQuotaForm({ ...quotaForm, customDailyVideoQuota: e.target.value })}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 p-3 bg-card/40 border border-border/40 rounded-2xl">
+                    <h4 className="font-bold text-foreground uppercase tracking-wider text-[10px] flex items-center gap-1.5 text-emerald-500">
+                      <Image className="w-3.5 h-3.5" /> Image Promo Quotas (Tablet)
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[9px] text-muted-foreground mb-1">Max Concurrent Slots</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quotaForm.customMaxImageSlots}
+                          onChange={(e) => setQuotaForm({ ...quotaForm, customMaxImageSlots: e.target.value })}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[9px] text-muted-foreground mb-1">Daily Changes Limit</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quotaForm.customDailyImageQuota}
+                          onChange={(e) => setQuotaForm({ ...quotaForm, customDailyImageQuota: e.target.value })}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Tab Content: Screen */}
+              {activeQuotaTab === 'screen' && (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="space-y-3 p-3 bg-card/40 border border-border/40 rounded-2xl">
+                    <h4 className="font-bold text-foreground uppercase tracking-wider text-[10px] flex items-center gap-1.5 text-purple-500">
+                      <Video className="w-3.5 h-3.5" /> Video Promo Quotas (Wall Screen)
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[9px] text-muted-foreground mb-1">Max Concurrent Slots</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quotaForm.customMaxScreenVideoSlots}
+                          onChange={(e) => setQuotaForm({ ...quotaForm, customMaxScreenVideoSlots: e.target.value })}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[9px] text-muted-foreground mb-1">Daily Changes Limit</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quotaForm.customDailyScreenVideoQuota}
+                          onChange={(e) => setQuotaForm({ ...quotaForm, customDailyScreenVideoQuota: e.target.value })}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 p-3 bg-card/40 border border-border/40 rounded-2xl">
+                    <h4 className="font-bold text-foreground uppercase tracking-wider text-[10px] flex items-center gap-1.5 text-amber-500">
+                      <Image className="w-3.5 h-3.5" /> Image Promo Quotas (Wall Screen)
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[9px] text-muted-foreground mb-1">Max Concurrent Slots</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quotaForm.customMaxScreenImageSlots}
+                          onChange={(e) => setQuotaForm({ ...quotaForm, customMaxScreenImageSlots: e.target.value })}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[9px] text-muted-foreground mb-1">Daily Changes Limit</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={quotaForm.customDailyScreenImageQuota}
+                          onChange={(e) => setQuotaForm({ ...quotaForm, customDailyScreenImageQuota: e.target.value })}
+                          className="w-full bg-background border border-input rounded-xl px-3 py-2 text-foreground focus:outline-none font-semibold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-between items-center pt-4 border-t border-border/40 flex-wrap gap-2">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleResetQuotaDefaults}
+                    className="px-3 py-2 bg-muted hover:bg-muted/80 text-foreground font-bold rounded-xl text-xs cursor-pointer"
+                  >
+                    Reset Plan Defaults
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleResetQuotaNow()}
+                    className="px-3 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 font-bold rounded-xl text-xs cursor-pointer border border-amber-500/30 flex items-center gap-1 transition-colors"
+                    title="Reset remaining change limits to 100% full capacity immediately"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Reset Quotas Now</span>
+                  </button>
+                </div>
                 <div className="flex space-x-2">
                   <button
                     type="button"
