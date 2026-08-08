@@ -60,6 +60,7 @@ import {
 import { config } from '@/config';
 
 const API_BASE = config.apiUrl;
+const AD_CATEGORIES = ['Electronics', 'RealEstate', 'Automotive', 'Beverages', 'Fashion', 'Finance', 'Entertainment', 'Other'];
 
 const resolveMediaUrl = (url) => {
   if (!url) return '';
@@ -115,6 +116,11 @@ export default function AdminPortal() {
   const [selectedDeviceReq, setSelectedDeviceReq] = useState(null);
   const [showDeviceReqModal, setShowDeviceReqModal] = useState(false);
   const [deviceReqFilter, setDeviceReqFilter] = useState('pending');
+
+  // Mode Change Request states
+  const [modeChangeRequests, setModeChangeRequests] = useState([]);
+  const [modeChangeFilter, setModeChangeFilter] = useState('pending');
+  const [reviewingModeReqId, setReviewingModeReqId] = useState('');
 
   // Detail Modal states
   const [selectedUser, setSelectedUser] = useState(null);
@@ -799,14 +805,15 @@ export default function AdminPortal() {
   const loadDashboardData = async (authToken) => {
     try {
       const headers = { Authorization: `Bearer ${authToken}` };
-      const [statsRes, hostsRes, campaignsRes, ratesRes, devicesRes, usersRes, deviceReqsRes] = await Promise.all([
+      const [statsRes, hostsRes, campaignsRes, ratesRes, devicesRes, usersRes, deviceReqsRes, modeReqsRes] = await Promise.all([
         axios.get(`${API_BASE}/admin/stats`, { headers }).catch(() => ({ data: { data: null } })),
         axios.get(`${API_BASE}/admin/hosts`, { headers }).catch(() => ({ data: { data: [] } })),
         axios.get(`${API_BASE}/admin/bookings`, { headers }).catch(() => ({ data: { data: [] } })),
         axios.get(`${API_BASE}/admin/rates`, { headers }).catch(() => ({ data: { data: [] } })),
         axios.get(`${API_BASE}/admin/devices`, { headers }).catch(() => ({ data: { data: [] } })),
         axios.get(`${API_BASE}/admin/users`, { headers }).catch(() => ({ data: { data: [] } })),
-        axios.get(`${API_BASE}/admin/device-requests`, { headers }).catch(() => ({ data: { data: [] } }))
+        axios.get(`${API_BASE}/admin/device-requests`, { headers }).catch(() => ({ data: { data: [] } })),
+        axios.get(`${API_BASE}/admin/mode-change-requests`, { headers }).catch(() => ({ data: { data: [] } }))
       ]);
 
       setStats(statsRes.data.data);
@@ -816,11 +823,35 @@ export default function AdminPortal() {
       setDevices(devicesRes.data.data || []);
       setUsers(usersRes.data.data || []);
       setDeviceRequests(deviceReqsRes.data.data || []);
+      setModeChangeRequests(modeReqsRes.data.data || []);
     } catch (err) {
       console.error(err);
       if (err.response?.status === 401) {
         handleLogout();
       }
+    }
+  };
+
+  const handleReviewModeChangeRequest = async (requestId, action) => {
+    setReviewingModeReqId(requestId);
+    try {
+      const res = await axios.put(`${API_BASE}/admin/mode-change-requests/${requestId}/review`, {
+        action
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (res.data.success) {
+        showToast(`Mode change request ${action} successfully!`, 'success');
+        loadDashboardData(token);
+      } else {
+        showToast(res.data.message || 'Failed to review request.', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(err.response?.data?.message || 'Failed to review mode change request.', 'error');
+    } finally {
+      setReviewingModeReqId('');
     }
   };
 
@@ -913,13 +944,15 @@ export default function AdminPortal() {
     }
   };
 
-  const handleReviewCampaign = async (bookingId, status, rejectionReason = '') => {
+  const handleReviewCampaign = async (bookingId, status, rejectionReason = '', adCategory = null) => {
     try {
       const payload = {
         bookingId,
         action: status,
         denialReason: rejectionReason
       };
+      if (adCategory) payload.adCategory = adCategory;
+
       const res = await axios.post(`${API_BASE}/admin/bookings/review`, payload, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -930,6 +963,22 @@ export default function AdminPortal() {
       }
     } catch (err) {
       showNotification(err.response?.data?.message || 'Action failed', 'error');
+    }
+  };
+
+  const handleUpdateBookingCategory = async (bookingId, adCategory) => {
+    try {
+      const res = await axios.put(`${API_BASE}/admin/bookings/${bookingId}/category`, {
+        adCategory
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        showNotification(`Campaign ${bookingId} category updated to ${adCategory}!`, 'success');
+        loadDashboardData(token);
+      }
+    } catch (err) {
+      showNotification(err.response?.data?.message || 'Failed to update ad category', 'error');
     }
   };
 
@@ -1884,6 +1933,12 @@ export default function AdminPortal() {
                     >
                       Device Requests
                     </button>
+                    <button
+                      onClick={() => setRequestsSubTab('mode_changes')}
+                      className={`px-4 py-2 rounded-lg text-xs font-semibold cursor-pointer transition-colors duration-200 ${requestsSubTab === 'mode_changes' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                    >
+                      Mode Change Requests
+                    </button>
                   </div>
 
                   {requestsSubTab === 'hosts' && (
@@ -1927,6 +1982,20 @@ export default function AdminPortal() {
                       ))}
                     </div>
                   )}
+
+                  {requestsSubTab === 'mode_changes' && (
+                    <div className="flex space-x-2 bg-muted/30 p-1 rounded-xl border border-border/60">
+                      {['pending', 'rejected', 'all'].map((filter) => (
+                        <button
+                          key={filter}
+                          onClick={() => setModeChangeFilter(filter)}
+                          className={`text-[10px] font-bold uppercase tracking-wider px-3.5 py-1.5 rounded-lg transition-colors duration-200 cursor-pointer ${modeChangeFilter === filter ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                        >
+                          {filter}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Subtab Content */}
@@ -1960,9 +2029,20 @@ export default function AdminPortal() {
                                 </td>
                                 <td className="p-4 font-mono font-bold text-primary">
                                   <div>{booking.bookingId}</div>
-                                  <span className="inline-block text-[9px] font-bold px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 mt-1 uppercase">
-                                    {booking.adCategory || 'Other'}
-                                  </span>
+                                  <div className="mt-1">
+                                    <select
+                                      value={booking.adCategory || 'Other'}
+                                      onChange={(e) => handleUpdateBookingCategory(booking.bookingId, e.target.value)}
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 uppercase tracking-wider cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
+                                    >
+                                      {AD_CATEGORIES.map((cat) => (
+                                        <option key={cat} value={cat} className="bg-background text-foreground uppercase">
+                                          {cat}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
                                 </td>
                                 <td className="p-4 text-center">
                                   <button
@@ -2139,7 +2219,7 @@ export default function AdminPortal() {
                       </tbody>
                     </table>
                   </div>
-                ) : (
+                ) : requestsSubTab === 'devices' ? (
                   <div className="w-full mx-1 mt-2 overflow-x-auto animate-fade-in">
                     <table className="w-full text-left border-collapse text-xs">
                       <thead>
@@ -2221,6 +2301,114 @@ export default function AdminPortal() {
                       </tbody>
                     </table>
                   </div>
+                ) : (
+                  <div className="w-full mx-1 mt-2 overflow-x-auto animate-fade-in">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-border/80 text-muted-foreground font-bold uppercase tracking-wider bg-card/10">
+                          <th className="p-4 pl-6">Req ID</th>
+                          <th className="p-4">Venue Outlet</th>
+                          <th className="p-4">Merchant</th>
+                          <th className="p-4 text-center">Requested Mode</th>
+                          <th className="p-4 text-center">Status</th>
+                          <th className="p-4 text-right pr-6">Actions / Date</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/40">
+                        {(() => {
+                          const filteredModeReqs = modeChangeRequests.filter(req => {
+                            if (modeChangeFilter === 'pending') return req.status === 'pending';
+                            if (modeChangeFilter === 'rejected') return req.status === 'rejected';
+                            if (modeChangeFilter === 'approved') return req.status === 'approved';
+                            return true;
+                          });
+
+                          if (filteredModeReqs.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan="6" className="p-12 text-center text-muted-foreground font-medium italic">
+                                  No ad mode change requests found.
+                                </td>
+                              </tr>
+                            );
+                          }
+
+                          return filteredModeReqs.map((req) => (
+                            <tr key={req._id} className="hover:bg-card/20 transition-colors duration-200">
+                              <td className="p-4 pl-6 font-mono font-bold text-primary">
+                                {req.requestId}
+                              </td>
+                              <td className="p-4 font-bold text-foreground">
+                                <div className="flex items-center space-x-2">
+                                  <Building className="w-3.5 h-3.5 text-primary shrink-0" />
+                                  <span>{req.hostApplicationId?.outletName || 'Outlet'}</span>
+                                </div>
+                                <div className="text-[10px] text-muted-foreground font-normal">
+                                  {req.hostApplicationId?.city}, {req.hostApplicationId?.state}
+                                </div>
+                              </td>
+                              <td className="p-4 font-semibold text-foreground">
+                                <div>{req.userId?.name || 'N/A'}</div>
+                                <div className="text-[10px] text-muted-foreground">{req.userId?.phone}</div>
+                              </td>
+                              <td className="p-4 text-center">
+                                <div className="flex items-center justify-center space-x-1.5">
+                                  <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-muted text-muted-foreground">
+                                    {req.currentMode}
+                                  </span>
+                                  <span className="text-muted-foreground font-black">→</span>
+                                  <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${
+                                    req.requestedMode === 'closed'
+                                      ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                                      : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                  }`}>
+                                    {req.requestedMode} MODE
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="p-4 text-center">
+                                <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${
+                                  req.status === 'approved'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                    : req.status === 'rejected'
+                                      ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                }`}>
+                                  {req.status}
+                                </span>
+                              </td>
+                              <td className="p-4 text-right pr-6">
+                                {req.status === 'pending' ? (
+                                  <div className="flex items-center justify-end space-x-2">
+                                    <button
+                                      onClick={() => handleReviewModeChangeRequest(req.requestId, 'approved')}
+                                      disabled={reviewingModeReqId === req.requestId}
+                                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition-all cursor-pointer flex items-center space-x-1 shadow-sm disabled:opacity-50"
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                      <span>Approve</span>
+                                    </button>
+                                    <button
+                                      onClick={() => handleReviewModeChangeRequest(req.requestId, 'rejected')}
+                                      disabled={reviewingModeReqId === req.requestId}
+                                      className="px-3 py-1.5 bg-destructive hover:bg-destructive/90 text-white font-bold rounded-lg text-xs transition-all cursor-pointer flex items-center space-x-1 shadow-sm disabled:opacity-50"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                      <span>Reject</span>
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] text-muted-foreground font-medium">
+                                    {new Date(req.reviewedAt || req.updatedAt).toLocaleDateString()}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </motion.div>
             )}
@@ -2290,6 +2478,7 @@ export default function AdminPortal() {
                         <th className="p-4 pl-6">Venue Outlet</th>
                         <th className="p-4">Owner & Location</th>
                         <th className="p-4">Ad Mode</th>
+                        <th className="p-4">Active Ads (IDs)</th>
                         <th className="p-4">Quotas (V/I/S)</th>
                         <th className="p-4 text-center">Full Form Details</th>
                         <th className="p-4 text-right pr-6">Controls</th>
@@ -2298,7 +2487,7 @@ export default function AdminPortal() {
                     <tbody className="divide-y divide-border/40">
                       {approvedVenuesList.length === 0 ? (
                         <tr>
-                          <td colSpan="6" className="p-12 text-center text-muted-foreground font-medium italic">
+                          <td colSpan="7" className="p-12 text-center text-muted-foreground font-medium italic">
                             No active venues found.
                           </td>
                         </tr>
@@ -2310,6 +2499,15 @@ export default function AdminPortal() {
                           const iMax = app.customMaxImageSlots ?? (isClosed ? 8 : 3);
                           const iDaily = app.customDailyImageQuota ?? (isClosed ? 15 : 10);
                           const sMax = app.customMaxScreenSlots ?? (isClosed ? 8 : 3);
+
+                          const venueActiveAds = (campaigns || []).filter(c => {
+                            const cOutletId = typeof c.outletId === 'object' ? c.outletId?._id : c.outletId;
+                            if (String(cOutletId) !== String(app._id)) return false;
+                            if (c.paymentStatus !== 'completed' || c.approvalStatus !== 'approved') return false;
+                            const expiryDate = new Date(c.createdAt);
+                            expiryDate.setDate(expiryDate.getDate() + (c.adDurationDays || 7));
+                            return expiryDate >= new Date();
+                          });
 
                           return (
                             <tr
@@ -2342,6 +2540,35 @@ export default function AdminPortal() {
                                   {!isClosed ? <Unlock className="w-3 h-3 text-blue-500 shrink-0" /> : <Lock className="w-3 h-3 text-purple-500 shrink-0" />}
                                   <span>{!isClosed ? 'OPEN ADS' : 'PRIVATE'}</span>
                                 </span>
+                              </td>
+                              <td className="p-4">
+                                {venueActiveAds.length === 0 ? (
+                                  <span className="text-[10px] text-muted-foreground font-semibold italic">0 Active Ads</span>
+                                ) : (
+                                  <div className="flex flex-col space-y-1">
+                                    <span className="text-[10px] font-black text-emerald-500 flex items-center gap-1">
+                                      <Megaphone className="w-3 h-3 text-emerald-500 shrink-0" />
+                                      <span>{venueActiveAds.length} Active {venueActiveAds.length === 1 ? 'Ad' : 'Ads'}</span>
+                                    </span>
+                                    <div className="flex flex-wrap gap-1 max-w-[160px]">
+                                      {venueActiveAds.map(ad => (
+                                        <span
+                                          key={ad.bookingId}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setCampaignSearchTerm(ad.bookingId);
+                                            setActiveTab('requests');
+                                            setRequestsSubTab('campaigns');
+                                          }}
+                                          className="font-mono text-[9px] font-black px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 hover:border-primary transition-all cursor-pointer shadow-2xs"
+                                          title={`Click to track Ad ${ad.bookingId} in Campaigns Section`}
+                                        >
+                                          {ad.bookingId}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
                               </td>
                               <td className="p-4 font-mono text-[11px] font-bold">
                                 <div className="text-foreground">Vid: {vMax}/{vDaily}d</div>
@@ -3437,6 +3664,75 @@ export default function AdminPortal() {
                   </div>
                 </div>
               </div>
+
+              {/* Active Commercial Ads Tracking Section */}
+              <div className="p-4 bg-background/50 rounded-2xl border border-border/50 space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-[10px] font-black text-muted-foreground uppercase flex items-center gap-1.5">
+                    <Megaphone className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span>Active Commercial Ads ({
+                      (campaigns || []).filter(c => {
+                        const cOutletId = typeof c.outletId === 'object' ? c.outletId?._id : c.outletId;
+                        if (String(cOutletId) !== String(selectedHostApp._id)) return false;
+                        if (c.paymentStatus !== 'completed' || c.approvalStatus !== 'approved') return false;
+                        const expiryDate = new Date(c.createdAt);
+                        expiryDate.setDate(expiryDate.getDate() + (c.adDurationDays || 7));
+                        return expiryDate >= new Date();
+                      }).length
+                    })</span>
+                  </span>
+                </div>
+
+                {(() => {
+                  const venueActiveAds = (campaigns || []).filter(c => {
+                    const cOutletId = typeof c.outletId === 'object' ? c.outletId?._id : c.outletId;
+                    if (String(cOutletId) !== String(selectedHostApp._id)) return false;
+                    if (c.paymentStatus !== 'completed' || c.approvalStatus !== 'approved') return false;
+                    const expiryDate = new Date(c.createdAt);
+                    expiryDate.setDate(expiryDate.getDate() + (c.adDurationDays || 7));
+                    return expiryDate >= new Date();
+                  });
+
+                  if (venueActiveAds.length === 0) {
+                    return (
+                      <p className="text-xs text-muted-foreground italic font-medium">No commercial advertiser ads currently active on this venue.</p>
+                    );
+                  }
+
+                  return (
+                    <div className="grid sm:grid-cols-2 gap-2.5">
+                      {venueActiveAds.map(ad => (
+                        <div key={ad.bookingId} className="p-3 bg-card/70 rounded-xl border border-border/40 flex items-center justify-between shadow-2xs">
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <span className="font-mono font-black text-xs text-primary">{ad.bookingId}</span>
+                              <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                {ad.deviceType}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground mt-0.5 font-semibold">
+                              Cat: {ad.adCategory || 'Other'} • Freq: {ad.frequency}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setShowVenueModal(false);
+                              setSelectedHostApp(null);
+                              setCampaignSearchTerm(ad.bookingId);
+                              setActiveTab('requests');
+                              setRequestsSubTab('campaigns');
+                            }}
+                            className="px-2.5 py-1 text-[10px] font-bold bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 rounded-lg transition-colors cursor-pointer shrink-0"
+                            title={`Go to Campaigns section and track Ad ${ad.bookingId}`}
+                          >
+                            Track Ad
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
 
             <div className="flex justify-between items-center pt-4 border-t border-border/50 flex-wrap gap-3">
@@ -3827,9 +4123,23 @@ export default function AdminPortal() {
                   <Layers className="w-3.5 h-3.5 text-primary" /> Campaign Category & Schedule
                 </span>
                 <div className="grid sm:grid-cols-4 gap-3 text-center">
-                  <div className="p-2.5 bg-card/60 rounded-xl border border-border/40">
-                    <span className="text-[9px] text-muted-foreground block">Category</span>
-                    <p className="font-bold text-primary uppercase text-[11px] mt-0.5">{selectedCampaign.adCategory || 'Other'}</p>
+                  <div className="p-2.5 bg-card/60 rounded-xl border border-border/40 text-left">
+                    <span className="text-[9px] text-muted-foreground block font-semibold mb-0.5">Ad Category</span>
+                    <select
+                      value={selectedCampaign.adCategory || 'Other'}
+                      onChange={(e) => {
+                        const newCat = e.target.value;
+                        setSelectedCampaign({ ...selectedCampaign, adCategory: newCat });
+                        handleUpdateBookingCategory(selectedCampaign.bookingId, newCat);
+                      }}
+                      className="w-full text-[11px] font-bold text-primary bg-background border border-border/60 rounded-lg px-2 py-1 uppercase cursor-pointer focus:outline-none focus:border-primary"
+                    >
+                      {AD_CATEGORIES.map((cat) => (
+                        <option key={cat} value={cat} className="bg-background text-foreground uppercase">
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="p-2.5 bg-card/60 rounded-xl border border-border/40">
                     <span className="text-[9px] text-muted-foreground block">Media Type</span>

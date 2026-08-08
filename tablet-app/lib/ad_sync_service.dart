@@ -258,7 +258,8 @@ class AdSyncService {
 
             final isVideo = mediaUrl.endsWith('.mp4') || mediaUrl.endsWith('.webm');
             final fileExt = mediaUrl.split('.').last;
-            final fileName = isVideo ? 'ad_$bookingId.$fileExt' : 'img_${bookingId}_$imgIdx.$fileExt';
+            final mediaBasename = mediaUrl.split('/').last.split('?').first;
+            final fileName = isVideo ? 'ad_${bookingId}_$mediaBasename' : 'img_${bookingId}_${imgIdx}_$mediaBasename';
             final localFile = File('$adsDirectory/$fileName');
             activeFileNames.add(fileName);
 

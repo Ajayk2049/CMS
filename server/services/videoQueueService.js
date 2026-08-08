@@ -152,8 +152,9 @@ class VideoQueueService {
 
     let transcodeSuccess = false;
 
-    // 2. Run single-thread FFmpeg H.264 Baseline 3.1 transcode
+    // 2. Run single-thread FFmpeg H.264 Baseline 3.1 transcode into an isolated temp file first
     if (fs.existsSync(tempPath) && fs.statSync(tempPath).size > 0 && filePath) {
+      const transcodeTempPath = `${filePath}.tmp_${Date.now()}`;
       try {
         await new Promise((resolve, reject) => {
           let ffmpegCommand = ffmpeg(tempPath).videoCodec('libx264');
@@ -176,16 +177,28 @@ class VideoQueueService {
             ])
             .on('end', () => resolve(true))
             .on('error', (err) => reject(err))
-            .save(filePath);
+            .save(transcodeTempPath);
         });
 
-        transcodeSuccess = fs.existsSync(filePath) && fs.statSync(filePath).size > 0;
+        if (fs.existsSync(transcodeTempPath) && fs.statSync(transcodeTempPath).size > 0) {
+          try {
+            // Atomic file replacement to prevent truncating live HTTP playback stream
+            fs.renameSync(transcodeTempPath, filePath);
+          } catch (renameErr) {
+            fs.copyFileSync(transcodeTempPath, filePath);
+            try { fs.unlinkSync(transcodeTempPath); } catch (e) {}
+          }
+          transcodeSuccess = true;
+        }
       } catch (ffErr) {
         console.warn(`\x1b[33m[FFmpeg Warning]\x1b[0m Transcode warning (${ffErr.message}). Using raw file fallback.`);
+        if (fs.existsSync(transcodeTempPath)) {
+          try { fs.unlinkSync(transcodeTempPath); } catch (e) {}
+        }
       }
 
       // Fallback to direct raw file copy if FFmpeg fails or is missing
-      if (!transcodeSuccess && fs.existsSync(tempPath)) {
+      if (!transcodeSuccess && fs.existsSync(tempPath) && !fs.existsSync(filePath)) {
         const fallbackPath = filePath || path.join(job.targetDir || '', `raw_${uniqueFilename}`);
         fs.copyFileSync(tempPath, fallbackPath);
         transcodeSuccess = true;

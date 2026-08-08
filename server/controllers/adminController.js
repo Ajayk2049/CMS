@@ -279,7 +279,7 @@ class AdminController {
    * Review ad campaign (Approve / Reject)
    */
   async reviewAdBooking(req, res) {
-    const { bookingId, action, denialReason } = req.body || {};
+    const { bookingId, action, denialReason, adCategory } = req.body || {};
 
     if (!bookingId || !action || !['approve', 'reject'].includes(action)) {
       return res.status(400).send({ success: false, message: 'bookingId and action (approve/reject) are required' });
@@ -312,6 +312,12 @@ class AdminController {
 
       if (booking.approvalStatus !== 'pending') {
         return res.status(400).send({ success: false, message: `Booking has already been reviewed (${booking.approvalStatus})` });
+      }
+
+      // Admin category re-classification if provided
+      const validCategories = ['Electronics', 'RealEstate', 'Automotive', 'Beverages', 'Fashion', 'Finance', 'Entertainment', 'Other'];
+      if (adCategory && validCategories.includes(adCategory)) {
+        booking.adCategory = adCategory;
       }
 
       if (action === 'approve') {
@@ -1055,6 +1061,129 @@ class AdminController {
     } catch (error) {
       console.error('updateVenueWatermark Error:', error.message);
       return res.status(500).send({ success: false, message: 'Failed to update venue watermark: ' + error.message });
+    }
+  }
+
+  /**
+   * Fetch mode change requests for admin review
+   */
+  async getModeChangeRequests(req, res) {
+    try {
+      const ModeChangeRequest = require('../models/ModeChangeRequest');
+      const requests = await ModeChangeRequest.find()
+        .populate('hostApplicationId', 'outletName outletDescription city state phone email adMode allowOpenAds requestTablet tabletQuantity requestScreen screenQuantity')
+        .populate('userId', 'name email phone')
+        .sort({ createdAt: -1 });
+
+      return res.status(200).send({
+        success: true,
+        data: requests
+      });
+    } catch (error) {
+      console.error('getModeChangeRequests Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch mode change requests' });
+    }
+  }
+
+  /**
+   * Review (Approve / Reject) a mode change request
+   */
+  async reviewModeChangeRequest(req, res) {
+    const { requestId } = req.params;
+    const { action, adminNotes } = req.body || {};
+
+    if (!['approved', 'rejected'].includes(action)) {
+      return res.status(400).send({ success: false, message: 'Action must be "approved" or "rejected"' });
+    }
+
+    try {
+      const ModeChangeRequest = require('../models/ModeChangeRequest');
+      const HostApplication = require('../models/HostApplication');
+      const Device = require('../models/Device');
+
+      const modeReq = await ModeChangeRequest.findOne({ requestId });
+      if (!modeReq) {
+        return res.status(404).send({ success: false, message: 'Mode change request not found' });
+      }
+
+      if (modeReq.status !== 'pending') {
+        return res.status(400).send({ success: false, message: `Request has already been ${modeReq.status}` });
+      }
+
+      modeReq.status = action;
+      modeReq.adminNotes = adminNotes || '';
+      modeReq.reviewedAt = new Date();
+      await modeReq.save();
+
+      if (action === 'approved') {
+        const app = await HostApplication.findById(modeReq.hostApplicationId);
+        if (app) {
+          const newMode = modeReq.requestedMode;
+          app.adMode = newMode;
+          app.allowOpenAds = (newMode === 'open');
+
+          const isClosed = newMode === 'closed';
+          app.dailyVideoChangesRemaining = isClosed ? 6 : 4;
+          app.dailyImageChangesRemaining = isClosed ? 15 : 10;
+          app.dailyScreenVideoChangesRemaining = isClosed ? 6 : 4;
+          app.dailyScreenImageChangesRemaining = isClosed ? 15 : 10;
+          app.dailyScreenChangesRemaining = isClosed ? 6 : 4;
+
+          await app.save();
+
+          // Notify connected tablet & screen devices via WebSocket
+          if (global.deviceSockets) {
+            const devices = await Device.find({ hostApplicationId: app._id });
+            for (const device of devices) {
+              const socket = global.deviceSockets.get(device.deviceId);
+              if (socket) {
+                socket.send(JSON.stringify({ event: 'reload_menu' }));
+              }
+            }
+          }
+        }
+      }
+
+      return res.status(200).send({
+        success: true,
+        message: `Mode change request ${action} successfully`,
+        data: modeReq
+      });
+    } catch (error) {
+      console.error('reviewModeChangeRequest Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to review mode change request: ' + error.message });
+    }
+  }
+
+  /**
+   * Update category of an ad booking (Platform Admin reclassification)
+   */
+  async updateBookingCategory(req, res) {
+    const { bookingId } = req.params;
+    const { adCategory } = req.body || {};
+
+    const validCategories = ['Electronics', 'RealEstate', 'Automotive', 'Beverages', 'Fashion', 'Finance', 'Entertainment', 'Other'];
+    if (!adCategory || !validCategories.includes(adCategory)) {
+      return res.status(400).send({ success: false, message: `Valid adCategory is required. Allowed: ${validCategories.join(', ')}` });
+    }
+
+    try {
+      const booking = await AdBooking.findOne({ bookingId });
+      if (!booking) {
+        return res.status(404).send({ success: false, message: 'Booking not found' });
+      }
+
+      booking.adCategory = adCategory;
+      await booking.save();
+
+      return res.status(200).send({
+        success: true,
+        message: `Ad campaign ${bookingId} category updated to ${adCategory} successfully!`,
+        data: booking
+      });
+    } catch (error) {
+      console.error('updateBookingCategory Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to update ad category: ' + error.message });
     }
   }
 }

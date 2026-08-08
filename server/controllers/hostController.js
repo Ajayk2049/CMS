@@ -76,7 +76,8 @@ async function notifyDeviceSessionUpdate(order) {
       sgst: sgstPaise,
       gst: gstPaise,
       roundOff: roundOffPaise,
-
+      cgstPercent: typeof order.cgstPercent === 'number' ? order.cgstPercent : cgstPct,
+      sgstPercent: typeof order.sgstPercent === 'number' ? order.sgstPercent : sgstPct,
       otherCharges: 0,
       upiUrl,
       orderStatus: order.orderStatus,
@@ -1296,7 +1297,7 @@ class HostController {
       const hasScreenImages = promos.some(p => (p.slotType === 'screen_image' || p.slotType === 'screen') && p.mediaType === 'image' && p.mediaUrl);
 
       let dailyVideoChangesRemaining = hostApp.dailyVideoChangesRemaining;
-      if (dailyVideoChangesRemaining === undefined || dailyVideoChangesRemaining === null || dailyVideoChangesRemaining === (isClosed ? 4 : 6)) {
+      if (dailyVideoChangesRemaining === undefined || dailyVideoChangesRemaining === null) {
         dailyVideoChangesRemaining = dailyVideoQuota;
         hostApp.dailyVideoChangesRemaining = dailyVideoQuota;
       } else {
@@ -1304,7 +1305,7 @@ class HostController {
       }
 
       let dailyImageChangesRemaining = hostApp.dailyImageChangesRemaining;
-      if (dailyImageChangesRemaining === undefined || dailyImageChangesRemaining === null || dailyImageChangesRemaining === (isClosed ? 10 : 15)) {
+      if (dailyImageChangesRemaining === undefined || dailyImageChangesRemaining === null) {
         dailyImageChangesRemaining = dailyImageQuota;
         hostApp.dailyImageChangesRemaining = dailyImageQuota;
       } else {
@@ -1312,7 +1313,7 @@ class HostController {
       }
 
       let dailyScreenVideoChangesRemaining = hostApp.dailyScreenVideoChangesRemaining;
-      if (dailyScreenVideoChangesRemaining === undefined || dailyScreenVideoChangesRemaining === null || dailyScreenVideoChangesRemaining === (isClosed ? 4 : 6)) {
+      if (dailyScreenVideoChangesRemaining === undefined || dailyScreenVideoChangesRemaining === null) {
         dailyScreenVideoChangesRemaining = dailyScreenVideoQuota;
         hostApp.dailyScreenVideoChangesRemaining = dailyScreenVideoQuota;
       } else {
@@ -1320,7 +1321,7 @@ class HostController {
       }
 
       let dailyScreenImageChangesRemaining = hostApp.dailyScreenImageChangesRemaining;
-      if (dailyScreenImageChangesRemaining === undefined || dailyScreenImageChangesRemaining === null || dailyScreenImageChangesRemaining === (isClosed ? 10 : 15)) {
+      if (dailyScreenImageChangesRemaining === undefined || dailyScreenImageChangesRemaining === null) {
         dailyScreenImageChangesRemaining = dailyScreenImageQuota;
         hostApp.dailyScreenImageChangesRemaining = dailyScreenImageQuota;
       } else {
@@ -1328,7 +1329,7 @@ class HostController {
       }
 
       let dailyScreenChangesRemaining = hostApp.dailyScreenChangesRemaining;
-      if (dailyScreenChangesRemaining === undefined || dailyScreenChangesRemaining === null || dailyScreenChangesRemaining === (isClosed ? 4 : 6)) {
+      if (dailyScreenChangesRemaining === undefined || dailyScreenChangesRemaining === null) {
         dailyScreenChangesRemaining = dailyScreenQuota;
         hostApp.dailyScreenChangesRemaining = dailyScreenQuota;
       } else {
@@ -2019,6 +2020,101 @@ class HostController {
         try { fs.unlinkSync(filePath); } catch (e) {}
       }
       return res.status(500).send({ success: false, message: 'Failed to upload bill image: ' + error.message });
+    }
+  }
+
+  /**
+   * Merchant requests a mode transition (Open <-> Closed)
+   * Prerequisite: Merchant must clear all active in-house venue promo slots first!
+   */
+  async requestModeChange(req, res) {
+    const { hostApplicationId, requestedMode, merchantNotes } = req.body || {};
+    if (!hostApplicationId || !requestedMode || !['open', 'closed'].includes(requestedMode)) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId and valid requestedMode (open/closed) are required' });
+    }
+
+    try {
+      const HostApplication = require('../models/HostApplication');
+      const VenuePromo = require('../models/VenuePromo');
+      const ModeChangeRequest = require('../models/ModeChangeRequest');
+      const { generateCustomId } = require('../utils/idGenerator');
+
+      const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Venue application not found or access denied' });
+
+      const currentMode = app.adMode || (app.allowOpenAds === false ? 'closed' : 'open');
+      if (currentMode === requestedMode) {
+        return res.status(400).send({ success: false, message: `Venue is already in ${requestedMode.toUpperCase()} mode.` });
+      }
+
+      // Check active in-house venue promos
+      const activePromosCount = await VenuePromo.countDocuments({ hostApplicationId, isStreaming: true });
+      if (activePromosCount > 0) {
+        return res.status(400).send({
+          success: false,
+          message: 'Please clear all active in-house venue promo slots before applying for a mode change.'
+        });
+      }
+
+      // Check if a pending request already exists
+      const existingPending = await ModeChangeRequest.findOne({ hostApplicationId, status: 'pending' });
+      if (existingPending) {
+        return res.status(400).send({
+          success: false,
+          message: 'A mode change request is already pending Platform Admin approval.'
+        });
+      }
+
+      const requestId = `REQ_MODE_${generateCustomId()}`;
+      const modeReq = new ModeChangeRequest({
+        requestId,
+        hostApplicationId: app._id,
+        userId: req.user.uid,
+        requestedMode,
+        currentMode,
+        merchantNotes: merchantNotes || '',
+        status: 'pending'
+      });
+
+      await modeReq.save();
+
+      return res.status(201).send({
+        success: true,
+        message: 'Mode change request submitted successfully! Pending Platform Admin approval.',
+        data: modeReq
+      });
+    } catch (error) {
+      console.error('requestModeChange Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to submit mode change request: ' + error.message });
+    }
+  }
+
+  /**
+   * Fetch current mode change request status for a venue
+   */
+  async getModeChangeStatus(req, res) {
+    const { hostApplicationId } = req.query || {};
+    if (!hostApplicationId) {
+      return res.status(400).send({ success: false, message: 'hostApplicationId parameter is required' });
+    }
+
+    try {
+      const HostApplication = require('../models/HostApplication');
+      const ModeChangeRequest = require('../models/ModeChangeRequest');
+
+      const app = await HostApplication.findOne({ _id: hostApplicationId, userId: req.user.uid });
+      if (!app) return res.status(403).send({ success: false, message: 'Venue application not found or access denied' });
+
+      const latestReq = await ModeChangeRequest.findOne({ hostApplicationId })
+        .sort({ createdAt: -1 });
+
+      return res.status(200).send({
+        success: true,
+        data: latestReq || null
+      });
+    } catch (error) {
+      console.error('getModeChangeStatus Error:', error.message);
+      return res.status(500).send({ success: false, message: 'Failed to fetch mode change status' });
     }
   }
 }

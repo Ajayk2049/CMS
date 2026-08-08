@@ -672,6 +672,12 @@ export default function MerchantDashboard() {
   const [isStreamingPromos, setIsStreamingPromos] = useState(false);
   const [activePromoSubTab, setActivePromoSubTab] = useState('tablet'); // 'tablet' | 'screen'
 
+  // Mode Change Request states
+  const [showModeChangeModal, setShowModeChangeModal] = useState(false);
+  const [pendingModeReq, setPendingModeReq] = useState(null);
+  const [modeReqNotes, setModeReqNotes] = useState('');
+  const [submittingModeReq, setSubmittingModeReq] = useState(false);
+
   // Menu Modal and editing states
   const [isMenuModalOpen, setIsMenuModalOpen] = useState(false);
   const [editingItemIndex, setEditingItemIndex] = useState(-1);
@@ -1365,7 +1371,14 @@ export default function MerchantDashboard() {
     try {
       await axios.post(`${API_BASE}/host/orders/close-table`, { orderId }, { headers: { Authorization: `Bearer ${token}` } });
       fetchLiveOrders(token);
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      const msg = err.response?.data?.message || 'Failed to close table.';
+      if (msg.includes('UPI ID') || msg.includes('UPI')) {
+        showToast('No UPI Account Configured', 'error');
+      } else {
+        showToast(msg, 'error');
+      }
+    }
   };
 
   const markPaymentReceived = async (orderId, paymentType = 'CASH') => {
@@ -1848,8 +1861,57 @@ export default function MerchantDashboard() {
         });
         setPromoDraftSlots(draftMap);
       }
+      fetchModeChangeStatus(targetOutlet);
     } catch (err) {
       console.error('Failed to fetch host promos:', err);
+    }
+  };
+
+  const fetchModeChangeStatus = async (outletId) => {
+    if (!outletId) return;
+    try {
+      const res = await axios.get(`${API_BASE}/host/applications/mode-change-status?hostApplicationId=${outletId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data.success) {
+        setPendingModeReq(res.data.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch mode change status:', err);
+    }
+  };
+
+  const handleRequestModeChange = async (targetMode) => {
+    if (!selectedOutletId) return;
+    const hasActivePromos = (promosList || []).some(p => p.isStreaming);
+    if (hasActivePromos) {
+      showToast('Please clear all active in-house venue promo slots before applying for a mode change.', 'error');
+      return;
+    }
+
+    setSubmittingModeReq(true);
+    try {
+      const res = await axios.post(`${API_BASE}/host/applications/request-mode-change`, {
+        hostApplicationId: selectedOutletId,
+        requestedMode: targetMode,
+        merchantNotes: modeReqNotes
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (res.data.success) {
+        showToast('Mode change request submitted! Pending Platform Admin approval.', 'success');
+        setShowModeChangeModal(false);
+        setModeReqNotes('');
+        fetchModeChangeStatus(selectedOutletId);
+      } else {
+        showToast(res.data.message || 'Failed to submit request.', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(err.response?.data?.message || 'Failed to submit mode change request.', 'error');
+    } finally {
+      setSubmittingModeReq(false);
     }
   };
 
@@ -1961,7 +2023,7 @@ export default function MerchantDashboard() {
           isDeleted: true
         }
       }));
-      showToast('Promo slot marked for deletion. Click "Save & Stream Promos" to finalize.', 'info');
+      showToast('Promo slot marked for deletion. Click "Stream ADS" to finalize.', 'info');
     }
   };
 
@@ -2179,24 +2241,6 @@ export default function MerchantDashboard() {
       return;
     }
 
-    const parsedGst = modalForm.gst !== '' ? parseFloat(modalForm.gst) : null;
-    const parsedOther = modalForm.otherCharges !== '' ? parseFloat(modalForm.otherCharges) : null;
-
-    if (parsedGst !== null && (isNaN(parsedGst) || parsedGst < 0)) {
-      setError('Please enter a valid GST percentage');
-      return;
-    }
-    if (parsedOther !== null && (isNaN(parsedOther) || parsedOther < 0)) {
-      setError('Please enter a valid other charges value');
-      return;
-    }
-
-    // CSS-like override: save null in DB if it matches global default configuration
-    const gstVal = parsedGst === menuDefaultGst ? null : parsedGst;
-    const otherChargesVal = (parsedOther === menuDefaultOtherCharges && modalForm.otherChargesType === menuDefaultOtherChargesType)
-      ? null
-      : parsedOther;
-
     const priceInPaise = Math.round(priceVal * 100);
 
     if (editingItemIndex === -1) {
@@ -2211,9 +2255,9 @@ export default function MerchantDashboard() {
         imageUrl: modalForm.imageUrl,
         isVeg: modalForm.isVeg,
         isPopular: modalForm.isPopular,
-        gst: gstVal,
-        otherCharges: otherChargesVal,
-        otherChargesType: modalForm.otherChargesType
+        gst: null,
+        otherCharges: null,
+        otherChargesType: 'percentage'
       };
       setMenuItems([...menuItems, newItem]);
     } else {
@@ -2229,9 +2273,9 @@ export default function MerchantDashboard() {
         imageUrl: modalForm.imageUrl,
         isVeg: modalForm.isVeg,
         isPopular: modalForm.isPopular,
-        gst: gstVal,
-        otherCharges: otherChargesVal,
-        otherChargesType: modalForm.otherChargesType
+        gst: null,
+        otherCharges: null,
+        otherChargesType: 'percentage'
       };
       setMenuItems(updated);
     }
@@ -2475,13 +2519,45 @@ export default function MerchantDashboard() {
 
     setEditAppLoading(true);
     try {
-      await axios.put(`${API_BASE}/host/applications/${editingApplicationId}`, editAppForm, {
+      // 1. Check if ad mode was changed by merchant in the dropdown form
+      const currentApp = applications.find(a => a._id === editingApplicationId);
+      const currentMode = currentApp?.adMode || (currentApp?.allowOpenAds === false ? 'closed' : 'open');
+      const requestedMode = editAppForm.adMode || (editAppForm.allowOpenAds === false ? 'closed' : 'open');
+
+      if (currentApp && requestedMode !== currentMode) {
+        const hasActivePromos = (promosList || []).some(p => p.isStreaming);
+        if (hasActivePromos) {
+          setEditAppError('Please clear all active in-house promo slots in Venue Promos before requesting a mode transition.');
+          setEditAppLoading(false);
+          return;
+        }
+
+        // Submit mode change request for Admin approval
+        const reqRes = await axios.post(`${API_BASE}/host/applications/request-mode-change`, {
+          hostApplicationId: editingApplicationId,
+          requestedMode,
+          merchantNotes: 'Requested via Edit Venue Details'
+        }, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+
+        if (reqRes.data.success) {
+          showToast('Mode change request submitted! Pending Platform Admin approval.', 'success');
+          fetchModeChangeStatus(editingApplicationId);
+        }
+      }
+
+      // 2. Save remaining outlet contact/address fields
+      const { adMode, allowOpenAds, ...outletDetails } = editAppForm;
+      await axios.put(`${API_BASE}/host/applications/${editingApplicationId}`, outletDetails, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      showToast('Application details updated successfully!', 'success');
+
+      showToast('Venue details saved successfully!', 'success');
       setShowEditApplicationModal(false);
       fetchApplications(token);
     } catch (err) {
+      console.error(err);
       setEditAppError(err.response?.data?.message || 'Failed to update application details.');
     } finally {
       setEditAppLoading(false);
@@ -3193,54 +3269,25 @@ export default function MerchantDashboard() {
 
                 {/* Venue Ad Mode Choice Section */}
                 <div className="space-y-3 border-t border-border/60 pt-4">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Select Venue Ad Mode & Service Plan</span>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Current Venue Ad Mode</span>
 
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {/* Open Ads Mode Option */}
-                    <div
-                      onClick={() => setForm({ ...form, allowOpenAds: true, adMode: 'open' })}
-                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${form.allowOpenAds
-                        ? 'bg-blue-500/10 border-blue-500/80 shadow-md ring-1 ring-blue-500/50'
-                        : 'bg-background/50 border-border/40 hover:border-border'
-                        }`}
-                    >
-                      <div className="flex items-center space-x-2.5 mb-1.5">
-                        <input
-                          type="radio"
-                          name="formAdMode"
-                          checked={form.allowOpenAds === true}
-                          onChange={() => setForm({ ...form, allowOpenAds: true, adMode: 'open' })}
-                          className="w-4 h-4 accent-blue-500 cursor-pointer"
-                        />
-                        <span className="text-xs font-bold text-foreground">Open Ads Mode (Recommended)</span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground leading-relaxed pl-6 font-semibold">
-                        Accept third-party brand advertisements on kiosk screens. Qualifies your venue for discounted/free hardware & SaaS platform tier.
-                      </p>
+                  <div className="p-4 rounded-2xl bg-muted/20 border border-border/40 flex items-center justify-between flex-wrap gap-3">
+                    <div className="flex items-center space-x-3">
+                      <span className={`px-3 py-1 rounded-xl text-xs font-black uppercase tracking-wider ${form.allowOpenAds !== false
+                        ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20'
+                        : 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                        }`}>
+                        {form.allowOpenAds !== false ? 'OPEN ADS MODE' : 'CLOSED / PRIVATE MODE'}
+                      </span>
+                      <span className="text-xs text-muted-foreground font-semibold">
+                        {form.allowOpenAds !== false
+                          ? 'Third-party brand advertisements enabled.'
+                          : 'Exclusive venue promos only. Third-party brand ads disabled.'}
+                      </span>
                     </div>
-
-                    {/* Closed / Private Mode Option */}
-                    <div
-                      onClick={() => setForm({ ...form, allowOpenAds: false, adMode: 'closed' })}
-                      className={`p-4 rounded-2xl border cursor-pointer transition-all ${!form.allowOpenAds
-                        ? 'bg-purple-500/10 border-purple-500/80 shadow-md ring-1 ring-purple-500/50'
-                        : 'bg-background/50 border-border/40 hover:border-border'
-                        }`}
-                    >
-                      <div className="flex items-center space-x-2.5 mb-1.5">
-                        <input
-                          type="radio"
-                          name="formAdMode"
-                          checked={form.allowOpenAds === false}
-                          onChange={() => setForm({ ...form, allowOpenAds: false, adMode: 'closed' })}
-                          className="w-4 h-4 accent-purple-500 cursor-pointer"
-                        />
-                        <span className="text-xs font-bold text-foreground">Closed / Private Mode</span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground leading-relaxed pl-6 font-semibold">
-                        Exclusive internal venue usage only (digital menu & in-house promos). Excludes third-party ads (Private SaaS Tier).
-                      </p>
-                    </div>
+                    <span className="text-[10px] text-muted-foreground italic font-semibold">
+                      To request a mode transition, click "Request Mode Change" under In-House Venue Promos.
+                    </span>
                   </div>
                 </div>
 
@@ -3448,7 +3495,7 @@ export default function MerchantDashboard() {
               const filteredDevices = devices.filter(device => {
                 const matchesType = device.deviceType === deviceFilterType;
                 const matchesVenue = !deviceFilterVenue || device.hostApplicationId === deviceFilterVenue;
-                const matchesStatus = deviceFilterStatus === 'all' || 
+                const matchesStatus = deviceFilterStatus === 'all' ||
                   (deviceFilterStatus === 'online' ? device.status === 'online' : device.status !== 'online');
                 return matchesType && matchesVenue && matchesStatus;
               });
@@ -3937,6 +3984,13 @@ export default function MerchantDashboard() {
               </div>
 
               <div className="flex items-center space-x-3">
+                {pendingModeReq && pendingModeReq.status === 'pending' && (
+                  <div className="px-4 py-2.5 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-xl text-xs font-bold flex items-center space-x-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                    <span>Mode Change Pending Admin Review ({pendingModeReq.requestedMode.toUpperCase()})</span>
+                  </div>
+                )}
+
                 <button
                   onClick={handleStreamAds}
                   disabled={isStreamingPromos || promoQuotaStats.isPaused || promoQuotaStats.isRevoked}
@@ -4429,7 +4483,7 @@ export default function MerchantDashboard() {
                   onClick={(e) => {
                     const input = e.currentTarget.querySelector('input[type="date"]');
                     if (input && typeof input.showPicker === 'function') {
-                      try { input.showPicker(); } catch (err) {}
+                      try { input.showPicker(); } catch (err) { }
                     } else if (input) {
                       input.focus();
                     }
@@ -4646,42 +4700,6 @@ export default function MerchantDashboard() {
                   />
                 </div>
 
-                <div className="flex space-x-2">
-                  <div className="flex-1 relative">
-                    <input
-                      type="text"
-                      placeholder="GST PERCENTAGE"
-                      value={modalForm.gst}
-                      onChange={(e) => {
-                        const cleaned = e.target.value.replace(/[^\d.]/g, '');
-                        setModalForm(prev => ({ ...prev, gst: cleaned }));
-                      }}
-                      className="w-full bg-background dark:bg-black/20 border border-input rounded-xl px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-transparent transition-all"
-                    />
-                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">%</span>
-                  </div>
-                </div>
-
-                <div className="flex border border-input rounded-xl bg-background dark:bg-black/20 focus-within:ring-1 focus-within:ring-primary overflow-hidden">
-                  <input
-                    type="text"
-                    placeholder="Other Charges"
-                    value={modalForm.otherCharges}
-                    onChange={(e) => {
-                      const cleaned = e.target.value.replace(/[^\d.]/g, '');
-                      setModalForm(prev => ({ ...prev, otherCharges: cleaned }));
-                    }}
-                    className="flex-1 bg-transparent px-4 py-2.5 text-xs font-semibold text-foreground placeholder:text-muted-foreground focus:outline-none"
-                  />
-                  <select
-                    value={modalForm.otherChargesType}
-                    onChange={(e) => setModalForm(prev => ({ ...prev, otherChargesType: e.target.value }))}
-                    className="bg-muted border-l border-input px-3 py-2.5 text-xs font-bold text-foreground focus:outline-none cursor-pointer outline-none"
-                  >
-                    <option value="percentage">%</option>
-                    <option value="rupees">₹</option>
-                  </select>
-                </div>
 
                 <div>
                   <textarea
@@ -6718,6 +6736,85 @@ export default function MerchantDashboard() {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showModeChangeModal && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-scale-up">
+            <div className="flex justify-between items-center border-b border-border/40 pb-4">
+              <div>
+                <h3 className="text-lg font-black uppercase text-foreground">Request Ad Mode Change</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Submit request to Platform Admin</p>
+              </div>
+              <button
+                onClick={() => setShowModeChangeModal(false)}
+                className="text-muted-foreground hover:text-foreground text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {(() => {
+              const currentApp = applications.find(a => a._id === selectedOutletId);
+              const currentMode = currentApp?.adMode || (currentApp?.allowOpenAds === false ? 'closed' : 'open');
+              const targetMode = currentMode === 'open' ? 'closed' : 'open';
+              const hasActivePromos = (promosList || []).some(p => p.isStreaming);
+
+              return (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-2xl bg-muted/30 border border-border/60 space-y-2">
+                    <div className="text-xs font-semibold text-muted-foreground">Current Venue Mode:</div>
+                    <div className="text-sm font-black uppercase text-foreground flex items-center space-x-2">
+                      <span className={`px-2.5 py-0.5 rounded text-xs ${currentMode === 'closed' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                        {currentMode} Mode
+                      </span>
+                      <span>→ Target: {targetMode.toUpperCase()} Mode</span>
+                    </div>
+                  </div>
+
+                  {hasActivePromos ? (
+                    <div className="p-4 rounded-2xl bg-destructive/10 border border-destructive/20 text-destructive text-xs space-y-1">
+                      <div className="font-bold flex items-center space-x-1.5">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <span>Active In-House Promos Detected</span>
+                      </div>
+                      <p className="text-[11px] opacity-90 leading-relaxed">
+                        Please clear all active in-house promo slots in your venue before applying for a mode transition.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-foreground block mb-1">
+                          Merchant Notes / Reason (Optional)
+                        </label>
+                        <textarea
+                          value={modeReqNotes}
+                          onChange={(e) => setModeReqNotes(e.target.value)}
+                          placeholder="Briefly state why you want to switch modes..."
+                          className="w-full bg-background border border-border rounded-xl p-3 text-xs text-foreground focus:outline-none focus:border-primary min-h-[80px]"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRequestModeChange(targetMode)}
+                        disabled={submittingModeReq}
+                        className="w-full bg-primary hover:bg-primary/95 text-primary-foreground font-black text-xs py-3 rounded-xl transition-all shadow-lg cursor-pointer flex items-center justify-center space-x-2 uppercase tracking-wider disabled:opacity-50"
+                      >
+                        {submittingModeReq ? (
+                          <span>Submitting Request...</span>
+                        ) : (
+                          <span>Submit Request for {targetMode.toUpperCase()} Mode</span>
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}

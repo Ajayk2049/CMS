@@ -74,10 +74,7 @@ class _KioskScreenState extends State<KioskScreen> {
   OrderServiceClient? _orderClient;
   CallOptions? _callOptions;
   Timer? _heartbeatTimer;
-  int _heartbeatFailCount = 0;
-  int _heartbeatSuccessCount = 0;
-  static const int _maxHeartbeatFailsBeforeOffline = 2;
-  static const int _minHeartbeatSuccessesBeforeOnline = 2;
+
 
   // ── Decoupled services ──
   late final AdPlayerService _adPlayer;
@@ -843,7 +840,7 @@ class _KioskScreenState extends State<KioskScreen> {
           // Auto dismiss after 3 seconds and return to ads
           Future.delayed(const Duration(seconds: 3), () {
             if (mounted) {
-              if (dialogContext != null) {
+              if (dialogContext != null && dialogContext!.mounted) {
                 Navigator.pop(dialogContext!);
               }
               _returnToAds();
@@ -941,28 +938,33 @@ class _KioskScreenState extends State<KioskScreen> {
 
               if (entered.isNotEmpty && entered == expected) {
                 _disableLockTaskMode();
-                Navigator.pop(dialogCtx); // close the dialog
-                final kioskCtx = context;
-                Navigator.of(kioskCtx).push(
-                  MaterialPageRoute<void>(
-                    builder: (settingsCtx) => SettingsScreen(
-                      serverHost: widget.serverHost,
-                      deviceId: widget.deviceId,
-                      token: widget.token,
-                      hostApplicationId: widget.hostApplicationId,
-                      bypassPassword: expected,
-                      tableNumber: _tableNumber,
-                      onBackToKiosk: () {
-                        _enableLockTaskMode();
-                        Navigator.of(settingsCtx).pop();
-                      },
+                if (dialogCtx.mounted) {
+                  Navigator.pop(dialogCtx);
+                }
+                if (mounted) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (settingsCtx) => SettingsScreen(
+                        serverHost: widget.serverHost,
+                        deviceId: widget.deviceId,
+                        token: widget.token,
+                        hostApplicationId: widget.hostApplicationId,
+                        bypassPassword: expected,
+                        tableNumber: _tableNumber,
+                        onBackToKiosk: () {
+                          _enableLockTaskMode();
+                          Navigator.of(settingsCtx).pop();
+                        },
+                      ),
                     ),
-                  ),
-                );
+                  );
+                }
               } else {
-                ScaffoldMessenger.of(dialogCtx).showSnackBar(
-                  const SnackBar(content: Text("Incorrect password")),
-                );
+                if (dialogCtx.mounted) {
+                  ScaffoldMessenger.of(dialogCtx).showSnackBar(
+                    const SnackBar(content: Text("Incorrect password")),
+                  );
+                }
               }
             },
             child: const Text("Unlock"),
@@ -1056,6 +1058,9 @@ class _KioskScreenState extends State<KioskScreen> {
           sgstPaise: _tableSession!['sgst'] as int?,
           gstPaise: _tableSession!['gst'] as int?,
           otherChargesPaise: _tableSession!['otherCharges'] as int?,
+          roundOffPaise: _tableSession!['roundOff'] as int?,
+          cgstPercent: (_tableSession!['cgstPercent'] as num?)?.toDouble(),
+          sgstPercent: (_tableSession!['sgstPercent'] as num?)?.toDouble(),
         );
       }
 

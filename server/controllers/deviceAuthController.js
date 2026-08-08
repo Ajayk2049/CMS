@@ -146,14 +146,13 @@ class DeviceAuthController {
       });
 
       let thirdPartyAds = [];
-      if (hostApp.allowOpenAds !== false) {
-        const AdBooking = require('../models/AdBooking');
-        const bookings = await AdBooking.find({
-          outletId: hostApplicationId,
-          deviceType: deviceType,
-          paymentStatus: 'completed',
-          approvalStatus: 'approved'
-        });
+      const AdBooking = require('../models/AdBooking');
+      const bookings = await AdBooking.find({
+        outletId: hostApplicationId,
+        deviceType: deviceType,
+        paymentStatus: 'completed',
+        approvalStatus: 'approved'
+      });
 
         const now = new Date();
         const activeBookings = bookings.filter(b => {
@@ -198,7 +197,6 @@ class DeviceAuthController {
             mediaType: isVideo ? 'video' : 'static'
           };
         });
-      }
 
       // Combine: 3rd-party ads + venue promos in a unified playlist
       const combinedPlaylist = [...thirdPartyAds, ...promoAds];

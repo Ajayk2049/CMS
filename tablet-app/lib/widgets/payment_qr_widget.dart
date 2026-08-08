@@ -17,6 +17,9 @@ class PaymentQrWidget extends StatelessWidget {
   final int? sgstPaise;
   final int? gstPaise;
   final int? otherChargesPaise;
+  final int? roundOffPaise;
+  final double? cgstPercent;
+  final double? sgstPercent;
 
   const PaymentQrWidget({
     super.key,
@@ -31,7 +34,22 @@ class PaymentQrWidget extends StatelessWidget {
     this.sgstPaise,
     this.gstPaise,
     this.otherChargesPaise,
+    this.roundOffPaise,
+    this.cgstPercent,
+    this.sgstPercent,
   });
+
+  String _formatTaxLabel(String taxType, double? pct, int? taxPaise) {
+    double? effectivePct = pct;
+    if (effectivePct == null && taxPaise != null && subtotalPaise != null && subtotalPaise! > 0) {
+      effectivePct = (taxPaise / subtotalPaise!) * 100.0;
+    }
+    if (effectivePct == null || effectivePct <= 0) return taxType;
+    final pctStr = effectivePct % 1 == 0
+        ? effectivePct.toInt().toString()
+        : effectivePct.toStringAsFixed((effectivePct * 10) % 1 == 0 ? 1 : 2);
+    return '$taxType @ $pctStr%';
+  }
 
   String get _amountFormatted => (amountPaise / 100).toStringAsFixed(2);
 
@@ -222,11 +240,13 @@ class PaymentQrWidget extends StatelessWidget {
                             if (subtotalPaise != null && subtotalPaise! > 0)
                               _buildBreakdownRow('Food Subtotal', subtotalPaise!),
                             if (cgstPaise != null && cgstPaise! > 0)
-                              _buildBreakdownRow('CGST @ 2.5%', cgstPaise!),
+                              _buildBreakdownRow(_formatTaxLabel('CGST', cgstPercent, cgstPaise), cgstPaise!),
                             if (sgstPaise != null && sgstPaise! > 0)
-                              _buildBreakdownRow('SGST @ 2.5%', sgstPaise!),
+                              _buildBreakdownRow(_formatTaxLabel('SGST', sgstPercent, sgstPaise), sgstPaise!),
                             if ((cgstPaise == null || cgstPaise == 0) && (sgstPaise == null || sgstPaise == 0) && gstPaise != null && gstPaise! > 0)
                               _buildBreakdownRow('GST', gstPaise!),
+                            if (roundOffPaise != null && roundOffPaise! > 0)
+                              _buildBreakdownRow('Round Off', roundOffPaise!),
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 4),
                               child: Divider(color: Colors.white10, height: 1),

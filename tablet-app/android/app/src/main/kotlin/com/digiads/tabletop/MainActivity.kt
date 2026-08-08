@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Process
 import android.view.View
 import android.widget.VideoView
@@ -39,6 +40,7 @@ class MainActivity : FlutterActivity() {
     private val VIDEO_CHANNEL = "com.digiads.tabletop/native_video"
     private var methodChannel: MethodChannel? = null
     private var kioskActive = true  // Lock Task is ON by default
+    private var isCircuitBreakerTripped = false
 
     companion object {
         var activeVideoView: NativeVideoView? = null
@@ -48,10 +50,19 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
 
         // Boost the Flutter UI thread to display priority
-        Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+        } catch (e: Exception) {
+            android.util.Log.w("DigiAdsKiosk", "Could not set thread priority: ${e.message}")
+        }
 
-        // Allowlist this app for Lock Task Mode on every cold start
-        enableDeviceOwnerPolicies()
+        // Evaluate Circuit Breaker before enabling LockTask
+        checkCircuitBreaker()
+
+        if (!isCircuitBreakerTripped) {
+            // Allowlist this app for Lock Task Mode on cold start
+            enableDeviceOwnerPolicies()
+        }
 
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, VIDEO_CHANNEL)
 
@@ -59,6 +70,13 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "getThreadPriority" -> {
                     result.success(Process.getThreadPriority(Process.myTid()))
+                }
+                "isCircuitBreakerTripped" -> {
+                    result.success(isCircuitBreakerTripped)
+                }
+                "resetCircuitBreaker" -> {
+                    resetCircuitBreaker()
+                    result.success(true)
                 }
                 "startKioskMode" -> {
                     try {
@@ -87,8 +105,8 @@ class MainActivity : FlutterActivity() {
                 }
                 "openAndroidSettings" -> {
                     try {
-                        val intent = android.content.Intent(android.provider.Settings.ACTION_SETTINGS)
-                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        val intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         startActivity(intent)
                         result.success(true)
                     } catch (e: Exception) {
@@ -125,38 +143,72 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun checkCircuitBreaker() {
+        try {
+            val prefs = getSharedPreferences("kiosk_guard", Context.MODE_PRIVATE)
+            val launchTimesStr = prefs.getString("launch_timestamps", "") ?: ""
+            val now = System.currentTimeMillis()
+            val timestamps = launchTimesStr.split(",")
+                .filter { it.isNotEmpty() }
+                .mapNotNull { it.toLongOrNull() }
+                .filter { now - it < 60000 }
+                .toMutableList()
+
+            timestamps.add(now)
+            prefs.edit().putString("launch_timestamps", timestamps.joinToString(",")).apply()
+
+            if (timestamps.size >= 4) {
+                android.util.Log.e("DigiAdsKiosk", "🚨 CIRCUIT BREAKER TRIPPED! 4 launches in 60s. Suspending Kiosk LockTask to prevent boot loop.")
+                isCircuitBreakerTripped = true
+                kioskActive = false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DigiAdsKiosk", "Circuit breaker error: ${e.message}")
+        }
+    }
+
+    private fun resetCircuitBreaker() {
+        try {
+            val prefs = getSharedPreferences("kiosk_guard", Context.MODE_PRIVATE)
+            prefs.edit().remove("launch_timestamps").apply()
+            isCircuitBreakerTripped = false
+        } catch (e: Exception) {
+            android.util.Log.e("DigiAdsKiosk", "Reset circuit breaker error: ${e.message}")
+        }
+    }
+
     override fun onResume() {
         super.onResume()
-        hideSystemUI()
-        if (kioskActive) {
-            enterLockTask()
+        if (isCircuitBreakerTripped) {
+            showSystemUI()
+        } else {
+            hideSystemUI()
+            if (kioskActive) {
+                enterLockTask()
+            }
         }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            hideSystemUI()
+            if (isCircuitBreakerTripped) {
+                showSystemUI()
+            } else {
+                hideSystemUI()
+            }
         }
     }
 
-    /**
-     * Allowlist this package for Lock Task Mode and strip ALL system UI features.
-     * This only works when the app is provisioned as Device Owner via:
-     *   adb shell dpm set-device-owner com.digiads.tabletop/.KioskAdminReceiver
-     */
     private fun enableDeviceOwnerPolicies() {
         try {
             val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             val adminComponent = ComponentName(this, KioskAdminReceiver::class.java)
             if (dpm.isDeviceOwnerApp(packageName)) {
-                // Allowlist our package for Lock Task
                 dpm.setLockTaskPackages(adminComponent, arrayOf(packageName))
-                // Strip ALL system features: no nav bar, no notifications, no overview, no global actions
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     dpm.setLockTaskFeatures(adminComponent, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
                 }
-                // Disable the status bar completely
                 dpm.setStatusBarDisabled(adminComponent, true)
             }
         } catch (e: Exception) {
@@ -164,15 +216,8 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /**
-     * Enter Lock Task Mode. This fully locks down the device:
-     * - Navigation bar is hidden and non-functional
-     * - Notification shade cannot be pulled down
-     * - Recent apps / multitask button does nothing
-     * - Home button does nothing
-     * - Settings is completely inaccessible
-     */
     private fun enterLockTask() {
+        if (isCircuitBreakerTripped) return
         try {
             val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             if (dpm.isDeviceOwnerApp(packageName)) {
@@ -187,7 +232,7 @@ class MainActivity : FlutterActivity() {
 
     private fun isInLockTaskMode(): Boolean {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             activityManager.lockTaskModeState != android.app.ActivityManager.LOCK_TASK_MODE_NONE
         } else {
             @Suppress("DEPRECATION")
@@ -197,7 +242,7 @@ class MainActivity : FlutterActivity() {
 
     private fun hideSystemUI() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
             window.insetsController?.let { controller ->
                 controller.hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
@@ -217,7 +262,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun showSystemUI() {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(true)
             window.insetsController?.show(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
         } else {
@@ -234,8 +279,9 @@ class NativeVideoView(
     private val methodChannel: MethodChannel?
 ) : PlatformView, FrameLayout(context) {
 
+    private val isLegacyAndroid = Build.VERSION.SDK_INT <= Build.VERSION_CODES.O_MR1 // Android 8.1 or lower
     private val playerA = VideoView(context)
-    private val playerB = VideoView(context)
+    private val playerB = if (!isLegacyAndroid) VideoView(context) else null
 
     private var playlist: List<String> = emptyList()
     private var currentIndex = 0
@@ -247,23 +293,25 @@ class NativeVideoView(
 
         val params = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         playerA.layoutParams = params
-        playerB.layoutParams = params
 
-        playerA.setZOrderMediaOverlay(true)
+        if (!isLegacyAndroid) {
+            playerA.setZOrderMediaOverlay(true)
+        }
         playerA.isClickable = false
         playerA.isFocusable = false
         playerA.isFocusableInTouchMode = false
-
-        playerB.setZOrderMediaOverlay(true)
-        playerB.isClickable = false
-        playerB.isFocusable = false
-        playerB.isFocusableInTouchMode = false
-
         addView(playerA)
-        addView(playerB)
-
         playerA.visibility = View.VISIBLE
-        playerB.visibility = View.GONE
+
+        if (playerB != null) {
+            playerB.layoutParams = params
+            playerB.setZOrderMediaOverlay(true)
+            playerB.isClickable = false
+            playerB.isFocusable = false
+            playerB.isFocusableInTouchMode = false
+            addView(playerB)
+            playerB.visibility = View.GONE
+        }
 
         val paths = creationParams?.get("paths") as? List<String> ?: emptyList()
         val initialIndex = creationParams?.get("initialIndex") as? Int ?: 0
@@ -293,7 +341,7 @@ class NativeVideoView(
         val newIndex = if (oldSource != null) playlist.indexOf(oldSource) else -1
         if (newIndex >= 0) {
             currentIndex = newIndex
-            preloadNext()
+            if (!isLegacyAndroid) preloadNext()
         } else {
             currentIndex = if (initialIndex >= 0 && initialIndex < playlist.size) initialIndex else 0
             if (isPlaying) {
@@ -313,18 +361,18 @@ class NativeVideoView(
             playCurrent()
         } else {
             activePlayer.start()
-            preloadNext()
+            if (!isLegacyAndroid) preloadNext()
         }
     }
 
     fun pause() {
         isPlaying = false
         playerA.pause()
-        playerB.pause()
+        playerB?.pause()
     }
 
-    private fun getActivePlayer(): VideoView = if (activePlayerIndex == 0) playerA else playerB
-    private fun getBackgroundPlayer(): VideoView = if (activePlayerIndex == 0) playerB else playerA
+    private fun getActivePlayer(): VideoView = if (activePlayerIndex == 0 || playerB == null) playerA else playerB
+    private fun getBackgroundPlayer(): VideoView? = if (playerB == null) null else (if (activePlayerIndex == 0) playerB else playerA)
 
     private fun playCurrent() {
         if (playlist.isEmpty() || currentIndex < 0 || currentIndex >= playlist.size) return
@@ -334,7 +382,7 @@ class NativeVideoView(
         val bgPlayer = getBackgroundPlayer()
 
         activePlayer.visibility = View.VISIBLE
-        bgPlayer.visibility = View.GONE
+        bgPlayer?.visibility = View.GONE
 
         val uri = Uri.parse(path)
         activePlayer.setVideoURI(uri)
@@ -343,14 +391,20 @@ class NativeVideoView(
             mp.isLooping = false
             if (isPlaying) {
                 activePlayer.start()
-                preloadNext()
+                if (!isLegacyAndroid) preloadNext()
             }
         }
 
         activePlayer.setOnCompletionListener {
             methodChannel?.invokeMethod("onVideoComplete", mapOf("path" to playlist[currentIndex]))
             if (isPlaying) {
-                swapPlayers()
+                if (isLegacyAndroid || playerB == null) {
+                    System.gc() // Trigger GC to clear memory buffers on 2GB RAM RK3326
+                    advanceIndex()
+                    playCurrent()
+                } else {
+                    swapPlayers()
+                }
             }
         }
 
@@ -375,10 +429,10 @@ class NativeVideoView(
     }
 
     private fun preloadNext() {
+        val bgPlayer = getBackgroundPlayer() ?: return
         if (playlist.isEmpty()) return
         val nextIndex = (currentIndex + 1) % playlist.size
         val nextPath = playlist[nextIndex]
-        val bgPlayer = getBackgroundPlayer()
 
         bgPlayer.setVideoURI(Uri.parse(nextPath))
         bgPlayer.setOnPreparedListener { mp ->
@@ -388,7 +442,7 @@ class NativeVideoView(
 
     private fun swapPlayers() {
         val activePlayer = getActivePlayer()
-        val bgPlayer = getBackgroundPlayer()
+        val bgPlayer = getBackgroundPlayer() ?: return
 
         bgPlayer.visibility = View.VISIBLE
         activePlayer.visibility = View.GONE
@@ -426,9 +480,9 @@ class NativeVideoView(
 
     private fun stopAll() {
         playerA.stopPlayback()
-        playerB.stopPlayback()
+        playerB?.stopPlayback()
         playerA.visibility = View.VISIBLE
-        playerB.visibility = View.GONE
+        playerB?.visibility = View.GONE
         activePlayerIndex = 0
         currentIndex = 0
     }
